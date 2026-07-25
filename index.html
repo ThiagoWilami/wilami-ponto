@@ -1,0 +1,2046 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Wilami Ponto — Registro de Ponto Digital para Restaurantes</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        fontFamily: { sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'] },
+        colors: {
+          brand: { 50:'#eef2ff',100:'#e0e7ff',200:'#c7d2fe',300:'#a5b4fc',400:'#818cf8',500:'#6366f1',600:'#4f46e5',700:'#4338ca',800:'#3730a3',900:'#312e81',950:'#1e1b4b' },
+          free:  { 50:'#fff7ed',100:'#ffedd5',200:'#fed7aa',300:'#fdba74',400:'#fb923c',500:'#f97316',600:'#ea580c',700:'#c2410c' },
+          ink:   { 900:'#0b1020',800:'#111834',700:'#1c2547' },
+        },
+        boxShadow: {
+          soft: '0 1px 2px rgba(16,24,40,.04), 0 8px 24px -12px rgba(16,24,40,.18)',
+          glow: '0 10px 40px -12px rgba(99,102,241,.55)',
+        },
+        borderRadius: { '2xl':'1.1rem', '3xl':'1.6rem' },
+      }
+    }
+  }
+</script>
+<style>
+  html,body{ background:#f6f7fb; }
+  ::-webkit-scrollbar{ width:10px; height:10px; }
+  ::-webkit-scrollbar-thumb{ background:#cdd3e4; border-radius:10px; }
+  ::-webkit-scrollbar-thumb:hover{ background:#b6bdd6; }
+  .glass{ background:rgba(255,255,255,.72); backdrop-filter:blur(12px); }
+  .grad-brand{ background-image:linear-gradient(135deg,#6366f1 0%,#8b5cf6 45%,#4f46e5 100%); }
+  .grad-ink{ background-image:linear-gradient(180deg,#111834 0%,#0b1020 100%); }
+  .grad-hero{ background-image:radial-gradient(1200px 500px at 10% -10%, rgba(129,140,248,.35), transparent 60%), radial-gradient(1000px 500px at 110% 10%, rgba(249,115,22,.18), transparent 55%); }
+  .drag-over{ outline:2px dashed #818cf8; outline-offset:-6px; background:rgba(129,140,248,.08); }
+  .fade-in{ animation:fade .35s ease both; }
+  @keyframes fade{ from{opacity:0; transform:translateY(6px);} to{opacity:1; transform:none;} }
+  .tick{ animation:pulse 2s ease-in-out infinite; }
+  @keyframes pulse{ 0%,100%{opacity:1;} 50%{opacity:.45;} }
+  .live-dot{ animation:live 1.4s ease-in-out infinite; }
+  @keyframes live{ 0%,100%{ box-shadow:0 0 0 0 rgba(16,185,129,.6);} 70%{ box-shadow:0 0 0 8px rgba(16,185,129,0);} }
+  .slide-in{ animation:slidein .4s cubic-bezier(.2,.8,.2,1) both; }
+  @keyframes slidein{ from{opacity:0; transform:translateY(-10px) scale(.98);} to{opacity:1; transform:none;} }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useMemo, useContext, createContext } = React;
+
+/* ============================ ÍCONES ============================ */
+const I = {
+  grid:"M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z",
+  calendar:"M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z",
+  clock:"M12 7v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z",
+  users:"M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75",
+  user:"M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
+  chart:"M3 3v18h18M7 15l4-4 3 3 5-6",
+  wallet:"M20 12V8H6a2 2 0 0 1 0-4h12v4M4 6v12a2 2 0 0 0 2 2h14v-4M18 12a2 2 0 0 0 0 4h4v-4z",
+  pin:"M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0zM12 10a3 3 0 1 0 0-.01z",
+  qr:"M3 3h6v6H3zM15 3h6v6h-6zM3 15h6v6H3zM15 15h3v3h-3zM18 18h3v3h-3zM15 21h3M21 15v3",
+  team:"M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 7a4 4 0 1 0 0 .01M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75",
+  gear:"M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z",
+  help:"M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3M12 17h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z",
+  camera:"M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2zM12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
+  gps:"M12 2v3M12 19v3M2 12h3M19 12h3M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z",
+  doc:"M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M16 13H8M16 17H8M10 9H8",
+  upload:"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12",
+  download:"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3",
+  bell:"M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0",
+  logout:"M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9",
+  plus:"M12 5v14M5 12h14",
+  check:"M20 6L9 17l-5-5",
+  x:"M18 6L6 18M6 6l12 12",
+  search:"M21 21l-4.35-4.35M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16z",
+  arrow:"M5 12h14M12 5l7 7-7 7",
+  shield:"M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z",
+  sun:"M12 3v2M12 19v2M5 5l1.5 1.5M17.5 17.5L19 19M3 12h2M19 12h2M5 19l1.5-1.5M17.5 6.5L19 5M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z",
+  coffee:"M18 8h1a4 4 0 0 1 0 8h-1M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4zM6 1v3M10 1v3M14 1v3",
+  trend:"M23 6l-9.5 9.5-5-5L1 18M17 6h6v6",
+  edit:"M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4z",
+  trash:"M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M10 11v6M14 11v6",
+  copy:"M9 9h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2V11a2 2 0 0 1 2-2zM5 15H4a2 2 0 0 1-2-2V3a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v1",
+  menu:"M3 12h18M3 6h18M3 18h18",
+  filter:"M22 3H2l8 9.46V19l4 2v-8.54L22 3z",
+  pix:"M12 2l3.5 3.5L12 9 8.5 5.5zM2 12l3.5-3.5L9 12l-3.5 3.5zM22 12l-3.5-3.5L15 12l3.5 3.5zM12 15l3.5 3.5L12 22l-3.5-3.5z",
+  broadcast:"M4.93 4.93a10 10 0 0 0 0 14.14M19.07 4.93a10 10 0 0 1 0 14.14M7.76 7.76a6 6 0 0 0 0 8.48M16.24 7.76a6 6 0 0 1 0 8.48M12 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4z",
+  link:"M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71",
+};
+const Icon = ({d, className="w-5 h-5", stroke=2}) =>
+  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round"><path d={d}/></svg>;
+
+/* ============================ UI BÁSICO ============================ */
+const cx = (...a)=>a.filter(Boolean).join(" ");
+const Card = ({className="", children, ...p}) =>
+  <div className={cx("bg-white rounded-2xl shadow-soft border border-slate-100", className)} {...p}>{children}</div>;
+
+const Badge = ({children, tone="slate"}) => {
+  const map = {
+    slate:"bg-slate-100 text-slate-600", brand:"bg-brand-50 text-brand-700",
+    free:"bg-free-100 text-free-700", green:"bg-emerald-50 text-emerald-700",
+    red:"bg-rose-50 text-rose-700", amber:"bg-amber-50 text-amber-700", blue:"bg-sky-50 text-sky-700",
+  };
+  return <span className={cx("inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold", map[tone])}>{children}</span>;
+};
+
+const Btn = ({children, variant="primary", size="md", icon, className="", ...p}) => {
+  const base="inline-flex items-center justify-center gap-2 font-semibold rounded-xl transition active:scale-[.98] disabled:opacity-50";
+  const sizes={ sm:"text-sm px-3 py-1.5", md:"text-sm px-4 py-2.5", lg:"px-5 py-3" };
+  const variants={
+    primary:"grad-brand text-white shadow-glow hover:brightness-110",
+    ghost:"bg-white text-slate-700 border border-slate-200 hover:bg-slate-50",
+    soft:"bg-brand-50 text-brand-700 hover:bg-brand-100",
+    free:"bg-free-500 text-white hover:bg-free-600",
+    danger:"bg-rose-500 text-white hover:bg-rose-600",
+    dark:"bg-ink-900 text-white hover:bg-ink-800",
+  };
+  return <button className={cx(base,sizes[size],variants[variant],className)} {...p}>
+    {icon && <Icon d={icon} className="w-4 h-4"/>}{children}
+  </button>;
+};
+
+const Avatar = ({name, tone="brand", size="w-10 h-10", src}) => {
+  const init=(name||"?").split(" ").map(w=>w[0]).slice(0,2).join("").toUpperCase();
+  const tones={ brand:"grad-brand", free:"bg-free-500", green:"bg-emerald-500", slate:"bg-slate-400" };
+  return src
+    ? <img src={src} className={cx(size,"rounded-full object-cover ring-2 ring-white shadow")} />
+    : <div className={cx(size,tones[tone],"rounded-full text-white grid place-items-center font-bold text-xs ring-2 ring-white shadow")}>{init}</div>;
+};
+
+const Toggle = ({on, onChange}) =>
+  <button onClick={()=>onChange(!on)} className={cx("w-11 h-6 rounded-full p-0.5 transition", on?"grad-brand":"bg-slate-300")}>
+    <div className={cx("w-5 h-5 bg-white rounded-full shadow transition", on&&"translate-x-5")}/></button>;
+
+const Modal = ({open, onClose, children, wide}) => {
+  if(!open) return null;
+  return <div className="fixed inset-0 z-50 grid place-items-center p-4 bg-ink-900/40 backdrop-blur-sm" onClick={onClose}>
+    <div className={cx("bg-white rounded-3xl shadow-2xl w-full max-h-[92vh] overflow-auto fade-in", wide?"max-w-3xl":"max-w-lg")} onClick={e=>e.stopPropagation()}>
+      {children}
+    </div></div>;
+};
+
+/* Campo de formulário */
+const Field = ({label, children}) =>
+  <label className="block">
+    <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{label}</span>
+    <div className="mt-1">{children}</div>
+  </label>;
+const Input = (p) => <input {...p} className={cx("w-full px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-brand-400 text-sm", p.className)}/>;
+const Select = ({children, ...p}) => <select {...p} className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-brand-400 text-sm bg-white">{children}</select>;
+
+const BarChart = ({data, height=120, color="#6366f1"}) => {
+  const max=Math.max(...data.map(d=>d.v),1); const w=100/data.length;
+  return <svg viewBox={`0 0 100 ${height/2}`} preserveAspectRatio="none" className="w-full" style={{height}}>
+    {data.map((d,i)=>{ const h=(d.v/max)*(height/2-14);
+      return <g key={i}>
+        <rect x={i*w+w*0.22} y={height/2-h-8} width={w*0.56} height={h} rx="1.4" fill={color} opacity={d.hl?1:.35}/>
+        <text x={i*w+w/2} y={height/2-1} fontSize="2.6" textAnchor="middle" fill="#94a3b8">{d.l}</text>
+      </g>;})}
+  </svg>;
+};
+const Donut = ({segments, size=120, label="na escala"}) => {
+  const total=segments.reduce((s,x)=>s+x.v,0)||1; let acc=0; const r=42, c=2*Math.PI*r;
+  return <svg viewBox="0 0 100 100" style={{width:size,height:size}}>
+    <circle cx="50" cy="50" r={r} fill="none" stroke="#eef2f7" strokeWidth="12"/>
+    {segments.map((s,i)=>{ const len=(s.v/total)*c; const off=c-acc; acc+=len;
+      return <circle key={i} cx="50" cy="50" r={r} fill="none" stroke={s.c} strokeWidth="12"
+        strokeDasharray={`${len} ${c-len}`} strokeDashoffset={off} transform="rotate(-90 50 50)" strokeLinecap="round"/>;})}
+    <text x="50" y="47" fontSize="15" fontWeight="800" textAnchor="middle" fill="#0f172a">{total}</text>
+    <text x="50" y="60" fontSize="6.5" textAnchor="middle" fill="#94a3b8">{label}</text>
+  </svg>;
+};
+
+const ToastCtx = createContext(()=>{});
+const useClock = () => {
+  const [t,setT]=useState(new Date());
+  useEffect(()=>{ const id=setInterval(()=>setT(new Date()),1000); return ()=>clearInterval(id); },[]);
+  return t;
+};
+function haversine(la1,lo1,la2,lo2){
+  const R=6371000, r=Math.PI/180, dLa=(la2-la1)*r, dLo=(lo2-lo1)*r;
+  const a=Math.sin(dLa/2)**2+Math.cos(la1*r)*Math.cos(la2*r)*Math.sin(dLo/2)**2;
+  return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+}
+
+/* ============================ DADOS INICIAIS ============================ */
+const INIT_UNIDADES = [
+  { id:1, nome:"Pitz Burguer Osasco", end:"Av. dos Autonomistas, 1500 — Osasco/SP", lat:-23.532, lng:-46.792, raio:120, cor:"#6366f1" },
+  { id:2, nome:"Caktus Corifeu", end:"Av. Corifeu de Azevedo Marques, 2200 — São Paulo/SP", lat:-23.568, lng:-46.735, raio:100, cor:"#f97316" },
+  { id:3, nome:"Caktus Osasco", end:"R. Antônio Agú, 700 — Osasco/SP", lat:-23.527, lng:-46.778, raio:110, cor:"#10b981" },
+  { id:4, nome:"Caktus Ceará 1", end:"Av. Beira Mar, 1000 — Fortaleza/CE", lat:-3.725, lng:-38.500, raio:130, cor:"#0ea5e9" },
+  { id:5, nome:"Caktus Ceará 2", end:"Av. Washington Soares, 900 — Fortaleza/CE", lat:-3.766, lng:-38.481, raio:130, cor:"#e11d48" },
+];
+const ESCALAS = { "6x1":"6x1 — 6 dias / 1 folga", "5x2":"5x2 — 5 dias / 2 folgas", "6x2":"6x2 — 6 dias / 2 folgas", "12x36":"12x36 — plantão" };
+const CARGOS = ["Gerente de Salão","Chef de Cozinha","Cozinheiro(a)","Auxiliar de Cozinha","Atendente","Caixa","Garçom","Bartender","Chapeiro","Faxineiro(a)","Manobrista"];
+const SETORES = [["cozinha","Cozinha","#f59e0b"],["salao","Salão","#6366f1"],["limpeza","Limpeza","#10b981"],["bar","Bar/Copa","#ec4899"],["manobrista","Manobrista","#0ea5e9"]];
+const SETOR_MAP = Object.fromEntries(SETORES.map(([k,l,c])=>[k,{l,c}]));
+const SETOR_POR_CARGO = { "Chef de Cozinha":"cozinha","Cozinheiro(a)":"cozinha","Auxiliar de Cozinha":"cozinha","Chapeiro":"cozinha",
+  "Garçom":"salao","Atendente":"salao","Gerente de Salão":"salao","Caixa":"salao","Bartender":"bar","Faxineiro(a)":"limpeza","Manobrista":"manobrista" };
+const setorDe = (c)=> c?.setor || SETOR_POR_CARGO[c?.cargo] || "salao";
+const PIX_TIPOS = ["CPF","CNPJ","E-mail","Telefone","Aleatória"];
+// Cargos de freelancer com valor por jornada (cadastráveis)
+const INIT_CARGOS_FREELA = [
+  { id:1, nome:"Garçom", valor:120 },
+  { id:2, nome:"Bartender", valor:150 },
+  { id:3, nome:"Auxiliar de Cozinha", valor:100 },
+  { id:4, nome:"Cozinheiro(a)", valor:140 },
+  { id:5, nome:"Chapeiro", valor:130 },
+  { id:6, nome:"Manobrista", valor:110 },
+];
+
+const INIT_CLTS = [
+  { id:1, nome:"Ana Beatriz Souza", cargo:"Gerente de Salão", escala:"5x2", unidade:1, admissao:"2023-02-14", banco:"+12h30", extras:"8h10", atrasos:"0h22", pix:"ana.souza@pix.com", cpf:"123.456.789-00", tel:"(11) 90000-0001", docs:{cnh_rg:"rg_ana.pdf",cpf:"cpf_ana.pdf",ctps:"ctps_ana.pdf",titulo_eleitor:"titulo_ana.pdf"}, status:"ativo" },
+  { id:2, nome:"Carlos Mendes Lima", cargo:"Chef de Cozinha", escala:"6x1", unidade:3, admissao:"2022-08-01", banco:"+04h00", extras:"14h20", atrasos:"1h05", pix:"11999990000", cpf:"234.567.890-11", tel:"(11) 90000-0002", docs:{cnh_rg:"cnh_carlos.jpg",cpf:"cpf_carlos.pdf"}, status:"ativo" },
+  { id:3, nome:"Daniela Rocha Alves", cargo:"Atendente", escala:"6x1", unidade:1, admissao:"2024-01-10", banco:"-02h15", extras:"2h00", atrasos:"3h40", pix:"daniela.rocha@pix.com", cpf:"345.678.901-22", tel:"(11) 90000-0003", docs:{cpf:"cpf_daniela.pdf"}, status:"ativo" },
+  { id:4, nome:"Eduardo Lima Pereira", cargo:"Auxiliar de Cozinha", escala:"6x2", unidade:3, admissao:"2023-11-20", banco:"+00h45", extras:"6h30", atrasos:"0h00", pix:"eduardo.lima@pix.com", cpf:"456.789.012-33", tel:"(11) 90000-0004", docs:{cnh_rg:"rg_eduardo.pdf",ctps:"ctps_eduardo.pdf"}, status:"ativo" },
+  { id:5, nome:"Fernanda Alves Costa", cargo:"Caixa", escala:"5x2", unidade:2, admissao:"2024-05-03", banco:"+01h20", extras:"3h15", atrasos:"0h50", pix:"fernanda@pix.com", cpf:"567.890.123-44", tel:"(11) 90000-0005", docs:{cnh_rg:"rg_fernanda.pdf",cpf:"cpf_fernanda.pdf",diploma:"diploma_fernanda.pdf",historico_escolar:"hist_fernanda.pdf"}, status:"ativo" },
+];
+const INIT_FREELAS = [
+  { id:101, nome:"Hugo Pereira Dias", cargo:"Garçom", tel:"(11) 98888-1111", tipoPix:"E-mail", pix:"hugo@pix.com", banco:"Nubank", cpf:"111.222.333-44", unidade:1, valor:120, status:"ativo",
+    jornadasHist:[{data:"2026-07-04",unidade:1,horas:8,valor:120},{data:"2026-07-11",unidade:1,horas:8,valor:120},{data:"2026-07-18",unidade:2,horas:6,valor:90}] },
+  { id:102, nome:"Isabela Nunes Reis", cargo:"Bartender", tel:"(11) 97777-2222", tipoPix:"E-mail", pix:"isa.nunes@pix.com", banco:"Itaú", cpf:"222.333.444-55", unidade:2, valor:150, status:"ativo",
+    jornadasHist:[{data:"2026-07-05",unidade:2,horas:6,valor:150},{data:"2026-07-19",unidade:2,horas:7,valor:175}] },
+  { id:103, nome:"João Vitor Marques", cargo:"Auxiliar de Cozinha", tel:"(11) 96666-3333", tipoPix:"Telefone", pix:"11966663333", banco:"Caixa", cpf:"333.444.555-66", unidade:3, valor:100, status:"ativo",
+    jornadasHist:[{data:"2026-07-06",unidade:3,horas:5,valor:100}] },
+  { id:104, nome:"Karina Dias Santos", cargo:"Cozinheiro(a)", tel:"(11) 95555-4444", tipoPix:"E-mail", pix:"karina.dias@pix.com", banco:"Bradesco", cpf:"444.555.666-77", unidade:4, valor:140, status:"ativo",
+    jornadasHist:[{data:"2026-07-03",unidade:4,horas:8,valor:140},{data:"2026-07-10",unidade:4,horas:8,valor:140},{data:"2026-07-17",unidade:5,horas:8,valor:140},{data:"2026-07-19",unidade:4,horas:6,valor:105}] },
+];
+// Histórico de ponto (apuração de horas e extras) — separado do feed ao vivo
+const INIT_PONTOHIST = [
+  { nome:"Ana Beatriz Souza", tipo:"clt", dia:"2026-07-24", unidade:"Pitz Burguer Osasco", acao:"Entrada", min:480 },
+  { nome:"Ana Beatriz Souza", tipo:"clt", dia:"2026-07-24", unidade:"Pitz Burguer Osasco", acao:"Início intervalo", min:720 },
+  { nome:"Ana Beatriz Souza", tipo:"clt", dia:"2026-07-24", unidade:"Pitz Burguer Osasco", acao:"Fim intervalo", min:780 },
+  { nome:"Ana Beatriz Souza", tipo:"clt", dia:"2026-07-24", unidade:"Pitz Burguer Osasco", acao:"Saída", min:1140 }, // 10h úteis => +2h extra
+  { nome:"Carlos Mendes Lima", tipo:"clt", dia:"2026-07-24", unidade:"Caktus Osasco", acao:"Entrada", min:600 },
+  { nome:"Carlos Mendes Lima", tipo:"clt", dia:"2026-07-24", unidade:"Caktus Osasco", acao:"Saída", min:1140 }, // 8h54 => +0h54
+  { nome:"Hugo Pereira Dias", tipo:"free", dia:"2026-07-24", unidade:"Pitz Burguer Osasco", acao:"Entrada", min:1080 }, // check-in 18:00
+  { nome:"Hugo Pereira Dias", tipo:"free", dia:"2026-07-24", unidade:"Pitz Burguer Osasco", acao:"Saída", min:1380 }, // checkout 23:00 => 5h
+];
+
+/* ===== Cálculo de jornada (horas trabalhadas + extras) ===== */
+const horaMin = (str)=>{ const [h,m]=(str||"0:0").split(":"); return (+h)*60+(+m); };
+const fmtHoras = (min)=>`${Math.floor(Math.abs(min)/60)}h${String(Math.abs(min)%60).padStart(2,"0")}`;
+function calcTrabalho(punches){ // punches: [{acao,min}]
+  const g=a=>{ const p=punches.find(x=>x.acao===a); return p?p.min:null; };
+  const ent=g("Entrada"), sai=g("Saída");
+  if(ent==null||sai==null) return null;
+  const fim = sai<ent ? sai+1440 : sai;
+  const ii=g("Início intervalo"), fi=g("Fim intervalo");
+  const interv = (ii!=null&&fi!=null) ? Math.max(0,(fi<ii?fi+1440:fi)-ii) : 0;
+  return Math.max(0, fim-ent-interv);
+}
+const JORNADA_CLT=480, TOL=10; // 8h e tolerância 10min (Art. 58 CLT)
+function extrasDe(trabalhado, tipo){
+  const base = tipo==="clt" ? JORNADA_CLT : 0;
+  const saldo = trabalhado - base;
+  return { extras: saldo>TOL?saldo:0, atraso: (tipo==="clt"&&saldo<-TOL)?-saldo:0 };
+}
+function apurarHoras(registros){ // agrupa por nome+dia e calcula
+  const grupos={};
+  registros.forEach(r=>{ if(r.min==null) return; const k=r.nome+"|"+(r.dia||"hoje");
+    (grupos[k]=grupos[k]||{nome:r.nome,tipo:r.tipo,dia:r.dia||"hoje",unidade:r.unidade,punches:[]}).punches.push({acao:r.acao,min:r.min}); });
+  return Object.values(grupos).map(g=>{ const t=calcTrabalho(g.punches);
+    if(t==null) return {...g,trabalhado:null,extras:0,atraso:0,completo:false};
+    return {...g,trabalhado:t,...extrasDe(t,g.tipo),completo:true}; });
+}
+
+/* ===== Documentos: nome/conteúdo real + placeholder PDF válido ===== */
+// docs[k] pode ser string (legado/seed) ou objeto {nome, dados(base64 dataURL)}
+const docNome = (v)=> (v && typeof v==="object") ? v.nome : v;
+const docDados = (v)=> (v && typeof v==="object") ? v.dados : null;
+// converte dataURL base64 -> Uint8Array (bytes reais p/ o ZIP)
+function b64ToBytes(dataUrl){
+  const b64=String(dataUrl||"").replace(/^data:[^;]+;base64,/,"");
+  try{ const bin=atob(b64); const a=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) a[i]=bin.charCodeAt(i); return a; }
+  catch{ return new Uint8Array(); }
+}
+// gera um PDF de 1 página VÁLIDO (abre em qualquer leitor) p/ documentos de demonstração
+function montarPDF(titulo, linhas){
+  const esc=s=>String(s).replace(/([\\()])/g,"\\$1");
+  const L=[titulo,"",...(linhas||[])];
+  let body="BT /F1 13 Tf 60 780 Td 18 TL ";
+  L.forEach(ln=>{ body+="("+esc(ln)+") Tj T* "; });
+  body+="ET";
+  const objs=[];
+  objs[1]="<</Type/Catalog/Pages 2 0 R>>";
+  objs[2]="<</Type/Pages/Kids[3 0 R]/Count 1>>";
+  objs[3]="<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]/Resources<</Font<</F1 5 0 R>>>>/Contents 4 0 R>>";
+  objs[4]="<</Length "+body.length+">>\nstream\n"+body+"\nendstream";
+  objs[5]="<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>";
+  let pdf="%PDF-1.4\n"; const off=[];
+  for(let i=1;i<=5;i++){ off[i]=pdf.length; pdf+=i+" 0 obj\n"+objs[i]+"\nendobj\n"; }
+  const xref=pdf.length;
+  pdf+="xref\n0 6\n0000000000 65535 f \n";
+  for(let i=1;i<=5;i++) pdf+=String(off[i]).padStart(10,"0")+" 00000 n \n";
+  pdf+="trailer\n<</Size 6/Root 1 0 R>>\nstartxref\n"+xref+"\n%%EOF";
+  const bytes=new Uint8Array(pdf.length); for(let i=0;i<pdf.length;i++) bytes[i]=pdf.charCodeAt(i)&0xff;
+  return bytes;
+}
+// tempo em jornada -> "8h07:35"
+const fmtHMS=(sec)=>{ sec=Math.max(0,sec|0); const h=(sec/3600)|0, m=((sec%3600)/60)|0, s=sec%60; return `${h}h${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`; };
+// Copiar texto — funciona também em file:// e navegadores sem clipboard API
+function copyText(t){
+  try{ if(navigator.clipboard && window.isSecureContext){ navigator.clipboard.writeText(t); return true; } }catch{}
+  try{ const ta=document.createElement("textarea"); ta.value=t; ta.setAttribute("readonly",""); ta.style.position="fixed"; ta.style.top="-1000px"; ta.style.opacity="0"; document.body.appendChild(ta); ta.focus(); ta.select(); ta.setSelectionRange(0,t.length); const okc=document.execCommand("copy"); document.body.removeChild(ta); return okc; }catch{ return false; }
+}
+
+const DIAS = ["Seg 21","Ter 22","Qua 23","Qui 24","Sex 25","Sáb 26","Dom 27"];
+const TURNOS = { manha:{l:"Manhã",h:"08:00–16:00",c:"amber"}, tarde:{l:"Tarde",h:"12:00–20:00",c:"blue"}, noite:{l:"Noite",h:"18:00–02:00",c:"brand"}, folga:{l:"Folga",h:"—",c:"slate"} };
+// Documentos do colaborador (upload no cadastro e na pasta)
+const DOC_TIPOS = [
+  ["cnh_rg","CNH / RG"],
+  ["titulo_eleitor","Título de Eleitor"],
+  ["cartao_sus","Cartão SUS"],
+  ["cpf","CPF"],
+  ["ctps","CTPS Digital"],
+  ["reservista","Reservista"],
+  ["historico_escolar","Histórico Escolar"],
+  ["diploma","Diploma"],
+];
+const HOJE_IDX = 4; // "hoje" na simulação = Sexta (índice 4)
+const turnoPorDia = (d)=> d%3===0?"manha":d%3===1?"tarde":"noite";
+const folgaFixa = (t,d)=> t==="6x1"? d===6 : (t==="5x2"||t==="6x2")? d>=5 : false;
+// Escala POR UNIDADE: { [unidadeId]: { 0..6: [alocações] } }
+const escalaVaziaUnidade = ()=>{ const o={}; for(let d=0;d<7;d++) o[d]=[]; return o; };
+const escalaInicial = () => {
+  const esc={};
+  INIT_UNIDADES.forEach(u=>{ esc[u.id]=escalaVaziaUnidade(); });
+  // CLTs entram na escala fixa da sua casa
+  INIT_CLTS.forEach(c=>{ if(!esc[c.unidade]) return;
+    for(let d=0;d<7;d++){ const folga=folgaFixa(c.escala,d);
+      esc[c.unidade][d].push({id:`c${c.id}_${d}`,pid:c.id,tipo:"clt",turno:folga?"folga":turnoPorDia(d)}); } });
+  // alguns freelancers escalados HOJE (para demonstrar a regra: 102 e 104 sim; 101 e 103 não)
+  [102,104].forEach(pid=>{ const f=INIT_FREELAS.find(x=>x.id===pid); if(f&&esc[f.unidade]) esc[f.unidade][HOJE_IDX].push({id:`f${pid}`,pid,tipo:"free",turno:"noite"}); });
+  return esc;
+};
+
+/* ============================ STORE (estado global) ============================ */
+const StoreCtx = createContext(null);
+const useStore = () => useContext(StoreCtx);
+const nextId = (arr) => (arr.reduce((m,x)=>Math.max(m,x.id),0)||0)+1;
+
+// Permissões por papel (proprietário tem tudo). gerente edita escala mas NÃO documentos.
+const PERMS_INIT = {
+  gerente:       { escala:true,  colaboradores:true,  financeiro:true,  documentos:false, equipe:false, unidades:true },
+  rh_financeiro: { escala:false, colaboradores:true,  financeiro:true,  documentos:true,  equipe:false, unidades:false },
+};
+const CAPS = [["escala","Editar escala"],["colaboradores","Gerir colaboradores"],["financeiro","Relatórios financeiros"],["documentos","Documentos e dossiê"],["unidades","Gerir unidades"],["equipe","Gerir equipe"]];
+const PAPEIS = { proprietario:"Proprietário", gerente:"Gerente", rh_financeiro:"RH / Financeiro" };
+
+function StoreProvider({children}) {
+  const [unidades,setUnidades]=useState(INIT_UNIDADES);
+  const [clts,setClts]=useState(INIT_CLTS);
+  const [freelas,setFreelas]=useState(INIT_FREELAS);
+  const [escala,setEscala]=useState(escalaInicial());        // por unidade
+  const [registros,setRegistros]=useState([]);               // feed ao vivo (só reais)
+  const [pontoHist,setPontoHist]=useState(INIT_PONTOHIST);   // histórico p/ apuração de horas
+  const [cargosFreela,setCargosFreela]=useState(INIT_CARGOS_FREELA);
+  const [dossie,setDossie]=useState({});                     // { "clt-1": {faltas:[],feedbacks:[]} }
+  const [perfil,setPerfil]=useState("proprietario");         // papel simulado
+  const [perms,setPerms]=useState(PERMS_INIT);
+  const can=(cap)=> perfil==="proprietario" ? true : !!(perms[perfil] && perms[perfil][cap]);
+  const salvarCargoFreela=(c)=>setCargosFreela(prev=> c.id ? prev.map(x=>x.id===c.id?{...x,...c}:x) : [...prev,{...c,id:nextId(prev)}]);
+  const excluirCargoFreela=(id)=>setCargosFreela(prev=>prev.filter(x=>x.id!==id));
+
+  const salvarUnidade=(u)=>setUnidades(prev=> u.id ? prev.map(x=>x.id===u.id?{...x,...u}:x)
+    : (()=>{ const id=nextId(prev); setEscala(e=>({...e,[id]:escalaVaziaUnidade()})); return [...prev,{...u,id}]; })());
+  const excluirUnidade=(id)=>{ setUnidades(prev=>prev.filter(x=>x.id!==id)); setEscala(prev=>{ const n={...prev}; delete n[id]; return n; }); };
+
+  // Gera a escala fixa de um CLT recém-contratado, na SUA casa
+  const gerarEscalaFixa=(pid,escalaTipo,unidadeId)=>{
+    setEscala(prev=>{
+      const n={...prev}; if(!n[unidadeId]) n[unidadeId]=escalaVaziaUnidade(); else n[unidadeId]={...n[unidadeId]};
+      for(let d=0;d<7;d++){ const folga=folgaFixa(escalaTipo,d);
+        n[unidadeId][d]=[...(n[unidadeId][d]||[]).filter(a=>!(a.pid===pid&&a.tipo==="clt")), {id:`c${pid}_${d}`,pid,tipo:"clt",turno:folga?"folga":turnoPorDia(d)}]; }
+      return n;
+    });
+  };
+
+  const salvarClt=(c)=>{
+    if(c.id){ setClts(prev=>prev.map(x=>x.id===c.id?{...x,...c}:x)); }
+    else { const novo={...c,id:nextId(clts.length?clts:[{id:0}]),banco:"+00h00",extras:"0h00",atrasos:"0h00",docs:c.docs||{contrato:false,exames:false,ctps:false,rg:false},status:"ativo"};
+      setClts(prev=>[...prev,novo]); gerarEscalaFixa(novo.id, c.escala||"6x1", c.unidade); }
+  };
+  const salvarFreela=(f)=>{
+    if(f.id){ setFreelas(prev=>prev.map(x=>x.id===f.id?{...x,...f}:x)); }
+    else { setFreelas(prev=>[...prev,{...f,id:(prev.reduce((m,x)=>Math.max(m,x.id),100))+1,status:"ativo",jornadasHist:[]}]); }
+  };
+  const excluirColab=(id,tipo)=>{
+    if(tipo==="clt") setClts(prev=>prev.filter(x=>x.id!==id));
+    else setFreelas(prev=>prev.filter(x=>x.id!==id));
+    setEscala(prev=>{ const n={}; Object.keys(prev).forEach(uid=>{ n[uid]={}; Object.keys(prev[uid]).forEach(d=>{ n[uid][d]=prev[uid][d].filter(a=>a.pid!==id); }); }); return n; });
+  };
+
+  const addRegistro=(r)=>{
+    const now=new Date();
+    const min = r.min!=null ? r.min : now.getHours()*60+now.getMinutes();
+    setRegistros(prev=>[{...r, min, dia:"hoje", id:Math.random().toString(36).slice(2)}, ...prev].slice(0,60));
+  };
+  // freelancer escalado hoje em QUALQUER casa
+  const freelancerEscaladoHoje=(pid)=> Object.values(escala).some(dias=> (dias[HOJE_IDX]||[]).some(a=>a.pid===pid && a.tipo==="free" && a.turno!=="folga"));
+
+  // Anexa/atualiza um documento de um colaborador (aceita string legado ou {nome,dados})
+  const anexarDoc=(tipo,id,key,doc)=>{
+    const upd=(prev)=>prev.map(x=>x.id===id?{...x,docs:{...(x.docs||{}),[key]:doc}}:x);
+    if(tipo==="clt") setClts(upd); else setFreelas(upd);
+  };
+
+  // Dossiê (faltas/atestados + feedbacks + anexos adicionais)
+  const getDossie=(key)=> dossie[key] || {faltas:[],feedbacks:[],anexos:[]};
+  const addFalta=(key,f)=>setDossie(p=>({...p,[key]:{...getDossie(key),faltas:[{...f,id:Math.random().toString(36).slice(2)},...getDossie(key).faltas]}}));
+  const addFeedback=(key,fb)=>setDossie(p=>({...p,[key]:{...getDossie(key),feedbacks:[{...fb,id:Math.random().toString(36).slice(2)},...getDossie(key).feedbacks]}}));
+  const addAnexo=(key,ax)=>setDossie(p=>({...p,[key]:{...getDossie(key),anexos:[{...ax,id:Math.random().toString(36).slice(2)},...(getDossie(key).anexos||[])]}}));
+
+  const value={ unidades,salvarUnidade,excluirUnidade, clts,freelas,salvarClt,salvarFreela,excluirColab, anexarDoc,
+    escala,setEscala, registros,addRegistro, pontoHist, freelancerEscaladoHoje,
+    cargosFreela,salvarCargoFreela,excluirCargoFreela,
+    dossie,getDossie,addFalta,addFeedback,addAnexo, perfil,setPerfil, perms,setPerms, can };
+  return <StoreCtx.Provider value={value}>{children}</StoreCtx.Provider>;
+}
+const pessoaNome = (pid,tipo,clts,freelas)=> (tipo==="clt"?clts:freelas).find(p=>p.id===pid)?.nome || "—";
+const unidadeNome = (id,unidades)=> unidades.find(u=>u.id===id)?.nome || "—";
+
+const Logo = ({light, size="text-xl"}) =>
+  <div className="flex items-center gap-2.5 select-none">
+    <div className="w-9 h-9 grad-brand rounded-xl grid place-items-center shadow-glow shrink-0">
+      <Icon d={I.clock} className="w-5 h-5 text-white" stroke={2.4}/>
+    </div>
+    <div className={cx("font-extrabold tracking-tight leading-none", size, light?"text-white":"text-slate-900")}>
+      Wilami<span className="text-brand-400"> Ponto</span>
+    </div>
+  </div>;
+
+const PageHeader = ({title, sub, children}) =>
+  <div className="flex flex-wrap items-end justify-between gap-4 mb-6">
+    <div><h1 className="text-2xl font-extrabold text-slate-900 tracking-tight">{title}</h1>
+      {sub && <p className="text-slate-500 mt-1">{sub}</p>}</div>
+    <div className="flex gap-2 flex-wrap">{children}</div>
+  </div>;
+
+const StatCard = ({icon, label, value, delta, tone="brand", chart}) => {
+  const tones={brand:"grad-brand", free:"bg-free-500", green:"bg-emerald-500", amber:"bg-amber-500", blue:"bg-sky-500"};
+  return <Card className="p-5">
+    <div className="flex items-start justify-between">
+      <div className={cx("w-11 h-11 rounded-xl grid place-items-center text-white", tones[tone])}><Icon d={icon}/></div>
+      {delta && <Badge tone={delta.startsWith("-")?"red":"green"}><Icon d={I.trend} className="w-3 h-3"/>{delta}</Badge>}
+    </div>
+    <div className="mt-4 text-3xl font-extrabold text-slate-900 tabular-nums">{value}</div>
+    <div className="text-sm text-slate-500">{label}</div>
+    {chart}
+  </Card>;
+};
+
+/* ============================ LOGIN ============================ */
+function LoginScreen({ onLogin }) {
+  const [tab,setTab]=useState("admin");
+  return <div className="min-h-screen grad-ink grad-hero grid lg:grid-cols-2">
+    <div className="hidden lg:flex flex-col justify-between p-12 text-white">
+      <Logo light size="text-2xl"/>
+      <div className="max-w-md">
+        <h1 className="text-4xl font-extrabold leading-tight">Registro de ponto digital feito para <span className="text-brand-300">restaurantes</span>.</h1>
+        <p className="mt-4 text-white/70 text-lg">Selfie com validação facial, geolocalização com cerca eletrônica, escala visual e cálculo de horas conforme a CLT e a Portaria 671/2021.</p>
+        <div className="mt-8 grid grid-cols-2 gap-3">
+          {[["Selfie + facial",I.camera],["GPS + cerca",I.gps],["Escala visual",I.calendar],["Ponto ao vivo",I.broadcast]].map(([t,d])=>
+            <div key={t} className="glass rounded-2xl p-4 flex items-center gap-3 text-slate-800">
+              <div className="w-9 h-9 rounded-xl grad-brand grid place-items-center text-white"><Icon d={d} className="w-4 h-4"/></div>
+              <span className="text-sm font-semibold">{t}</span>
+            </div>)}
+        </div>
+      </div>
+      <div className="flex items-center gap-2 text-white/50 text-sm"><Icon d={I.shield} className="w-4 h-4"/> Conforme LGPD · Dados criptografados</div>
+    </div>
+    <div className="flex items-center justify-center p-6">
+      <Card className="w-full max-w-md p-8">
+        <div className="lg:hidden mb-6"><Logo/></div>
+        <div className="flex gap-2 p-1 bg-slate-100 rounded-xl mb-6">
+          {[["admin","Administração"],["colab","Sou colaborador"]].map(([k,l])=>
+            <button key={k} onClick={()=>setTab(k)} className={cx("flex-1 py-2 rounded-lg text-sm font-semibold transition", tab===k?"bg-white shadow-soft text-brand-700":"text-slate-500")}>{l}</button>)}
+        </div>
+        {tab==="admin" ? <>
+          <h2 className="text-xl font-bold text-slate-900">Bem-vindo de volta 👋</h2>
+          <p className="text-slate-500 text-sm mt-1">Acesse o painel de gestão.</p>
+          <div className="mt-6 space-y-3">
+            <Input placeholder="E-mail" defaultValue="gestor@wilami.com"/>
+            <Input type="password" placeholder="Senha" defaultValue="••••••••"/>
+          </div>
+          <Btn className="w-full mt-5" size="lg" onClick={onLogin} icon={I.arrow}>Entrar no painel</Btn>
+          <div className="flex items-center gap-3 my-5"><div className="h-px bg-slate-200 flex-1"/><span className="text-xs text-slate-400">ou</span><div className="h-px bg-slate-200 flex-1"/></div>
+          <button onClick={onLogin} className="w-full py-3 rounded-xl border border-slate-200 hover:bg-slate-50 flex items-center justify-center gap-3 font-semibold text-slate-700">
+            <svg className="w-5 h-5" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A11 11 0 0 0 12 23z"/><path fill="#FBBC05" d="M5.84 14.1a6.6 6.6 0 0 1 0-4.2V7.06H2.18a11 11 0 0 0 0 9.88z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1A11 11 0 0 0 2.18 7.06l3.66 2.84C6.71 7.31 9.14 5.38 12 5.38z"/></svg>
+            Continuar com Google
+          </button>
+        </> : <>
+          <h2 className="text-xl font-bold text-slate-900">Registrar ponto</h2>
+          <p className="text-slate-500 text-sm mt-1">Cada vínculo tem seu link exclusivo de registro.</p>
+          <div className="mt-6 space-y-3">
+            <button onClick={onLogin} className="w-full p-4 rounded-2xl border border-slate-200 hover:border-brand-400 hover:bg-brand-50/40 flex items-center gap-4 text-left transition">
+              <div className="w-11 h-11 grad-brand rounded-xl grid place-items-center text-white"><Icon d={I.user}/></div>
+              <div><div className="font-bold text-slate-900">Colaborador CLT</div><div className="text-sm text-slate-500">Link exclusivo · escala fixa</div></div>
+              <Icon d={I.arrow} className="w-4 h-4 ml-auto text-slate-400"/>
+            </button>
+            <button onClick={onLogin} className="w-full p-4 rounded-2xl border border-slate-200 hover:border-free-400 hover:bg-free-50/40 flex items-center gap-4 text-left transition">
+              <div className="w-11 h-11 bg-free-500 rounded-xl grid place-items-center text-white"><Icon d={I.coffee}/></div>
+              <div><div className="font-bold text-slate-900">Freelancer</div><div className="text-sm text-slate-500">Link separado · exige escala + cerca</div></div>
+              <Icon d={I.arrow} className="w-4 h-4 ml-auto text-slate-400"/>
+            </button>
+          </div>
+        </>}
+      </Card>
+    </div>
+  </div>;
+}
+
+/* ============================ DASHBOARD ============================ */
+function Dashboard({go}) {
+  const { clts, freelas, registros, unidades } = useStore();
+  const semana=[{l:"S",v:38},{l:"T",v:42},{l:"Q",v:40},{l:"Q",v:45,hl:true},{l:"S",v:52,hl:true},{l:"S",v:60,hl:true},{l:"D",v:28}];
+  const cltAtivos=clts.filter(c=>c.status==="ativo").length;
+  return <div className="fade-in">
+    <PageHeader title="Painel geral" sub="Visão consolidada das casas">
+      <Btn variant="ghost" icon={I.download}>Exportar</Btn>
+      <Btn icon={I.broadcast} onClick={()=>go("ponto")}>Ponto ao vivo</Btn>
+    </PageHeader>
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <StatCard icon={I.user} label="Colaboradores CLT" value={cltAtivos} tone="brand"/>
+      <StatCard icon={I.coffee} label="Freelancers" value={freelas.length} tone="free"/>
+      <StatCard icon={I.pin} label="Unidades (casas)" value={unidades.length} tone="green"/>
+      <StatCard icon={I.broadcast} label="Registros hoje" value={registros.length} tone="amber"/>
+    </div>
+    <div className="grid lg:grid-cols-3 gap-4 mt-4">
+      <Card className="p-5 lg:col-span-2">
+        <div className="flex items-center justify-between mb-3">
+          <div><h3 className="font-bold text-slate-900">Horas trabalhadas na semana</h3><p className="text-sm text-slate-500">Total consolidado por dia</p></div>
+          <Badge tone="brand">305h30 no total</Badge>
+        </div>
+        <BarChart data={semana} height={150}/>
+      </Card>
+      <Card className="p-5">
+        <h3 className="font-bold text-slate-900 mb-1">Composição de hoje</h3>
+        <p className="text-sm text-slate-500 mb-2">Quem está escalado</p>
+        <div className="flex items-center gap-4">
+          <Donut segments={[{v:cltAtivos,c:"#6366f1"},{v:freelas.length,c:"#f97316"}]}/>
+          <div className="space-y-2 text-sm">
+            <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-brand-500"/>{cltAtivos} CLT</div>
+            <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-free-500"/>{freelas.length} Freelancers</div>
+          </div>
+        </div>
+        <Btn variant="soft" className="w-full mt-4" icon={I.arrow} onClick={()=>go("escala")}>Ver escala</Btn>
+      </Card>
+    </div>
+  </div>;
+}
+
+/* ============================ ESCALA VISUAL (POR UNIDADE) ============================ */
+function EscalaVisual() {
+  const { escala, setEscala, clts, freelas, unidades, can } = useStore();
+  const toast=useContext(ToastCtx);
+  const [uSel,setUSel]=useState(unidades[0]?.id);
+  const [drag,setDrag]=useState(null);
+  const [over,setOver]=useState(null);
+  const [add,setAdd]=useState(null);
+  const [setorF,setSetorF]=useState("todos");
+  const [menu,setMenu]=useState(null); // {di,id}
+  const editavel=can("escala");
+  const nome=(pid,tipo)=>pessoaNome(pid,tipo,clts,freelas);
+  const escU = escala[uSel] || escalaVaziaUnidade();
+  const pessoaDe=(a)=>(a.tipo==="clt"?clts:freelas).find(p=>p.id===a.pid);
+  const passaSetor=(a)=> setorF==="todos" || setorDe(pessoaDe(a))===setorF;
+
+  const onDrop=(dia)=>{
+    if(!drag||!editavel) return;
+    setEscala(prev=>{ const u={...(prev[uSel]||escalaVaziaUnidade())};
+      u[drag.from]=u[drag.from].filter(a=>a.id!==drag.aloc.id);
+      u[dia]=[...(u[dia]||[]), {...drag.aloc}]; return {...prev,[uSel]:u}; });
+    toast(`${nome(drag.aloc.pid,drag.aloc.tipo)} movido para ${DIAS[dia]}`);
+    setDrag(null); setOver(null);
+  };
+  const remover=(dia,id)=>setEscala(prev=>{ const u={...prev[uSel]}; u[dia]=u[dia].filter(a=>a.id!==id); return {...prev,[uSel]:u}; });
+  const setMarca=(dia,id,marca)=>setEscala(prev=>{ const u={...prev[uSel]}; u[dia]=u[dia].map(a=>a.id===id?{...a,marca}:a); return {...prev,[uSel]:u}; });
+  const setTurnoTo=(dia,id,turno)=>setEscala(prev=>{ const u={...prev[uSel]}; u[dia]=u[dia].map(a=>a.id===id?{...a,turno,marca:turno==="folga"?null:a.marca}:a); return {...prev,[uSel]:u}; });
+  const addFreela=(dia,pid)=>{ setEscala(prev=>{ const u={...(prev[uSel]||escalaVaziaUnidade())}; u[dia]=[...(u[dia]||[]),{id:"f"+Date.now(),pid,tipo:"free",turno:"noite"}]; return {...prev,[uSel]:u}; }); setAdd(null); toast("Freelancer inserido na escala desta casa"); };
+
+  const tot=Object.values(escU).flat();
+  const nClt=tot.filter(a=>a.tipo==="clt"&&a.turno!=="folga").length;
+  const nFree=tot.filter(a=>a.tipo==="free").length;
+  const nFolga=tot.filter(a=>a.turno==="folga").length;
+  const uAtual=unidades.find(u=>u.id===uSel);
+
+  return <div className="fade-in">
+    <PageHeader title="Escala por unidade" sub="Uma aba por casa · filtro por setor · layout compacto · menu (⋯) para turno, faltou, atrasou, folga">
+      {editavel && <Btn icon={I.plus} onClick={()=>setAdd(HOJE_IDX)}>Incluir freelancer</Btn>}
+    </PageHeader>
+
+    {/* Abas das casas */}
+    <div className="flex gap-2 overflow-x-auto pb-1 mb-4">
+      {unidades.map(u=>
+        <button key={u.id} onClick={()=>setUSel(u.id)}
+          className={cx("shrink-0 px-4 py-2.5 rounded-xl text-sm font-semibold border transition flex items-center gap-2",
+            uSel===u.id?"grad-brand text-white border-transparent shadow-glow":"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>
+          <span className="w-2.5 h-2.5 rounded-full" style={{background:uSel===u.id?"#fff":u.cor}}/>{u.nome}</button>)}
+    </div>
+
+    {!editavel && <div className="mb-4 p-3 rounded-xl bg-amber-50 text-amber-700 text-sm flex items-center gap-2"><Icon d={I.shield} className="w-4 h-4"/> Seu perfil ({/* */}somente leitura) não tem permissão para editar a escala.</div>}
+
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      {[["CLT nesta casa",nClt,"brand",I.user],["Freelancers",nFree,"free",I.coffee],["Folgas",nFolga,"slate",I.sun],["Coberturas",tot.length,"green",I.check]].map(([l,v,t,d])=>
+        <Card key={l} className="p-4 flex items-center gap-3">
+          <div className={cx("w-10 h-10 rounded-xl grid place-items-center text-white", t==="brand"?"grad-brand":t==="free"?"bg-free-500":t==="green"?"bg-emerald-500":"bg-slate-400")}><Icon d={d} className="w-5 h-5"/></div>
+          <div><div className="text-2xl font-extrabold text-slate-900 leading-none">{v}</div><div className="text-xs text-slate-500 mt-0.5">{l}</div></div>
+        </Card>)}
+    </div>
+
+    {/* Filtro por setor */}
+    <div className="flex flex-wrap gap-2 mb-3">
+      <span className="flex items-center gap-1 text-xs font-bold text-slate-400 uppercase mr-1 self-center"><Icon d={I.filter} className="w-3.5 h-3.5"/>Setor</span>
+      <button onClick={()=>setSetorF("todos")} className={cx("px-3 py-1.5 rounded-lg text-xs font-semibold border transition", setorF==="todos"?"grad-brand text-white border-transparent":"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>Todos</button>
+      {SETORES.map(([k,l,c])=><button key={k} onClick={()=>setSetorF(k)} className={cx("px-3 py-1.5 rounded-lg text-xs font-semibold border transition flex items-center gap-1.5", setorF===k?"text-white border-transparent":"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")} style={setorF===k?{background:c}:{}}><span className="w-2 h-2 rounded-full" style={{background:setorF===k?"#fff":c}}/>{l}</button>)}
+    </div>
+
+    <Card className="p-3 overflow-x-auto">
+      <div className="px-1 pb-2 text-sm font-semibold text-slate-500 flex items-center gap-2"><Icon d={I.pin} className="w-4 h-4" style={{color:uAtual?.cor}}/> Escala de <b className="text-slate-800">{uAtual?.nome}</b></div>
+      <div className="grid grid-cols-7 gap-3 min-w-[980px]">
+        {DIAS.map((dia,di)=>
+          <div key={di} onDragOver={e=>{e.preventDefault();setOver(di);}} onDragLeave={()=>setOver(o=>o===di?null:o)} onDrop={()=>onDrop(di)}
+            className={cx("rounded-2xl p-2 min-h-[260px] bg-slate-50/70 transition", over===di&&"drag-over", di===HOJE_IDX&&"ring-2 ring-brand-300 bg-brand-50/40")}>
+            <div className="flex items-center justify-between px-1 mb-2">
+              <span className="text-sm font-bold text-slate-700">{dia}{di===HOJE_IDX&&<span className="ml-1 text-[10px] text-brand-600">• hoje</span>}</span>
+              {editavel && <button onClick={()=>setAdd(di)} className="w-6 h-6 rounded-lg bg-white border border-slate-200 grid place-items-center text-slate-400 hover:text-brand-600 hover:border-brand-300"><Icon d={I.plus} className="w-3.5 h-3.5"/></button>}
+            </div>
+            <div className="space-y-1.5">
+              {(escU[di]||[]).filter(passaSetor).map(a=>{ const t=TURNOS[a.turno]; const setor=SETOR_MAP[setorDe(pessoaDe(a))]; const aberto=menu&&menu.di===di&&menu.id===a.id;
+                return <div key={a.id} className="relative">
+                  <div draggable={editavel} onDragStart={()=>setDrag({aloc:a,from:di})} onDragEnd={()=>{setDrag(null);setOver(null);}}
+                    className={cx("rounded-lg pl-2 pr-1 py-1.5 bg-white shadow-soft border border-slate-100 border-l-[3px]", editavel&&"cursor-grab", a.marca==="faltou"&&"opacity-70")}
+                    style={{borderLeftColor:setor?.c||"#6366f1"}}>
+                    <div className="flex items-center gap-1.5">
+                      <Avatar name={nome(a.pid,a.tipo)} tone={a.tipo==="clt"?"brand":"free"} size="w-5 h-5"/>
+                      <span className="text-[11px] font-semibold text-slate-800 flex-1 min-w-0 truncate">{nome(a.pid,a.tipo)}</span>
+                      {editavel && <button onClick={()=>setMenu(aberto?null:{di,id:a.id})} className="text-slate-400 hover:text-slate-700 font-bold px-1 leading-none">⋯</button>}
+                    </div>
+                    <div className="flex items-center gap-1 mt-1 flex-wrap">
+                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded" style={{background:(setor?.c||"#6366f1")+"22",color:setor?.c}}>{t.l}</span>
+                      {a.turno!=="folga" && <span className="text-[9px] font-semibold text-slate-500 tabular-nums">{t.h}</span>}
+                      {a.marca==="faltou" && <Badge tone="red">Faltou</Badge>}
+                      {a.marca==="atrasou" && <Badge tone="amber">Atrasou</Badge>}
+                    </div>
+                  </div>
+                  {aberto && <div className="absolute z-30 top-full left-0 mt-1 w-40 bg-white rounded-xl shadow-2xl border border-slate-100 p-1.5 text-xs">
+                    <div className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase">Turno</div>
+                    {[["manha","Manhã"],["tarde","Tarde"],["noite","Noite"],["folga","Folga"]].map(([k,l])=><button key={k} onClick={()=>{setTurnoTo(di,a.id,k);setMenu(null);}} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50">{l}</button>)}
+                    <div className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase border-t border-slate-100 mt-1">Marcar</div>
+                    <button onClick={()=>{setMarca(di,a.id,"faltou");setMenu(null);}} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-rose-50 text-rose-600">Faltou</button>
+                    <button onClick={()=>{setMarca(di,a.id,"atrasou");setMenu(null);}} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-amber-50 text-amber-600">Atrasou</button>
+                    <button onClick={()=>{setMarca(di,a.id,null);setMenu(null);}} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 text-slate-500">Limpar marca</button>
+                    <button onClick={()=>{remover(di,a.id);setMenu(null);}} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-rose-50 text-rose-600 border-t border-slate-100 mt-1">Remover</button>
+                  </div>}
+                </div>;})}
+            </div>
+          </div>)}
+      </div>
+    </Card>
+
+    <Modal open={add!==null} onClose={()=>setAdd(null)}>
+      <div className="p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-bold text-slate-900">Incluir freelancer em {uAtual?.nome} {add!==null&&`— ${DIAS[add]}`}</h3>
+          <button onClick={()=>setAdd(null)} className="text-slate-400 hover:text-slate-600"><Icon d={I.x}/></button>
+        </div>
+        <p className="text-sm text-slate-500 mb-4">Freelancers entram manualmente, quando há necessidade de cobertura. Só quem está escalado consegue registrar ponto.</p>
+        <div className="space-y-2">
+          {freelas.filter(f=>f.status==="ativo").map(f=>
+            <button key={f.id} onClick={()=>addFreela(add,f.id)} className="w-full flex items-center gap-3 p-3 rounded-xl border border-slate-200 hover:border-free-400 hover:bg-free-50/40 transition">
+              <Avatar name={f.nome} tone="free"/>
+              <div className="text-left flex-1"><div className="font-semibold text-slate-800">{f.nome}</div><div className="text-xs text-slate-500">{f.cargo} · casa base: {unidadeNome(f.unidade,unidades)}</div></div>
+              <Icon d={I.plus} className="w-4 h-4 text-free-500"/>
+            </button>)}
+        </div>
+      </div>
+    </Modal>
+  </div>;
+}
+
+/* ============================ PONTO AO VIVO (só registros reais) ============================ */
+const STATUS = {
+  trabalhando:{l:"Trabalhando",tone:"green",c:"#10b981"},
+  pausa:{l:"Em almoço/pausa",tone:"amber",c:"#f59e0b"},
+  encerrado:{l:"Encerrado",tone:"slate",c:"#94a3b8"},
+  aguardando:{l:"Aguardando entrada",tone:"blue",c:"#0ea5e9"},
+  faltou:{l:"Faltou",tone:"red",c:"#f43f5e"},
+};
+function PontoLive() {
+  const { registros, clts, freelas, unidades, escala, pontoHist } = useStore();
+  const [linkModal,setLinkModal]=useState(null); // null | 'clt' | 'free'
+  const clock=useClock();
+  const toast=useContext(ToastCtx);
+  const nome=(pid,tipo)=>pessoaNome(pid,tipo,clts,freelas);
+  const hrefBase = (typeof window!=="undefined" ? window.location.href.split("#")[0] : "");
+  const isLocalFile = hrefBase.startsWith("file:");
+  // Endereço público do sistema (depois de publicado). Se estiver em arquivo local,
+  // o gestor informa a URL pública para que o link funcione no celular do colaborador.
+  const [pubUrl,setPubUrl]=useState("");
+  const base = (pubUrl.trim() ? pubUrl.trim().replace(/#.*$/,"").replace(/\/+$/,"")+"/" : hrefBase);
+  const linkDe=(m)=> `${base}#ponto-${m}`;
+
+  // Escalados hoje (todas as casas), com o status derivado dos registros REAIS
+  const escalados=[];
+  Object.entries(escala).forEach(([uid,dias])=>{
+    (dias[HOJE_IDX]||[]).forEach(a=>{ if(a.turno==="folga") return;
+      escalados.push({...a, unidadeId:Number(uid)}); });
+  });
+  const statusDe=(a)=>{
+    if(a.marca==="faltou") return "faltou";
+    const regs=registros.filter(r=>r.nome===nome(a.pid,a.tipo)); // mais recente primeiro
+    if(!regs.length) return "aguardando";
+    const last=regs[0].acao;
+    return last==="Saída"?"encerrado" : last==="Início intervalo"?"pausa" : "trabalhando";
+  };
+  // Tempo em jornada em TEMPO REAL (desde a Entrada, atualiza a cada segundo com o relógio)
+  const nowSec = clock.getHours()*3600 + clock.getMinutes()*60 + clock.getSeconds();
+  const tempoDe=(a)=>{
+    const regs=registros.filter(r=>r.nome===nome(a.pid,a.tipo));
+    const ent=regs.find(r=>r.acao==="Entrada");
+    if(!ent || ent.min==null) return null;
+    let d=nowSec - ent.min*60; if(d<0) d+=86400; return d; // segundos
+  };
+  const linhas=escalados.map(a=>({a, nm:nome(a.pid,a.tipo), st:statusDe(a), tempo:tempoDe(a)}));
+  const cont=(s)=>linhas.filter(x=>x.st===s).length;
+  // Apuração de horas (histórico + registros reais de hoje)
+  const apuracao=apurarHoras([...pontoHist, ...registros]).filter(x=>x.completo);
+
+  return <div className="fade-in">
+    <PageHeader title="Ponto ao vivo" sub="Status em tempo real · o colaborador registra pelo link enviado (WhatsApp)">
+      <Btn variant="ghost" icon={I.link} onClick={()=>setLinkModal("clt")}>Gerar link CLT</Btn>
+      <Btn variant="free" icon={I.link} onClick={()=>setLinkModal("free")}>Gerar link Freelancer</Btn>
+    </PageHeader>
+
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      <Card className="p-4 flex items-center gap-3">
+        <span className="relative w-3 h-3"><span className="absolute inset-0 rounded-full bg-emerald-500 live-dot"/></span>
+        <div><div className="text-sm font-bold text-slate-800">AO VIVO</div><div className="text-xs text-slate-400 tabular-nums">{clock.toLocaleTimeString("pt-BR")}</div></div>
+      </Card>
+      <Card className="p-4"><div className="text-2xl font-extrabold text-emerald-600">{cont("trabalhando")}</div><div className="text-xs text-slate-500">Trabalhando</div></Card>
+      <Card className="p-4"><div className="text-2xl font-extrabold text-amber-600">{cont("pausa")}</div><div className="text-xs text-slate-500">Em almoço/pausa</div></Card>
+      <Card className="p-4"><div className="text-2xl font-extrabold text-rose-600">{cont("faltou")}</div><div className="text-xs text-slate-500">Faltas</div></Card>
+    </div>
+
+    <div className="grid lg:grid-cols-5 gap-4">
+      {/* Painel de status */}
+      <Card className="lg:col-span-3 overflow-hidden">
+        <div className="px-5 py-3 border-b border-slate-100"><h3 className="font-bold text-slate-900 flex items-center gap-2"><Icon d={I.users} className="w-4 h-4 text-brand-500"/> Escalados de hoje — status ao vivo</h3></div>
+        {linhas.length===0
+          ? <div className="p-10 text-center text-slate-400">Ninguém escalado para hoje.</div>
+          : <div className="divide-y divide-slate-50 max-h-[460px] overflow-auto">
+              {linhas.map(({a,nm,st,tempo})=>{ const s=STATUS[st];
+                return <div key={a.id} className="flex items-center gap-3 py-3 px-5">
+                  <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{background:s.c}}/>
+                  <Avatar name={nm} tone={a.tipo==="clt"?"brand":"free"} size="w-9 h-9"/>
+                  <div className="min-w-0"><div className="font-semibold text-slate-800 truncate">{nm}</div>
+                    <div className="text-xs text-slate-500">{unidadeNome(a.unidadeId,unidades)} · {SETOR_MAP[setorDe((a.tipo==="clt"?clts:freelas).find(p=>p.id===a.pid))]?.l}</div></div>
+                  <div className="ml-auto flex items-center gap-2">
+                    {st==="trabalhando" && tempo!=null && <span className="flex items-center gap-1 text-xs font-bold text-emerald-600 tabular-nums" title="Tempo em jornada (ao vivo)"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500 live-dot"/>{fmtHMS(tempo)}</span>}
+                    <Badge tone={a.tipo==="clt"?"brand":"free"}>{a.tipo==="clt"?"CLT":"Freela"}</Badge>
+                    <Badge tone={s.tone}>{s.l}</Badge>
+                  </div>
+                </div>;})}
+            </div>}
+      </Card>
+
+      {/* Feed de registros reais */}
+      <Card className="lg:col-span-2 overflow-hidden">
+        <div className="px-5 py-3 border-b border-slate-100"><h3 className="font-bold text-slate-900 flex items-center gap-2"><Icon d={I.broadcast} className="w-4 h-4 text-emerald-500"/> Registros reais</h3></div>
+        {registros.length===0
+          ? <div className="p-8 text-center text-slate-400 text-sm"><Icon d={I.broadcast} className="w-9 h-9 mx-auto mb-2 text-slate-300"/> Nenhum registro ainda. Abra um link de ponto e bata entrada/saída com selfie.</div>
+          : <div className="divide-y divide-slate-50 max-h-[460px] overflow-auto">
+              {registros.map(r=>
+                <div key={r.id} className="flex items-center gap-3 py-2.5 px-5 slide-in">
+                  {r.foto ? <img src={r.foto} alt="selfie" className="w-8 h-8 rounded-lg object-cover ring-2 ring-emerald-200 shrink-0"/> : <Avatar name={r.nome} tone={r.tipo==="clt"?"brand":"free"} size="w-8 h-8"/>}
+                  <div className="min-w-0"><div className="font-semibold text-slate-800 text-sm truncate">{r.nome}</div><div className="text-xs text-slate-500">{r.acao} · {r.unidade}</div></div>
+                  <div className="ml-auto text-right"><div className="font-bold text-slate-900 tabular-nums text-sm">{r.hora}</div>
+                    <span className="text-[10px] text-emerald-600 flex items-center gap-0.5 justify-end"><Icon d={I.camera} className="w-3 h-3"/><Icon d={I.gps} className="w-3 h-3"/></span></div>
+                </div>)}
+            </div>}
+      </Card>
+    </div>
+
+    {/* Apuração de horas & extras (alimentada pelos registros de ponto/check-in) */}
+    <Card className="overflow-hidden mt-4">
+      <div className="px-5 py-3 border-b border-slate-100 flex items-center justify-between">
+        <h3 className="font-bold text-slate-900 flex items-center gap-2"><Icon d={I.clock} className="w-4 h-4 text-brand-500"/> Apuração de horas & extras</h3>
+        <span className="text-xs text-slate-400">CLT: base 8h · Freela: check-in/checkout</span>
+      </div>
+      <div className="overflow-x-auto"><table className="w-full text-sm min-w-[620px]">
+        <thead><tr className="text-left text-slate-400 border-b border-slate-100">{["Colaborador","Vínculo","Dia","Horas trabalhadas","Extras","Atraso"].map(h=><th key={h} className="px-4 py-2.5 font-semibold">{h}</th>)}</tr></thead>
+        <tbody className="divide-y divide-slate-50">
+          {apuracao.map((x,i)=><tr key={i} className="hover:bg-slate-50/70">
+            <td className="px-4 py-2.5"><div className="flex items-center gap-2"><Avatar name={x.nome} tone={x.tipo==="clt"?"brand":"free"} size="w-7 h-7"/><span className="font-semibold text-slate-800">{x.nome}</span></div></td>
+            <td className="px-4 py-2.5"><Badge tone={x.tipo==="clt"?"brand":"free"}>{x.tipo==="clt"?"CLT":"Freela"}</Badge></td>
+            <td className="px-4 py-2.5 text-slate-500">{x.dia==="hoje"?"Hoje":new Date(x.dia).toLocaleDateString("pt-BR")}</td>
+            <td className="px-4 py-2.5 font-bold text-slate-900">{fmtHoras(x.trabalhado)}</td>
+            <td className="px-4 py-2.5">{x.extras>0?<Badge tone="green">+{fmtHoras(x.extras)}</Badge>:<span className="text-slate-400">—</span>}</td>
+            <td className="px-4 py-2.5">{x.atraso>0?<Badge tone="red">-{fmtHoras(x.atraso)}</Badge>:<span className="text-slate-400">—</span>}</td>
+          </tr>)}
+          {apuracao.length===0 && <tr><td colSpan="6" className="px-4 py-6 text-center text-slate-400">Sem jornadas concluídas para apurar. Registre entrada e saída pelo link.</td></tr>}
+        </tbody>
+      </table></div>
+    </Card>
+
+    {/* Modal: gerar/copiar link para enviar por WhatsApp (NÃO abre relógio local) */}
+    <Modal open={!!linkModal} onClose={()=>setLinkModal(null)}>
+      {linkModal && (()=>{ const url=linkDe(linkModal); const isClt=linkModal==="clt";
+        const titulo=isClt?"Registro de Jornada — CLT":"Check-in / Checkout — Freelancer";
+        const msg=`Olá! Registre seu ponto pelo link do Wilami Ponto (${isClt?"CLT":"Freelancer"}): ${url}`;
+        return <div className="p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-bold text-slate-900">Gerar link · {titulo}</h3>
+            <button onClick={()=>setLinkModal(null)} className="text-slate-400 hover:text-slate-600"><Icon d={I.x}/></button>
+          </div>
+          <p className="text-sm text-slate-500 mb-3">Envie este link para o colaborador registrar a jornada direto no celular dele — não abre relógio aqui.</p>
+          {isLocalFile && !pubUrl.trim() && <div className="mb-3 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs">
+            <b>Atenção:</b> você está abrindo o arquivo localmente (<span className="font-mono">file://…</span>). Um link <span className="font-mono">file:///C:/Users/…</span> só existe no <b>seu computador</b> — no celular do colaborador ele não abre.<br/>
+            Para o link funcionar em qualquer celular, o sistema precisa estar <b>publicado online</b> (ex.: Vercel). Depois de publicar, cole abaixo o endereço público e os links passam a funcionar:
+          </div>}
+          <div className="mb-3">
+            <label className="text-xs font-semibold text-slate-500 block mb-1">Endereço público do sistema (após publicar)</label>
+            <input value={pubUrl} onChange={e=>setPubUrl(e.target.value)} placeholder="https://seu-wilami-ponto.vercel.app" className="w-full px-3 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-brand-400 text-sm"/>
+          </div>
+          <div className={cx("p-3 rounded-xl text-xs font-mono break-all", isLocalFile && !pubUrl.trim() ? "bg-rose-50 text-rose-600" : "bg-slate-50 text-slate-600")}>{url}</div>
+          <div className="flex flex-wrap gap-2 mt-4">
+            <Btn variant={isClt?"primary":"free"} icon={I.copy} onClick={()=>{ copyText(url); toast(copyText(url)?"Link copiado":"Selecione e copie o link"); }}>Copiar link</Btn>
+            <Btn variant="ghost" icon={I.copy} onClick={()=>{ copyText(msg); toast("Mensagem copiada p/ WhatsApp"); }}>Copiar mensagem</Btn>
+            <a href={`https://wa.me/?text=${encodeURIComponent(msg)}`} target="_blank" rel="noopener" className="inline-flex items-center justify-center gap-2 text-sm font-semibold rounded-xl px-4 py-2.5 bg-emerald-500 text-white hover:bg-emerald-600"><Icon d={I.arrow} className="w-4 h-4"/>Enviar no WhatsApp</a>
+          </div>
+          <Btn variant="ghost" className="w-full mt-3" onClick={()=>setLinkModal(null)}>Cancelar</Btn>
+        </div>; })()}
+    </Modal>
+  </div>;
+}
+
+/* ============================ QUIOSQUE DE PONTO ============================ */
+function PontoKiosk({ mode, onClose }) {
+  const { unidades, clts, freelas, freelancerEscaladoHoje, addRegistro, salvarClt, salvarFreela } = useStore();
+  const ativos = mode==="clt" ? clts : freelas.filter(f=>f.status==="ativo");
+  const [fluxo,setFluxo]=useState("escolha"); // escolha | registro | cadastro
+  const [unidadeId,setUnidadeId]=useState(unidades[0]?.id);
+  const [pid,setPid]=useState(ativos[0]?.id);
+  const [step,setStep]=useState(0); // 0 seleção · 1 selfie · 2 gps · 3 confirmar
+  const [foto,setFoto]=useState(null);
+  const [camErr,setCamErr]=useState(null);
+  const [geo,setGeo]=useState(null);
+  const [geoErr,setGeoErr]=useState(null);
+  const [acao,setAcao]=useState("Entrada");
+  const [done,setDone]=useState(false);
+  const [cadOk,setCadOk]=useState(false);
+  const videoRef=useRef(null); const streamRef=useRef(null);
+  const clock=useClock();
+  const unidade=unidades.find(u=>u.id===unidadeId)||unidades[0];
+  const accent = mode==="clt"?"brand":"free";
+  const pSel=(mode==="clt"?clts:freelas).find(x=>x.id===pid);
+  const escalado = mode==="clt" || (pid && freelancerEscaladoHoje(pid));
+
+  const startCam=async()=>{ setCamErr(null);
+    try{ const s=await navigator.mediaDevices.getUserMedia({video:{facingMode:"user"}}); streamRef.current=s; if(videoRef.current){videoRef.current.srcObject=s; await videoRef.current.play();} }
+    catch{ setCamErr("Câmera indisponível neste ambiente. Use 'Simular selfie' para continuar a demonstração."); } };
+  const stopCam=()=>{ streamRef.current?.getTracks().forEach(t=>t.stop()); streamRef.current=null; };
+  useEffect(()=>{ if(fluxo==="registro"&&step===1&&!foto) startCam(); return stopCam; },[step,fluxo]);
+
+  const capturar=()=>{ const v=videoRef.current;
+    if(v&&v.videoWidth){ const c=document.createElement("canvas"); c.width=v.videoWidth; c.height=v.videoHeight; c.getContext("2d").drawImage(v,0,0); setFoto(c.toDataURL("image/jpeg",0.8)); }
+    else setFoto("data:image/svg+xml;utf8,"+encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' width='300' height='300'><rect width='300' height='300' fill='#1e1b4b'/><circle cx='150' cy='120' r='55' fill='${accent==="clt"?"#6366f1":"#f97316"}'/><rect x='80' y='190' width='140' height='90' rx='45' fill='${accent==="clt"?"#6366f1":"#f97316"}'/><text x='150' y='285' font-size='16' fill='#fff' text-anchor='middle' font-family='sans-serif'>selfie simulada</text></svg>`));
+    stopCam(); };
+  const pegarGeo=()=>{ setGeoErr(null);
+    if(!navigator.geolocation){ setGeoErr("Geolocalização não suportada."); return; }
+    navigator.geolocation.getCurrentPosition(
+      pos=>{ const {latitude,longitude}=pos.coords; const dist=haversine(latitude,longitude,unidade.lat,unidade.lng); setGeo({dist,ok:dist<=unidade.raio}); },
+      ()=>{ setGeoErr("Permissão de GPS negada. Simulando posição dentro da cerca."); setGeo({dist:38,ok:true}); }, {enableHighAccuracy:true,timeout:8000}); };
+  const simGeo=()=>setGeo({dist:42,ok:true});
+  const registrar=()=>{
+    addRegistro({ nome: pSel?.nome || "Colaborador", tipo:mode, acao, unidade:unidade.nome,
+      hora:new Date().toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit",second:"2-digit"}), geo:true, selfie:true, foto });
+    setDone(true); setTimeout(onClose,2600);
+  };
+  const registrarCadastro=(dados)=>{ if(mode==="clt") salvarClt(dados); else salvarFreela(dados); setCadOk(true); };
+
+  return <div className="fixed inset-0 z-50 grad-ink grad-hero flex items-center justify-center p-4">
+    <button onClick={onClose} className="absolute top-4 right-4 w-10 h-10 rounded-xl bg-white/10 text-white grid place-items-center hover:bg-white/20"><Icon d={I.x}/></button>
+    <div className="w-full max-w-md">
+      <div className="flex justify-center mb-4"><Logo light/></div>
+      <div className="text-center mb-3">
+        <Badge tone={mode==="clt"?"brand":"free"}>{mode==="clt"?"Link CLT":"Link Freelancer"} · cadastro e registro</Badge>
+      </div>
+      <Card className="p-6 relative overflow-hidden">
+        {done ? <div className="py-10 text-center fade-in">
+            <div className="w-20 h-20 mx-auto rounded-full bg-emerald-500 grid place-items-center text-white mb-4 shadow-glow"><Icon d={I.check} className="w-10 h-10" stroke={3}/></div>
+            <h3 className="text-2xl font-extrabold text-slate-900">Ponto registrado!</h3>
+            <p className="text-slate-500 mt-1">{acao} às <b>{clock.toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"})}</b> · {unidade.nome}</p>
+          </div>
+        : cadOk ? <div className="py-10 text-center fade-in">
+            <div className="w-20 h-20 mx-auto rounded-full bg-emerald-500 grid place-items-center text-white mb-4 shadow-glow"><Icon d={I.check} className="w-10 h-10" stroke={3}/></div>
+            <h3 className="text-2xl font-extrabold text-slate-900">Cadastro concluído!</h3>
+            <p className="text-slate-500 mt-1">Agora você já pode registrar seu ponto.</p>
+            <Btn className="mt-4" icon={I.clock} variant={accent==="clt"?"primary":"free"} onClick={()=>{setCadOk(false);setFluxo("registro");setStep(0);}}>Registrar ponto agora</Btn>
+          </div>
+        : fluxo==="escolha" ? <div className="fade-in text-center py-4">
+            <p className="text-slate-500 text-sm mb-5">Link exclusivo de <b>{mode==="clt"?"CLT":"Freelancer"}</b> — cadastro e registro de ponto.</p>
+            <div className="space-y-3">
+              <button onClick={()=>{setFluxo("registro");setStep(0);}} className="w-full p-4 rounded-2xl border border-slate-200 hover:border-brand-400 hover:bg-brand-50/40 flex items-center gap-4 text-left transition">
+                <div className={cx("w-11 h-11 rounded-xl grid place-items-center text-white", accent==="clt"?"grad-brand":"bg-free-500")}><Icon d={I.clock}/></div>
+                <div className="flex-1"><div className="font-bold text-slate-900">Registrar ponto</div><div className="text-sm text-slate-500">Entrada/saída com selfie + GPS</div></div><Icon d={I.arrow} className="w-4 h-4 text-slate-400"/></button>
+              <button onClick={()=>setFluxo("cadastro")} className="w-full p-4 rounded-2xl border border-slate-200 hover:border-brand-400 hover:bg-brand-50/40 flex items-center gap-4 text-left transition">
+                <div className="w-11 h-11 rounded-xl bg-slate-800 grid place-items-center text-white"><Icon d={I.plus}/></div>
+                <div className="flex-1"><div className="font-bold text-slate-900">Fazer cadastro (1º acesso)</div><div className="text-sm text-slate-500">Preencher dados e enviar documentos</div></div><Icon d={I.arrow} className="w-4 h-4 text-slate-400"/></button>
+            </div>
+            <Btn variant="ghost" className="w-full mt-4" onClick={onClose}>Cancelar</Btn>
+          </div>
+        : fluxo==="cadastro" ? <div className="fade-in -m-6"><ColabForm tipo={mode} onClose={()=>setFluxo("escolha")} onSalvar={registrarCadastro}/></div>
+        : <>
+          <div className="text-center mb-5">
+            <div className="text-4xl font-extrabold tracking-tight text-slate-900 tabular-nums">{clock.toLocaleTimeString("pt-BR")}</div>
+            <div className="text-slate-500 text-sm mt-1">{unidade?.nome}</div>
+          </div>
+
+          {step===0 && <div className="fade-in">
+            <Field label="Quem vai registrar?">
+              <Select value={pid} onChange={e=>setPid(Number(e.target.value))}>
+                {ativos.map(x=><option key={x.id} value={x.id}>{x.nome}</option>)}
+              </Select>
+            </Field>
+            <div className="mt-3"><Field label="Unidade">
+              <Select value={unidadeId} onChange={e=>setUnidadeId(Number(e.target.value))}>{unidades.map(u=><option key={u.id} value={u.id}>{u.nome}</option>)}</Select>
+            </Field></div>
+            {mode==="free" && <div className={cx("mt-4 p-3 rounded-xl flex items-center gap-2 text-sm", escalado?"bg-emerald-50 text-emerald-700":"bg-rose-50 text-rose-700")}>
+              <Icon d={escalado?I.check:I.x} className="w-4 h-4"/>
+              {escalado?"Freelancer escalado hoje — pode registrar":"Não está escalado hoje. Inclua-o na escala para liberar o ponto."}
+            </div>}
+            <Btn className="w-full mt-4" disabled={mode==="free"&&!escalado} icon={I.arrow} variant={accent==="clt"?"primary":"free"} onClick={()=>setStep(1)}>Continuar</Btn>
+          </div>}
+
+          {step===1 && <div className="fade-in">
+            <div className="aspect-square rounded-2xl overflow-hidden bg-ink-900 relative grid place-items-center">
+              {foto ? <img src={foto} className="w-full h-full object-cover"/> : <video ref={videoRef} className="w-full h-full object-cover" playsInline muted/>}
+              {!foto && <div className="absolute inset-8 border-2 border-white/50 rounded-full pointer-events-none"/>}
+            </div>
+            {camErr && <p className="text-xs text-amber-600 mt-2">{camErr}</p>}
+            <div className="mt-4 flex gap-2">
+              {!foto ? <>
+                  <Btn className="flex-1" icon={I.camera} onClick={capturar} variant={accent==="clt"?"primary":"free"}>Capturar selfie</Btn>
+                  <label className="cursor-pointer">
+                    <span className="inline-flex items-center gap-1 text-sm font-semibold rounded-xl px-4 py-2.5 border border-slate-200 text-slate-700 hover:bg-slate-50"><Icon d={I.upload} className="w-4 h-4"/>Foto</span>
+                    <input type="file" accept="image/*" capture="user" className="hidden" onChange={e=>{ const fl=e.target.files&&e.target.files[0]; if(fl){ const rd=new FileReader(); rd.onload=()=>{stopCam();setFoto(rd.result);}; rd.readAsDataURL(fl); } }}/>
+                  </label>
+                </>
+                : <><Btn variant="ghost" onClick={()=>{setFoto(null);startCam();}}>Refazer</Btn>
+                    <Btn className="flex-1" icon={I.arrow} onClick={()=>{setStep(2);pegarGeo();}} variant={accent==="clt"?"primary":"free"}>Continuar</Btn></>}
+            </div>
+            <p className="text-[11px] text-slate-400 mt-2 text-center">No celular, "Foto" abre a câmera. Em arquivo local (file://) a câmera ao vivo pode ficar indisponível — use "Foto".</p>
+          </div>}
+
+          {step===2 && <div className="fade-in">
+            <div className="rounded-2xl border border-slate-200 overflow-hidden">
+              <div className="h-32 relative grad-brand grid place-items-center">
+                <div className="text-white text-center"><div className="w-12 h-12 mx-auto rounded-full bg-white/20 grid place-items-center tick"><Icon d={I.pin} className="w-6 h-6"/></div>
+                  <p className="text-sm mt-2 font-semibold">{geo?"Localização obtida":"Buscando GPS..."}</p></div>
+              </div>
+              <div className="p-4 text-sm space-y-2">
+                <div className="flex justify-between"><span className="text-slate-500">Cerca</span><b>{unidade.raio} m</b></div>
+                {geo && <div className="flex justify-between"><span className="text-slate-500">Distância</span><b>{Math.round(geo.dist)} m</b></div>}
+                <div>{geo ? (geo.ok
+                  ? <Badge tone="green"><Icon d={I.check} className="w-3 h-3"/> Dentro da cerca</Badge>
+                  : <Badge tone="red"><Icon d={I.x} className="w-3 h-3"/> Fora da cerca — bloqueado</Badge>)
+                  : <Badge tone="amber">Aguardando…</Badge>}</div>
+              </div>
+            </div>
+            {geoErr && <p className="text-xs text-amber-600 mt-2">{geoErr}</p>}
+            <div className="mt-4 flex gap-2">
+              {!geo && <Btn variant="ghost" onClick={simGeo}>Simular GPS</Btn>}
+              <Btn variant="ghost" onClick={()=>setStep(1)}>Voltar</Btn>
+              <Btn className="flex-1" disabled={!geo||!geo.ok} icon={I.arrow} onClick={()=>setStep(3)} variant={accent==="clt"?"primary":"free"}>Continuar</Btn>
+            </div>
+          </div>}
+
+          {step===3 && <div className="fade-in">
+            <div className="flex items-center gap-3 p-3 rounded-2xl bg-slate-50 mb-4">
+              <img src={foto} className="w-14 h-14 rounded-xl object-cover"/>
+              <div className="text-sm"><div className="font-bold text-slate-900">{pSel?.nome}</div>
+                <div className="text-slate-500">{mode==="clt"?"CLT":"Freelancer"} · {unidade.nome}</div>
+                <div className="flex gap-1 mt-1"><Badge tone="green">Facial ✓</Badge><Badge tone="green">GPS ✓</Badge></div></div>
+            </div>
+            <p className="text-sm font-semibold text-slate-600 mb-2">Qual registro?</p>
+            <div className="grid grid-cols-2 gap-2">
+              {["Entrada","Início intervalo","Fim intervalo","Saída"].map(a=>
+                <button key={a} onClick={()=>setAcao(a)} className={cx("py-3 rounded-xl text-sm font-semibold border transition", acao===a?(accent==="clt"?"grad-brand text-white border-transparent":"bg-free-500 text-white border-transparent"):"border-slate-200 text-slate-600 hover:bg-slate-50")}>{a}</button>)}
+            </div>
+            <div className="mt-4 flex gap-2">
+              <Btn variant="ghost" onClick={()=>setStep(2)}>Voltar</Btn>
+              <Btn className="flex-1" size="lg" icon={I.check} onClick={registrar} variant={accent==="clt"?"primary":"free"}>Bater ponto — {acao}</Btn>
+            </div>
+          </div>}
+        </>}
+      </Card>
+      <p className="text-center text-white/50 text-xs mt-4 flex items-center justify-center gap-1"><Icon d={I.shield} className="w-3 h-3"/> Conforme Portaria 671/2021 · comprovante por e-mail</p>
+    </div>
+  </div>;
+}
+
+/* ============================ FORM DE COLABORADOR ============================ */
+function ColabForm({ tipo, inicial, onSalvar, onClose }) {
+  const { unidades, cargosFreela } = useStore();
+  const cg0 = cargosFreela[0];
+  const [f,setF]=useState(inicial || (tipo==="clt"
+    ? { nome:"", cargo:CARGOS[0], setor:"salao", escala:"6x1", unidade:unidades[0]?.id, admissao:"", cpf:"", tel:"", tipoPix:"CPF", pix:"", banco:"", foto:"", docs:{} }
+    : { nome:"", cargo:cg0?.nome||"", setor:"salao", unidade:unidades[0]?.id, valor:cg0?.valor||0, cpf:"", tel:"", tipoPix:"CPF", pix:"", banco:"", foto:"" }));
+  const set=(k,v)=>setF(p=>({...p,[k]:v}));
+  // Foto do colaborador no CADASTRO (referência facial). Usa input de arquivo/câmera:
+  // funciona em file://, no PC e abre a câmera no celular (capture="user").
+  const upFoto=(file)=>{ if(!file) return; const rd=new FileReader(); rd.onload=()=>set("foto",rd.result); rd.readAsDataURL(file); };
+  const setCargoClt=(cg)=>setF(p=>({...p,cargo:cg,setor:SETOR_POR_CARGO[cg]||p.setor}));
+  const setCargoFree=(nm)=>{ const c=cargosFreela.find(x=>x.nome===nm); setF(p=>({...p,cargo:nm,valor:c?c.valor:p.valor,setor:SETOR_POR_CARGO[nm]||p.setor})); };
+  const upDoc=(k,file)=>{ if(!file) return; const rd=new FileReader();
+    rd.onload=()=>setF(p=>({...p,docs:{...(p.docs||{}),[k]:{nome:file.name,dados:rd.result}}}));
+    rd.readAsDataURL(file); };
+  const rmDoc=(k)=>setF(p=>{ const d={...(p.docs||{})}; delete d[k]; return {...p,docs:d}; });
+  const nomeOk=f.nome.trim().split(" ").filter(Boolean).length>=2;
+  const valido = tipo==="clt" ? nomeOk
+    : nomeOk && !!f.cargo && !!(f.cpf||"").trim() && !!f.tipoPix && !!(f.pix||"").trim() && !!(f.banco||"").trim();
+  const req=(l)=> tipo==="free" ? l+" *" : l;
+  return <div className="p-6">
+    <div className="flex items-center justify-between mb-5">
+      <h3 className="text-lg font-bold text-slate-900">{inicial?"Editar":tipo==="clt"?"Contratar CLT":"Novo freelancer"}</h3>
+      <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><Icon d={I.x}/></button>
+    </div>
+    {/* Foto do colaborador (referência facial) — obrigatória p/ o check-in reconhecer a pessoa */}
+    <div className="flex items-center gap-4 mb-4 p-3 rounded-2xl border border-slate-200 bg-slate-50/60">
+      <div className="w-20 h-20 rounded-2xl overflow-hidden bg-white ring-1 ring-slate-200 grid place-items-center shrink-0">
+        {f.foto ? <img src={f.foto} alt="foto" className="w-full h-full object-cover"/> : <Icon d={I.camera} className="w-7 h-7 text-slate-300"/>}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-semibold text-slate-800">Foto do colaborador</div>
+        <div className="text-xs text-slate-500 mb-2">Tire uma foto ou envie do dispositivo — usada como referência no check-in.</div>
+        <div className="flex gap-2">
+          <label className="cursor-pointer">
+            <span className="inline-flex items-center gap-1 text-xs font-semibold text-white bg-brand-600 hover:bg-brand-700 px-3 py-1.5 rounded-lg"><Icon d={I.camera} className="w-3.5 h-3.5"/>{f.foto?"Trocar foto":"Tirar/enviar foto"}</span>
+            <input type="file" accept="image/*" capture="user" className="hidden" onChange={e=>upFoto(e.target.files&&e.target.files[0])}/>
+          </label>
+          {f.foto && <button onClick={()=>set("foto","")} className="text-xs font-semibold text-slate-500 hover:text-rose-500 px-2">Remover</button>}
+        </div>
+      </div>
+    </div>
+    <div className="grid sm:grid-cols-2 gap-4">
+      <div className="sm:col-span-2"><Field label={req("Nome e sobrenome")}><Input value={f.nome} onChange={e=>set("nome",e.target.value)} placeholder="Ex.: João da Silva"/></Field></div>
+      {tipo==="clt" ? <>
+        <Field label="Cargo / função"><Select value={f.cargo} onChange={e=>setCargoClt(e.target.value)}>{CARGOS.map(c=><option key={c}>{c}</option>)}</Select></Field>
+        <Field label="Setor"><Select value={f.setor} onChange={e=>set("setor",e.target.value)}>{SETORES.map(([k,l])=><option key={k} value={k}>{l}</option>)}</Select></Field>
+        <Field label="Unidade (casa)"><Select value={f.unidade} onChange={e=>set("unidade",Number(e.target.value))}>{unidades.map(u=><option key={u.id} value={u.id}>{u.nome}</option>)}</Select></Field>
+        <Field label="Escala fixa"><Select value={f.escala} onChange={e=>set("escala",e.target.value)}>{Object.entries(ESCALAS).map(([k,v])=><option key={k} value={k}>{v}</option>)}</Select></Field>
+        <Field label="Admissão"><Input type="date" value={f.admissao} onChange={e=>set("admissao",e.target.value)}/></Field>
+      </> : <>
+        <Field label={req("Cargo")}><Select value={f.cargo} onChange={e=>setCargoFree(e.target.value)}>{cargosFreela.map(c=><option key={c.id} value={c.nome}>{c.nome}</option>)}</Select></Field>
+        <Field label="Valor por jornada"><div className="px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm font-semibold text-slate-700">R$ {Number(f.valor||0).toLocaleString("pt-BR")} <span className="font-normal text-slate-400 text-xs">(do cargo)</span></div></Field>
+        <Field label="Unidade (casa)"><Select value={f.unidade} onChange={e=>set("unidade",Number(e.target.value))}>{unidades.map(u=><option key={u.id} value={u.id}>{u.nome}</option>)}</Select></Field>
+        <Field label="Telefone"><Input value={f.tel} onChange={e=>set("tel",e.target.value)} placeholder="(00) 00000-0000"/></Field>
+      </>}
+      <Field label={req("CPF")}><Input value={f.cpf} onChange={e=>set("cpf",e.target.value)} placeholder="000.000.000-00"/></Field>
+      {tipo==="clt" && <Field label="Telefone"><Input value={f.tel} onChange={e=>set("tel",e.target.value)} placeholder="(00) 00000-0000"/></Field>}
+      <Field label={req("Tipo de Pix")}><Select value={f.tipoPix} onChange={e=>set("tipoPix",e.target.value)}>{PIX_TIPOS.map(t=><option key={t}>{t}</option>)}</Select></Field>
+      <Field label={req("Chave Pix")}><Input value={f.pix} onChange={e=>set("pix",e.target.value)} placeholder="conforme o tipo de Pix"/></Field>
+      <Field label={req("Nome do Banco")}><Input value={f.banco} onChange={e=>set("banco",e.target.value)} placeholder="Ex.: Nubank, Itaú, Caixa"/></Field>
+    </div>
+
+    {tipo==="clt" && <div className="mt-5">
+      <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2 flex items-center gap-1.5"><Icon d={I.doc} className="w-3.5 h-3.5"/> Documentos <span className="normal-case font-normal text-slate-400">— foto pelo celular ou arquivo do PC</span></div>
+      <div className="grid sm:grid-cols-2 gap-2">
+        {DOC_TIPOS.map(([k,l])=>{ const arq=f.docs?.[k];
+          return <div key={k} className={cx("flex items-center gap-2.5 p-2.5 rounded-xl border", arq?"border-emerald-200 bg-emerald-50/40":"border-slate-200")}>
+            <div className={cx("w-8 h-8 rounded-lg grid place-items-center shrink-0", arq?"bg-emerald-100 text-emerald-600":"bg-slate-100 text-slate-400")}><Icon d={I.doc} className="w-4 h-4"/></div>
+            <div className="flex-1 min-w-0"><div className="text-sm font-semibold text-slate-800">{l}</div>
+              {arq ? <div className="text-xs text-emerald-700 truncate flex items-center gap-1"><Icon d={I.check} className="w-3 h-3"/>{docNome(arq)}</div>
+                   : <div className="text-xs text-slate-400">Não enviado</div>}</div>
+            {arq && <button onClick={()=>rmDoc(k)} className="text-slate-300 hover:text-rose-500 shrink-0"><Icon d={I.x} className="w-4 h-4"/></button>}
+            <label className="cursor-pointer shrink-0">
+              <span className="inline-flex items-center gap-1 text-xs font-semibold text-brand-700 bg-brand-50 hover:bg-brand-100 px-2.5 py-1.5 rounded-lg"><Icon d={I.upload} className="w-3.5 h-3.5"/>{arq?"Trocar":"Enviar"}</span>
+              <input type="file" accept="image/*,application/pdf" capture="environment" className="hidden" onChange={e=>upDoc(k,e.target.files&&e.target.files[0])}/>
+            </label>
+          </div>;})}
+      </div>
+    </div>}
+    {tipo==="free" && <p className="text-xs text-slate-500 mt-3 flex items-center gap-1"><Icon d={I.coffee} className="w-3.5 h-3.5"/> Cadastro de freelancer é simplificado — sem a documentação exigida do CLT.</p>}
+
+    {tipo==="clt" && !inicial && <p className="text-xs text-slate-500 mt-3 flex items-center gap-1"><Icon d={I.calendar} className="w-3.5 h-3.5"/> Ao cadastrar, o CLT entra automaticamente na escala fixa ({f.escala}) da sua casa.</p>}
+    <div className="flex gap-2 mt-6">
+      <Btn variant="ghost" className="flex-1" onClick={onClose}>Cancelar</Btn>
+      <Btn className="flex-1" disabled={!valido} icon={I.check} variant={tipo==="clt"?"primary":"free"} onClick={()=>onSalvar(f)}>{inicial?"Salvar alterações":"Cadastrar"}</Btn>
+    </div>
+    {!valido && <p className="text-xs text-rose-500 mt-2 text-center">{tipo==="free"?"Preencha os campos obrigatórios (*).":"Informe nome e sobrenome."}</p>}
+  </div>;
+}
+
+/* ============================ COLABORADORES CLT ============================ */
+function ColaboradoresCLT() {
+  const { clts, salvarClt, excluirColab, unidades } = useStore();
+  const toast=useContext(ToastCtx);
+  const [q,setQ]=useState("");
+  const [form,setForm]=useState(null); // {inicial?} aberto p/ cadastro/edição
+  const [pasta,setPasta]=useState(null); // colaborador aberto
+  const [tab,setTab]=useState("dados");
+  const [confirmar,setConfirmar]=useState(null);
+  const list=clts.filter(c=>c.nome.toLowerCase().includes(q.toLowerCase()));
+
+  return <div className="fade-in">
+    <PageHeader title="Colaboradores CLT" sub="Escala fixa automática · pasta individual · cadastro, edição e exclusão">
+      <Btn icon={I.plus} onClick={()=>setForm({})}>Contratar CLT</Btn>
+    </PageHeader>
+    <Card className="p-2 mb-4"><div className="flex items-center gap-2 px-3 py-2">
+      <Icon d={I.search} className="w-4 h-4 text-slate-400"/>
+      <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Buscar colaborador…" className="flex-1 outline-none text-sm bg-transparent"/>
+    </div></Card>
+    <Card className="overflow-hidden">
+      <div className="overflow-x-auto"><table className="w-full text-sm min-w-[760px]">
+        <thead><tr className="text-left text-slate-400 border-b border-slate-100">
+          {["Colaborador","Cargo","Escala","Unidade","Banco","Docs",""].map(h=><th key={h} className="px-4 py-3 font-semibold">{h}</th>)}
+        </tr></thead>
+        <tbody className="divide-y divide-slate-50">
+          {list.map(c=>{ const docsOk=Object.values(c.docs).filter(Boolean).length; const docsTot=Object.keys(c.docs).length;
+            return <tr key={c.id} className="hover:bg-slate-50/70">
+              <td className="px-4 py-3"><button onClick={()=>{setPasta(c);setTab("dados");}} className="flex items-center gap-3 text-left"><Avatar name={c.nome} src={c.foto} tone="brand"/><span className="font-semibold text-slate-800">{c.nome}</span></button></td>
+              <td className="px-4 py-3 text-slate-600">{c.cargo}</td>
+              <td className="px-4 py-3"><Badge tone="brand">{c.escala}</Badge></td>
+              <td className="px-4 py-3 text-slate-600">{unidadeNome(c.unidade,unidades)}</td>
+              <td className="px-4 py-3"><span className={cx("font-semibold", c.banco.startsWith("-")?"text-rose-600":"text-emerald-600")}>{c.banco}</span></td>
+              <td className="px-4 py-3"><Badge tone={docsOk===docsTot?"green":"amber"}>{docsOk}/{docsTot}</Badge></td>
+              <td className="px-4 py-3"><div className="flex gap-1 justify-end">
+                <button onClick={()=>setForm({inicial:c})} className="w-8 h-8 rounded-lg hover:bg-slate-100 grid place-items-center text-slate-500"><Icon d={I.edit} className="w-4 h-4"/></button>
+                <button onClick={()=>setConfirmar(c)} className="w-8 h-8 rounded-lg hover:bg-rose-50 grid place-items-center text-slate-400 hover:text-rose-500"><Icon d={I.trash} className="w-4 h-4"/></button>
+              </div></td>
+            </tr>;})}
+          {list.length===0 && <tr><td colSpan="7" className="px-4 py-8 text-center text-slate-400">Nenhum colaborador. Clique em “Contratar CLT”.</td></tr>}
+        </tbody>
+      </table></div>
+    </Card>
+
+    <Modal open={!!form} onClose={()=>setForm(null)} wide>
+      {form && <ColabForm tipo="clt" inicial={form.inicial} onClose={()=>setForm(null)}
+        onSalvar={(dados)=>{ salvarClt(form.inicial?{...form.inicial,...dados}:dados); setForm(null); toast(form.inicial?"Colaborador atualizado":"CLT contratado e escalado"); }}/>}
+    </Modal>
+
+    <Modal open={!!confirmar} onClose={()=>setConfirmar(null)}>
+      {confirmar && <div className="p-6 text-center">
+        <div className="w-14 h-14 mx-auto rounded-full bg-rose-50 text-rose-500 grid place-items-center mb-3"><Icon d={I.trash} className="w-7 h-7"/></div>
+        <h3 className="text-lg font-bold text-slate-900">Excluir {confirmar.nome}?</h3>
+        <p className="text-slate-500 text-sm mt-1">O colaborador e suas alocações na escala serão removidos.</p>
+        <div className="flex gap-2 mt-5"><Btn variant="ghost" className="flex-1" onClick={()=>setConfirmar(null)}>Cancelar</Btn>
+          <Btn variant="danger" className="flex-1" icon={I.trash} onClick={()=>{excluirColab(confirmar.id,"clt");setConfirmar(null);toast("Colaborador excluído");}}>Excluir</Btn></div>
+      </div>}
+    </Modal>
+
+    <Modal open={!!pasta} onClose={()=>setPasta(null)} wide>
+      {pasta && <div>
+        <div className="grad-brand grad-hero p-6 text-white rounded-t-3xl relative">
+          <button onClick={()=>setPasta(null)} className="absolute top-4 right-4 text-white/80 hover:text-white"><Icon d={I.x}/></button>
+          <div className="flex items-center gap-4">
+            <Avatar name={pasta.nome} tone="free" size="w-16 h-16"/>
+            <div><h3 className="text-2xl font-extrabold">{pasta.nome}</h3>
+              <p className="text-white/80">{pasta.cargo} · {unidadeNome(pasta.unidade,unidades)}</p>
+              <div className="flex gap-2 mt-2"><Badge tone="slate">{ESCALAS[pasta.escala]}</Badge></div></div>
+          </div>
+        </div>
+        <div className="px-6 pt-4 flex gap-1 border-b border-slate-100">
+          {[["dados","Dados"],["docs","Documentos"],["escala","Banco de horas"]].map(([k,l])=>
+            <button key={k} onClick={()=>setTab(k)} className={cx("px-4 py-2.5 text-sm font-semibold border-b-2 -mb-px", tab===k?"border-brand-500 text-brand-700":"border-transparent text-slate-400 hover:text-slate-600")}>{l}</button>)}
+        </div>
+        <div className="p-6">
+          {tab==="dados" && <div className="grid sm:grid-cols-2 gap-4">
+            {[["Cargo",pasta.cargo],["Escala",ESCALAS[pasta.escala]],["Unidade",unidadeNome(pasta.unidade,unidades)],["Admissão",pasta.admissao?new Date(pasta.admissao).toLocaleDateString("pt-BR"):"—"],["CPF",pasta.cpf||"—"],["Telefone",pasta.tel||"—"],["Chave Pix",pasta.pix||"—"]].map(([l,v])=>
+              <div key={l} className="p-4 rounded-xl bg-slate-50"><div className="text-xs text-slate-400 font-semibold uppercase">{l}</div><div className="font-semibold text-slate-800 mt-1">{v}</div></div>)}
+            <div className="sm:col-span-2"><Btn variant="ghost" icon={I.edit} onClick={()=>{setForm({inicial:pasta});setPasta(null);}}>Editar dados</Btn></div>
+          </div>}
+          {tab==="docs" && <div className="space-y-3">
+            <p className="text-sm text-slate-500">Documentos criptografados (LGPD): contrato, exames, carteira de trabalho e identidade.</p>
+            {[["contrato","Contrato de trabalho"],["exames","Exames admissionais (ASO)"],["ctps","Carteira de Trabalho"],["rg","RG / CPF"]].map(([k,l])=>
+              <div key={k} className="flex items-center gap-3 p-3 rounded-xl border border-slate-200">
+                <div className={cx("w-9 h-9 rounded-lg grid place-items-center", pasta.docs[k]?"bg-emerald-50 text-emerald-600":"bg-slate-100 text-slate-400")}><Icon d={I.doc} className="w-4 h-4"/></div>
+                <div className="flex-1"><div className="font-semibold text-slate-800 text-sm">{l}</div><div className="text-xs text-slate-400">{pasta.docs[k]?"Enviado":"Pendente"}</div></div>
+                {pasta.docs[k]?<Badge tone="green">OK</Badge>:<Btn size="sm" variant="soft" icon={I.upload} onClick={()=>toast("Upload simulado (S3/Firebase)")}>Enviar</Btn>}
+              </div>)}
+          </div>}
+          {tab==="escala" && <div className="grid sm:grid-cols-2 gap-4">
+            <Card className="p-4"><div className="text-sm text-slate-500">Banco de horas</div>
+              <div className={cx("text-3xl font-extrabold mt-1", pasta.banco.startsWith("-")?"text-rose-600":"text-emerald-600")}>{pasta.banco}</div></Card>
+            <Card className="p-4"><div className="space-y-2 text-sm mt-1">
+              <div className="flex justify-between"><span className="text-slate-500">Horas extras</span><b>{pasta.extras}</b></div>
+              <div className="flex justify-between"><span className="text-slate-500">Atrasos</span><b className="text-rose-600">{pasta.atrasos}</b></div>
+              <div className="flex justify-between"><span className="text-slate-500">Adicional noturno</span><b>2h10</b></div></div></Card>
+          </div>}
+        </div>
+      </div>}
+    </Modal>
+  </div>;
+}
+
+/* ============================ FREELANCERS ============================ */
+function Freelancers() {
+  const { freelas, salvarFreela, excluirColab, unidades, escala, cargosFreela, salvarCargoFreela, excluirCargoFreela } = useStore();
+  const toast=useContext(ToastCtx);
+  const [form,setForm]=useState(null);
+  const [confirmar,setConfirmar]=useState(null);
+  const [cargosOpen,setCargosOpen]=useState(false);
+  const [nc,setNc]=useState({nome:"",valor:120});
+  const escaladoHoje=(pid)=> Object.values(escala).some(dias=>(dias[HOJE_IDX]||[]).some(a=>a.pid===pid&&a.tipo==="free"&&a.turno!=="folga"));
+
+  return <div className="fade-in">
+    <PageHeader title="Freelancers" sub="Cadastro simplificado · cargos com valor por jornada · link de check-in separado">
+      <Btn variant="ghost" icon={I.wallet} onClick={()=>setCargosOpen(true)}>Cargos & valores</Btn>
+      <Btn variant="free" icon={I.plus} onClick={()=>setForm({})}>Novo freelancer</Btn>
+    </PageHeader>
+    <Card className="overflow-hidden">
+      <div className="overflow-x-auto"><table className="w-full text-sm min-w-[820px]">
+        <thead><tr className="text-left text-slate-400 border-b border-slate-100">
+          {["Freelancer","Função","Unidade","Valor/jornada","Escala hoje","Contato",""].map(h=><th key={h} className="px-4 py-3 font-semibold">{h}</th>)}
+        </tr></thead>
+        <tbody className="divide-y divide-slate-50">
+          {freelas.map(f=>
+            <tr key={f.id} className="hover:bg-slate-50/70">
+              <td className="px-4 py-3"><div className="flex items-center gap-3"><Avatar name={f.nome} src={f.foto} tone="free"/><span className="font-semibold text-slate-800">{f.nome}</span></div></td>
+              <td className="px-4 py-3 text-slate-600">{f.cargo}</td>
+              <td className="px-4 py-3 text-slate-600">{unidadeNome(f.unidade,unidades)}</td>
+              <td className="px-4 py-3 font-semibold">R$ {Number(f.valor).toLocaleString("pt-BR")}</td>
+              <td className="px-4 py-3">{escaladoHoje(f.id)?<Badge tone="green"><Icon d={I.check} className="w-3 h-3"/>Escalado</Badge>:<Badge tone="slate">Não escalado</Badge>}</td>
+              <td className="px-4 py-3 text-slate-500">{f.tel}</td>
+              <td className="px-4 py-3"><div className="flex gap-1 justify-end">
+                <button onClick={()=>setForm({inicial:f})} className="w-8 h-8 rounded-lg hover:bg-slate-100 grid place-items-center text-slate-500"><Icon d={I.edit} className="w-4 h-4"/></button>
+                <button onClick={()=>setConfirmar(f)} className="w-8 h-8 rounded-lg hover:bg-rose-50 grid place-items-center text-slate-400 hover:text-rose-500"><Icon d={I.trash} className="w-4 h-4"/></button>
+              </div></td>
+            </tr>)}
+          {freelas.length===0 && <tr><td colSpan="7" className="px-4 py-8 text-center text-slate-400">Nenhum freelancer. Clique em “Novo freelancer”.</td></tr>}
+        </tbody>
+      </table></div>
+    </Card>
+
+    <Modal open={!!form} onClose={()=>setForm(null)} wide>
+      {form && <ColabForm tipo="free" inicial={form.inicial} onClose={()=>setForm(null)}
+        onSalvar={(dados)=>{ salvarFreela(form.inicial?{...form.inicial,...dados}:dados); setForm(null); toast(form.inicial?"Freelancer atualizado":"Freelancer cadastrado"); }}/>}
+    </Modal>
+    <Modal open={!!confirmar} onClose={()=>setConfirmar(null)}>
+      {confirmar && <div className="p-6 text-center">
+        <div className="w-14 h-14 mx-auto rounded-full bg-rose-50 text-rose-500 grid place-items-center mb-3"><Icon d={I.trash} className="w-7 h-7"/></div>
+        <h3 className="text-lg font-bold text-slate-900">Excluir {confirmar.nome}?</h3>
+        <div className="flex gap-2 mt-5"><Btn variant="ghost" className="flex-1" onClick={()=>setConfirmar(null)}>Cancelar</Btn>
+          <Btn variant="danger" className="flex-1" icon={I.trash} onClick={()=>{excluirColab(confirmar.id,"free");setConfirmar(null);toast("Freelancer excluído");}}>Excluir</Btn></div>
+      </div>}
+    </Modal>
+
+    <Modal open={cargosOpen} onClose={()=>setCargosOpen(false)}>
+      <div className="p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-bold text-slate-900">Cargos de freelancer & valor por jornada</h3>
+          <button onClick={()=>setCargosOpen(false)} className="text-slate-400 hover:text-slate-600"><Icon d={I.x}/></button>
+        </div>
+        <div className="flex gap-2 mb-4">
+          <Input value={nc.nome} onChange={e=>setNc({...nc,nome:e.target.value})} placeholder="Novo cargo (ex.: Segurança)" className="flex-1"/>
+          <Input type="number" value={nc.valor} onChange={e=>setNc({...nc,valor:Number(e.target.value)})} placeholder="R$" className="w-28"/>
+          <Btn variant="free" icon={I.plus} onClick={()=>{ if(nc.nome.trim()){ salvarCargoFreela({nome:nc.nome.trim(),valor:nc.valor}); setNc({nome:"",valor:120}); toast("Cargo cadastrado"); } }}>Add</Btn>
+        </div>
+        <div className="space-y-2">
+          {cargosFreela.map(c=>
+            <div key={c.id} className="flex items-center gap-3 p-3 rounded-xl border border-slate-200">
+              <div className="w-9 h-9 rounded-lg bg-free-100 text-free-600 grid place-items-center"><Icon d={I.coffee} className="w-4 h-4"/></div>
+              <div className="flex-1 font-semibold text-slate-800">{c.nome}</div>
+              <div className="flex items-center gap-1 text-sm"><span className="text-slate-400">R$</span>
+                <input type="number" value={c.valor} onChange={e=>salvarCargoFreela({...c,valor:Number(e.target.value)})} className="w-20 px-2 py-1 rounded-lg border border-slate-200 text-right font-semibold outline-none focus:ring-2 focus:ring-free-400"/>
+                <span className="text-slate-400 text-xs">/jornada</span></div>
+              <button onClick={()=>excluirCargoFreela(c.id)} className="w-8 h-8 rounded-lg hover:bg-rose-50 grid place-items-center text-slate-400 hover:text-rose-500"><Icon d={I.trash} className="w-4 h-4"/></button>
+            </div>)}
+        </div>
+      </div>
+    </Modal>
+  </div>;
+}
+
+/* ============================ RELATÓRIOS ============================ */
+function Relatorios() {
+  const { clts, freelas } = useStore();
+  const toast=useContext(ToastCtx);
+  const [f,setF]=useState("extras");
+  const filtros=[["extras","Horas extras"],["atrasos","Atrasos & faltas"],["banco","Banco de horas"],["noturno","Adicional noturno"]];
+  const linhas = clts.map(c=>({nome:c.nome,vinc:"CLT",extras:c.extras,atrasos:c.atrasos,banco:c.banco,escala:c.escala}));
+  const cols={extras:["Colaborador","Horas extras","Escala"],atrasos:["Colaborador","Atrasos","Escala"],banco:["Colaborador","Saldo","Escala"],noturno:["Colaborador","Horas noturnas","Escala"]};
+  const val=(l)=>f==="extras"?l.extras:f==="atrasos"?l.atrasos:f==="banco"?l.banco:"2h10";
+  return <div className="fade-in">
+    <PageHeader title="Relatórios" sub="Cálculo conforme CLT e Portaria 671/2021 · consolidado para folha">
+      <Btn variant="ghost" icon={I.download} onClick={()=>toast("Relatório (AFD/AEJ) exportado")}>Exportar</Btn>
+    </PageHeader>
+    <div className="flex flex-wrap gap-2 mb-4">
+      {filtros.map(([k,l])=><button key={k} onClick={()=>setF(k)} className={cx("px-4 py-2 rounded-xl text-sm font-semibold border transition", f===k?"grad-brand text-white border-transparent shadow-glow":"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>{l}</button>)}
+    </div>
+    <Card className="overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm min-w-[520px]">
+      <thead><tr className="text-left text-slate-400 border-b border-slate-100">{cols[f].map(h=><th key={h} className="px-4 py-3 font-semibold">{h}</th>)}</tr></thead>
+      <tbody className="divide-y divide-slate-50">
+        {linhas.map((l,i)=><tr key={i} className="hover:bg-slate-50/70">
+          <td className="px-4 py-3"><div className="flex items-center gap-2"><Avatar name={l.nome} tone="brand" size="w-7 h-7"/><span className="font-semibold text-slate-800">{l.nome}</span></div></td>
+          <td className={cx("px-4 py-3 font-semibold", String(val(l)).startsWith("-")?"text-rose-600":"text-slate-700")}>{val(l)}</td>
+          <td className="px-4 py-3"><Badge tone="brand">{l.escala}</Badge></td>
+        </tr>)}
+      </tbody></table></div></Card>
+  </div>;
+}
+
+/* ============================ PAGAMENTOS (FREELANCERS) ============================ */
+function Pagamentos() {
+  const { freelas, unidades } = useStore();
+  const toast=useContext(ToastCtx);
+  const [ini,setIni]=useState("2026-07-01");
+  const [fim,setFim]=useState("2026-07-31");
+  const [uni,setUni]=useState("todas");
+
+  const dentro=(j)=> (!ini||j.data>=ini) && (!fim||j.data<=fim) && (uni==="todas"||j.unidade===Number(uni));
+  const linhas = freelas.map(fr=>{
+    const js=(fr.jornadasHist||[]).filter(dentro);
+    return { id:fr.id, nome:fr.nome, cargo:fr.cargo, pix:fr.pix, jornadas:js.length,
+      horas:js.reduce((s,j)=>s+j.horas,0), total:js.reduce((s,j)=>s+j.valor,0), casas:[...new Set(js.map(j=>j.unidade))] };
+  }).filter(l=>l.jornadas>0);
+  const totalGeral=linhas.reduce((s,l)=>s+l.total,0);
+  const horasGeral=linhas.reduce((s,l)=>s+l.horas,0);
+
+  const exportar=()=>{
+    const cab="Freelancer;Funcao;Jornadas;Horas;Valor_total_R$;Chave_Pix";
+    const corpo=linhas.map(l=>`${l.nome};${l.cargo};${l.jornadas};${l.horas};${l.total.toFixed(2)};${l.pix}`).join("\n");
+    const blob=new Blob([cab+"\n"+corpo],{type:"text/csv"}); const url=URL.createObjectURL(blob);
+    const a=document.createElement("a"); a.href=url; a.download=`pagamentos-freelancers_${ini}_a_${fim}.csv`; a.click(); URL.revokeObjectURL(url);
+    toast("CSV consolidado exportado para o financeiro");
+  };
+
+  return <div className="fade-in">
+    <PageHeader title="Pagamentos de freelancers" sub="Valores acumulados por freelancer · filtro por período e por casa · exportação simplificada para o financeiro">
+      <Btn icon={I.download} onClick={exportar}>Exportar consolidado</Btn>
+    </PageHeader>
+
+    <Card className="p-4 mb-4">
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="flex items-center gap-2 text-slate-400"><Icon d={I.filter} className="w-4 h-4"/><span className="text-xs font-bold uppercase">Filtros</span></div>
+        <Field label="De"><Input type="date" value={ini} onChange={e=>setIni(e.target.value)}/></Field>
+        <Field label="Até"><Input type="date" value={fim} onChange={e=>setFim(e.target.value)}/></Field>
+        <Field label="Casa (unidade)"><Select value={uni} onChange={e=>setUni(e.target.value)}>
+          <option value="todas">Todas as casas</option>{unidades.map(u=><option key={u.id} value={u.id}>{u.nome}</option>)}
+        </Select></Field>
+      </div>
+    </Card>
+
+    <div className="grid sm:grid-cols-3 gap-3 mb-4">
+      <StatCard icon={I.wallet} label="Total consolidado" value={"R$ "+totalGeral.toLocaleString("pt-BR")} tone="free"/>
+      <StatCard icon={I.clock} label="Horas no período" value={horasGeral+"h"} tone="brand"/>
+      <StatCard icon={I.coffee} label="Freelancers pagos" value={linhas.length} tone="green"/>
+    </div>
+
+    <Card className="overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm min-w-[760px]">
+      <thead><tr className="text-left text-slate-400 border-b border-slate-100">{["Freelancer","Função","Jornadas","Horas","Casas","Valor acumulado","Chave Pix"].map(h=><th key={h} className="px-4 py-3 font-semibold">{h}</th>)}</tr></thead>
+      <tbody className="divide-y divide-slate-50">
+        {linhas.map(l=><tr key={l.id} className="hover:bg-slate-50/70">
+          <td className="px-4 py-3"><div className="flex items-center gap-2"><Avatar name={l.nome} tone="free" size="w-7 h-7"/><span className="font-semibold text-slate-800">{l.nome}</span></div></td>
+          <td className="px-4 py-3 text-slate-600">{l.cargo}</td>
+          <td className="px-4 py-3">{l.jornadas}</td>
+          <td className="px-4 py-3 font-semibold">{l.horas}h</td>
+          <td className="px-4 py-3"><div className="flex gap-1 flex-wrap">{l.casas.map(cid=><Badge key={cid} tone="slate">{unidadeNome(cid,unidades).split(" ").slice(0,2).join(" ")}</Badge>)}</div></td>
+          <td className="px-4 py-3 font-bold text-slate-900">R$ {l.total.toLocaleString("pt-BR")}</td>
+          <td className="px-4 py-3 font-mono text-xs text-slate-500">{l.pix}</td>
+        </tr>)}
+        {linhas.length===0 && <tr><td colSpan="7" className="px-4 py-8 text-center text-slate-400">Nenhuma jornada no período/casa selecionados.</td></tr>}
+      </tbody>
+      {linhas.length>0 && <tfoot><tr className="border-t-2 border-slate-100 bg-slate-50/60">
+        <td className="px-4 py-3 font-bold" colSpan="5">Total consolidado</td>
+        <td className="px-4 py-3 font-extrabold text-free-700">R$ {totalGeral.toLocaleString("pt-BR")}</td><td/></tr></tfoot>}
+    </table></div></Card>
+    <p className="text-xs text-slate-400 mt-3">Exportação simplificada: apenas valores consolidados por freelancer (sem status de “pago”), pronta para repasse do financeiro via Pix.</p>
+  </div>;
+}
+
+/* ============================ UNIDADES (CRUD) ============================ */
+function UnidadeForm({ inicial, onSalvar, onClose }) {
+  const [u,setU]=useState(inicial || { nome:"", end:"", lat:-23.55, lng:-46.63, raio:100, cor:"#6366f1" });
+  const set=(k,v)=>setU(p=>({...p,[k]:v}));
+  const cores=["#6366f1","#f97316","#10b981","#0ea5e9","#e11d48","#8b5cf6"];
+  return <div className="p-6">
+    <div className="flex items-center justify-between mb-5">
+      <h3 className="text-lg font-bold text-slate-900">{inicial?"Editar unidade":"Nova unidade (casa)"}</h3>
+      <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><Icon d={I.x}/></button>
+    </div>
+    <div className="space-y-4">
+      <Field label="Nome da casa"><Input value={u.nome} onChange={e=>set("nome",e.target.value)} placeholder="Ex.: Caktus Osasco"/></Field>
+      <Field label="Endereço"><Input value={u.end} onChange={e=>set("end",e.target.value)} placeholder="Rua, número — Cidade/UF"/></Field>
+      <div className="grid grid-cols-3 gap-3">
+        <Field label="Latitude"><Input type="number" step="0.0001" value={u.lat} onChange={e=>set("lat",Number(e.target.value))}/></Field>
+        <Field label="Longitude"><Input type="number" step="0.0001" value={u.lng} onChange={e=>set("lng",Number(e.target.value))}/></Field>
+        <Field label="Cerca (m)"><Input type="number" value={u.raio} onChange={e=>set("raio",Number(e.target.value))}/></Field>
+      </div>
+      <Field label="Cor"><div className="flex gap-2">{cores.map(c=><button key={c} onClick={()=>set("cor",c)} className={cx("w-8 h-8 rounded-lg shadow", u.cor===c&&"ring-2 ring-offset-2 ring-slate-400")} style={{background:c}}/>)}</div></Field>
+    </div>
+    <div className="flex gap-2 mt-6"><Btn variant="ghost" className="flex-1" onClick={onClose}>Cancelar</Btn>
+      <Btn className="flex-1" icon={I.check} disabled={!u.nome.trim()} onClick={()=>onSalvar(u)}>{inicial?"Salvar":"Criar unidade"}</Btn></div>
+  </div>;
+}
+function Unidades() {
+  const { unidades, salvarUnidade, excluirUnidade, clts, freelas } = useStore();
+  const toast=useContext(ToastCtx);
+  const [form,setForm]=useState(null);
+  const [confirmar,setConfirmar]=useState(null);
+  const equipe=(id)=>clts.filter(c=>c.unidade===id).length+freelas.filter(f=>f.unidade===id).length;
+  return <div className="fade-in">
+    <PageHeader title="Unidades (casas)" sub="Locais de trabalho e cerca virtual · criar, editar e excluir dinamicamente">
+      <Btn icon={I.plus} onClick={()=>setForm({})}>Nova unidade</Btn>
+    </PageHeader>
+    <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+      {unidades.map(u=>
+        <Card key={u.id} className="overflow-hidden">
+          <div className="h-32 relative grid place-items-center" style={{backgroundColor:"#f1f5f9"}}>
+            <div className="absolute inset-0 opacity-40" style={{backgroundImage:"linear-gradient(#e2e8f0 1px,transparent 1px),linear-gradient(90deg,#e2e8f0 1px,transparent 1px)",backgroundSize:"22px 22px"}}/>
+            <div className="relative grid place-items-center">
+              <div className="rounded-full border-2" style={{width:88,height:88,borderColor:u.cor,background:u.cor+"1e"}}/>
+              <div className="absolute w-8 h-8 rounded-full grid place-items-center text-white shadow" style={{background:u.cor}}><Icon d={I.pin} className="w-4 h-4"/></div>
+            </div>
+          </div>
+          <div className="p-4">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="font-bold text-slate-900">{u.nome}</h3>
+              <Badge tone="brand">{equipe(u.id)} pessoas</Badge>
+            </div>
+            <p className="text-sm text-slate-500 mt-1 min-h-[2.5rem]">{u.end}</p>
+            <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+              <div className="p-2 rounded-lg bg-slate-50"><div className="text-slate-400">Cerca</div><div className="font-semibold text-slate-800">{u.raio} m</div></div>
+              <div className="p-2 rounded-lg bg-slate-50"><div className="text-slate-400">Coordenadas</div><div className="font-semibold text-slate-800 tabular-nums">{u.lat.toFixed(3)}, {u.lng.toFixed(3)}</div></div>
+            </div>
+            <div className="mt-3 flex gap-2">
+              <Btn size="sm" variant="ghost" icon={I.edit} className="flex-1" onClick={()=>setForm({inicial:u})}>Editar</Btn>
+              <Btn size="sm" variant="ghost" icon={I.trash} className="text-rose-500" onClick={()=>setConfirmar(u)}>Excluir</Btn>
+            </div>
+          </div>
+        </Card>)}
+    </div>
+    <Modal open={!!form} onClose={()=>setForm(null)}>
+      {form && <UnidadeForm inicial={form.inicial} onClose={()=>setForm(null)}
+        onSalvar={(dados)=>{ salvarUnidade(form.inicial?{...form.inicial,...dados}:dados); setForm(null); toast(form.inicial?"Unidade atualizada":"Unidade criada"); }}/>}
+    </Modal>
+    <Modal open={!!confirmar} onClose={()=>setConfirmar(null)}>
+      {confirmar && <div className="p-6 text-center">
+        <div className="w-14 h-14 mx-auto rounded-full bg-rose-50 text-rose-500 grid place-items-center mb-3"><Icon d={I.trash} className="w-7 h-7"/></div>
+        <h3 className="text-lg font-bold text-slate-900">Excluir {confirmar.nome}?</h3>
+        <div className="flex gap-2 mt-5"><Btn variant="ghost" className="flex-1" onClick={()=>setConfirmar(null)}>Cancelar</Btn>
+          <Btn variant="danger" className="flex-1" icon={I.trash} onClick={()=>{excluirUnidade(confirmar.id);setConfirmar(null);toast("Unidade excluída");}}>Excluir</Btn></div>
+      </div>}
+    </Modal>
+  </div>;
+}
+
+/* ============================ LINKS & QR (SEPARADOS) ============================ */
+function LinksQR() {
+  const { unidades } = useStore();
+  const [uni,setUni]=useState(unidades[0]?.id);
+  const cltRef=useRef(null), freeRef=useRef(null);
+  const toast=useContext(ToastCtx);
+  // Link REAL para o próprio app (roteamento por hash): abre o quiosque de fato.
+  const base = (typeof window!=="undefined" ? window.location.href.split("#")[0] : "");
+  const cltUrl=`${base}#ponto-clt`;
+  const freeUrl=`${base}#ponto-free`;
+  useEffect(()=>{
+    const mk=(el,url,color)=>{ if(el){ el.innerHTML=""; try{ new QRCode(el,{text:url,width:150,height:150,colorDark:color,colorLight:"#ffffff",correctLevel:QRCode.CorrectLevel.M}); }catch(e){} } };
+    mk(cltRef.current,cltUrl,"#4f46e5"); mk(freeRef.current,freeUrl,"#ea580c");
+  },[uni]);
+  const copiar=(t)=>{ copyText(t); toast("Link copiado"); };
+  const abrir=(m)=>{ window.location.hash = m; }; // dispara o roteamento por hash
+  const cards=[
+    {ref:cltRef,url:cltUrl,mode:"ponto-clt",titulo:"Registro de Jornada — CLT",desc:"Abre o formulário CLT e permite registrar a jornada (selfie + cerca).",tone:"brand",icon:I.user},
+    {ref:freeRef,url:freeUrl,mode:"ponto-free",titulo:"Check-in / Checkout — Freelancer",desc:"Abre o formulário Freelancer e permite check-in/checkout (exige escala + cerca).",tone:"free",icon:I.coffee},
+  ];
+  return <div className="fade-in">
+    <PageHeader title="Links & QR Code" sub="Links SEPARADOS por vínculo · abrem o cadastro e o registro de fato (teste no botão Abrir)">
+      <Select value={uni} onChange={e=>setUni(Number(e.target.value))}>{unidades.map(u=><option key={u.id} value={u.id}>{u.nome}</option>)}</Select>
+    </PageHeader>
+    <div className="grid md:grid-cols-2 gap-4">
+      {cards.map((c,i)=>
+        <Card key={i} className="p-6">
+          <div className="flex items-center gap-3 mb-4">
+            <div className={cx("w-11 h-11 rounded-xl grid place-items-center text-white", c.tone==="brand"?"grad-brand":"bg-free-500")}><Icon d={c.icon}/></div>
+            <div><h3 className="font-bold text-slate-900">{c.titulo}</h3><p className="text-sm text-slate-500">{c.desc}</p></div>
+          </div>
+          <div className="flex items-center gap-4">
+            <div className="p-3 bg-white rounded-2xl border border-slate-100 shadow-soft" ref={c.ref}/>
+            <div className="flex-1">
+              <div className="p-3 rounded-xl bg-slate-50 text-xs font-mono text-slate-600 break-all">{c.url}</div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Btn size="sm" variant={c.tone==="brand"?"primary":"free"} icon={I.arrow} onClick={()=>abrir(c.mode)}>Abrir</Btn>
+                <Btn size="sm" variant="ghost" icon={I.copy} onClick={()=>copiar(c.url)}>Copiar</Btn>
+              </div>
+            </div>
+          </div>
+        </Card>)}
+    </div>
+    <Card className="p-4 mt-4 flex items-start gap-3 bg-brand-50/50">
+      <div className="w-9 h-9 rounded-xl grad-brand text-white grid place-items-center shrink-0"><Icon d={I.link} className="w-4 h-4"/></div>
+      <p className="text-sm text-slate-600">Cada vínculo tem seu link exclusivo que abre direto o quiosque: o colaborador faz o <b>cadastro (1º acesso)</b> e depois o <b>registro de ponto/check-in</b> com selfie e cerca — sem precisar entrar no painel.</p>
+    </Card>
+  </div>;
+}
+
+/* ============================ RELATÓRIOS FINANCEIROS ============================ */
+function Financeiro() {
+  const { freelas, unidades } = useStore();
+  const toast=useContext(ToastCtx);
+  const [ini,setIni]=useState("2026-07-01");
+  const [fim,setFim]=useState("2026-07-31");
+  const [uni,setUni]=useState(unidades[0]?.id ?? "todas");
+
+  const dentro=(j)=> (!ini||j.data>=ini) && (!fim||j.data<=fim) && (uni==="todas"||j.unidade===Number(uni));
+  const fmtD=(ds)=>ds.map(d=>d.slice(8,10)+"/"+d.slice(5,7)).join(", ");
+  const linhas = freelas.map(fr=>{ const js=(fr.jornadasHist||[]).filter(dentro);
+    return { id:fr.id, nome:fr.nome, pix:fr.pix, dias:js.length, total:js.reduce((s,j)=>s+j.valor,0), datas:js.map(j=>j.data).sort() };
+  }).filter(l=>l.dias>0);
+  const somaTotal=linhas.reduce((s,l)=>s+l.total,0);
+  const somaDias=linhas.reduce((s,l)=>s+l.dias,0);
+  const uNome = uni==="todas"?"Todas as casas":unidadeNome(Number(uni),unidades);
+
+  const textoWhats=(l)=>`*${l.nome}*\nValor acumulado: R$ ${l.total.toLocaleString("pt-BR")}\nDias trabalhados: ${l.dias}\nDatas: ${fmtD(l.datas)}\nPix: ${l.pix}`;
+  const copiarUm=(l)=>{ copyText(textoWhats(l)); toast("Copiado para enviar no WhatsApp"); };
+  const copiarTodos=()=>{ const txt=`💰 *Fechamento — ${uNome}*\n_${ini} a ${fim}_\n\n`+linhas.map(textoWhats).join("\n\n")+`\n\n*Total: R$ ${somaTotal.toLocaleString("pt-BR")}* (${somaDias} dias)`;
+    copyText(txt); toast(`${linhas.length} colaboradores copiados p/ WhatsApp`); };
+
+  // Gera um PNG de gráfico de barras para embutir no Excel
+  const chartPNG=()=>{
+    const W=460,H=260,pad=40, c=document.createElement("canvas"); c.width=W;c.height=H;
+    const g=c.getContext("2d"); g.fillStyle="#ffffff"; g.fillRect(0,0,W,H);
+    g.fillStyle="#0f172a"; g.font="bold 14px Arial"; g.fillText("Valor acumulado por freelancer",pad,24);
+    const max=Math.max(...linhas.map(l=>l.total),1); const bw=(W-pad*2)/Math.max(linhas.length,1);
+    linhas.forEach((l,i)=>{ const h=(l.total/max)*(H-pad-50); const x=pad+i*bw+bw*0.15, y=H-30-h;
+      g.fillStyle="#6366f1"; g.fillRect(x,y,bw*0.7,h);
+      g.fillStyle="#475569"; g.font="9px Arial"; g.save(); g.translate(x+bw*0.35,H-26); g.rotate(-0.5); g.fillText(l.nome.split(" ")[0],0,0); g.restore();
+      g.fillStyle="#0f172a"; g.font="bold 9px Arial"; g.fillText("R$"+l.total,x,y-3); });
+    return c.toDataURL("image/png");
+  };
+
+  const exportarExcel=async()=>{
+    if(!window.ExcelJS){ toast("Biblioteca Excel não carregada — verifique a conexão"); return; }
+    const wb=new ExcelJS.Workbook(); const ws=wb.addWorksheet("Financeiro");
+    ws.columns=[{width:32},{width:14},{width:20},{width:26},{width:36}];
+    ws.mergeCells("A1:E1"); const t=ws.getCell("A1"); t.value=`Relatório Financeiro — ${uNome}`; t.font={bold:true,size:16,color:{argb:"FF1E1B4B"}};
+    ws.mergeCells("A2:E2"); ws.getCell("A2").value=`Período: ${ini} a ${fim}`; ws.getCell("A2").font={italic:true,color:{argb:"FF64748B"}};
+    const head=ws.addRow(["Colaborador","Dias trabalhados","Valor acumulado (R$)","Pix","Datas trabalhadas"]);
+    head.eachCell(cell=>{ cell.font={bold:true,color:{argb:"FFFFFFFF"}}; cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FF6366F1"}}; cell.alignment={horizontal:"center"}; });
+    linhas.forEach(l=>{ const r=ws.addRow([l.nome,l.dias,l.total,l.pix,fmtD(l.datas)]); r.getCell(3).numFmt='"R$" #,##0.00'; r.getCell(3).font={bold:true}; });
+    const tot=ws.addRow(["TOTAL",somaDias,somaTotal,"",""]); tot.eachCell(cell=>{ cell.font={bold:true}; cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFEEF2FF"}}; }); tot.getCell(3).numFmt='"R$" #,##0.00';
+    try{ const imgId=wb.addImage({base64:chartPNG(),extension:"png"}); ws.addImage(imgId,{tl:{col:6,row:1},ext:{width:460,height:260}}); }catch(e){}
+    const buf=await wb.xlsx.writeBuffer(); const blob=new Blob([buf],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+    const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`financeiro_${uNome.replace(/\s+/g,"-")}_${ini}.xlsx`; a.click(); URL.revokeObjectURL(url);
+    toast("Excel gerado com tabela e gráfico");
+  };
+
+  return <div className="fade-in">
+    <PageHeader title="Relatórios financeiros" sub="Filtro obrigatório por período e casa · Excel com gráfico · copiar para WhatsApp">
+      <Btn variant="ghost" icon={I.copy} onClick={copiarTodos}>Copiar p/ WhatsApp</Btn>
+      <Btn icon={I.download} onClick={exportarExcel}>Exportar Excel</Btn>
+    </PageHeader>
+    <Card className="p-4 mb-4"><div className="flex flex-wrap items-end gap-3">
+      <div className="flex items-center gap-2 text-slate-400"><Icon d={I.filter} className="w-4 h-4"/><span className="text-xs font-bold uppercase">Filtros (obrigatórios)</span></div>
+      <Field label="De"><Input type="date" value={ini} onChange={e=>setIni(e.target.value)}/></Field>
+      <Field label="Até"><Input type="date" value={fim} onChange={e=>setFim(e.target.value)}/></Field>
+      <Field label="Casa (unidade)"><Select value={uni} onChange={e=>setUni(e.target.value)}>
+        <option value="todas">Todas as casas</option>{unidades.map(u=><option key={u.id} value={u.id}>{u.nome}</option>)}
+      </Select></Field>
+    </div></Card>
+    <div className="grid sm:grid-cols-3 gap-3 mb-4">
+      <StatCard icon={I.wallet} label="Valor acumulado" value={"R$ "+somaTotal.toLocaleString("pt-BR")} tone="free"/>
+      <StatCard icon={I.calendar} label="Dias trabalhados" value={somaDias} tone="brand"/>
+      <StatCard icon={I.coffee} label="Colaboradores" value={linhas.length} tone="green"/>
+    </div>
+    <Card className="overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm min-w-[640px]">
+      <thead><tr className="text-left text-slate-400 border-b border-slate-100">{["Colaborador","Dias trab.","Valor acumulado","Datas trabalhadas","Pix","WhatsApp"].map(h=><th key={h} className="px-4 py-3 font-semibold">{h}</th>)}</tr></thead>
+      <tbody className="divide-y divide-slate-50">
+        {linhas.map(l=><tr key={l.id} className="hover:bg-slate-50/70">
+          <td className="px-4 py-3"><div className="flex items-center gap-2"><Avatar name={l.nome} tone="free" size="w-7 h-7"/><span className="font-semibold text-slate-800">{l.nome}</span></div></td>
+          <td className="px-4 py-3">{l.dias}</td>
+          <td className="px-4 py-3 font-bold text-slate-900">R$ {l.total.toLocaleString("pt-BR")}</td>
+          <td className="px-4 py-3 text-xs text-slate-500 max-w-[220px]">{fmtD(l.datas)}</td>
+          <td className="px-4 py-3 font-mono text-xs text-slate-500">{l.pix}</td>
+          <td className="px-4 py-3"><Btn size="sm" variant="soft" icon={I.copy} onClick={()=>copiarUm(l)}>Copiar</Btn></td>
+        </tr>)}
+        {linhas.length===0 && <tr><td colSpan="6" className="px-4 py-8 text-center text-slate-400">Sem lançamentos no filtro selecionado.</td></tr>}
+      </tbody>
+      {linhas.length>0 && <tfoot><tr className="border-t-2 border-slate-100 bg-slate-50/60"><td className="px-4 py-3 font-bold">Total</td><td className="px-4 py-3 font-bold">{somaDias}</td><td className="px-4 py-3 font-extrabold text-free-700">R$ {somaTotal.toLocaleString("pt-BR")}</td><td colSpan="3"/></tr></tfoot>}
+    </table></div></Card>
+  </div>;
+}
+
+/* ============================ DOSSIÊ DO COLABORADOR ============================ */
+function Dossie() {
+  const { clts, freelas, unidades, dossie, getDossie, addFalta, addFeedback, addAnexo, anexarDoc, can } = useStore();
+  const toast=useContext(ToastCtx);
+  const [sel,setSel]=useState(null); // {tipo,pessoa}
+  const [tab,setTab]=useState("docs");
+  const [q,setQ]=useState("");
+  const editavel=can("documentos");
+  const todos=[...clts.map(c=>({tipo:"clt",p:c})),...freelas.map(f=>({tipo:"free",p:f}))].filter(x=>x.p.nome.toLowerCase().includes(q.toLowerCase()));
+  const key = sel && `${sel.tipo}-${sel.p.id}`;
+  const dos = sel ? getDossie(key) : {faltas:[],feedbacks:[],anexos:[]};
+  // colaborador ATUAL do store (para refletir uploads em tempo real)
+  const pAtual = sel ? ((sel.tipo==="clt"?clts:freelas).find(x=>x.id===sel.p.id) || sel.p) : null;
+  const docsAtual = pAtual?.docs || {};
+
+  const [nf,setNf]=useState({data:"2026-07-20",tipo:"falta",horas:8,descontar:true,obs:""});
+  const [nb,setNb]=useState({data:"2026-07-20",tipo:"elogio",autor:"Gestor",texto:""});
+  const salvarFalta=()=>{ addFalta(key,nf); setNf({...nf,obs:""}); toast("Falta/atestado registrado"); };
+  const salvarFeedback=()=>{ if(!nb.texto.trim())return; addFeedback(key,nb); setNb({...nb,texto:""}); toast("Feedback adicionado ao livro de recordações"); };
+  const upDocDossie=(k,file)=>{ if(!file) return; const rd=new FileReader();
+    rd.onload=()=>{ anexarDoc(sel.tipo,sel.p.id,k,{nome:file.name,dados:rd.result}); toast("Documento anexado à pasta"); };
+    rd.readAsDataURL(file); };
+  const upAnexo=(categoria,file)=>{ if(!file) return; const rd=new FileReader();
+    rd.onload=()=>{ addAnexo(key,{categoria,nome:file.name,data:"2026-07-20",arquivo:rd.result}); toast("Documento adicional anexado"); };
+    rd.readAsDataURL(file); };
+
+  const historico = sel ? [
+    ...dos.faltas.map(f=>({t:"Falta/Atestado",data:f.data,desc:`${f.tipo==="atestado"?"Atestado":"Falta"} · ${f.horas}h${f.descontar?" · desconto":""}${f.obs?` — ${f.obs}`:""}`,tone:"amber"})),
+    ...dos.feedbacks.map(f=>({t:"Feedback",data:f.data,desc:`${f.tipo} (${f.autor}): ${f.texto}`,tone:"brand"})),
+    ...(dos.anexos||[]).map(a=>({t:"Anexo",data:a.data,desc:`${a.categoria}: ${a.nome}`,tone:"brand"})),
+  ].sort((a,b)=>b.data.localeCompare(a.data)) : [];
+
+  const extrairPasta=async()=>{
+    if(!window.JSZip){ toast("Biblioteca de ZIP não carregada — verifique a conexão"); return; }
+    const zip=new JSZip();
+    const fAtest=zip.folder("Atestados");
+    const fFicha=zip.folder("Ficha de registro");
+    const fContrato=zip.folder("Contrato de trabalho");
+    const fImg=zip.folder("Imagens dos documentos");
+    const fAssin=zip.folder("Documentos assinados");
+    // Ficha de registro (dados cadastrais)
+    const ficha={ colaborador:pAtual.nome, vinculo:sel.tipo==="clt"?"CLT":"Freelancer", cargo:pAtual.cargo,
+      unidade:unidadeNome(pAtual.unidade,unidades), cpf:pAtual.cpf, tipoPix:pAtual.tipoPix, pix:pAtual.pix, banco:pAtual.banco,
+      faltas:dos.faltas, feedbacks:dos.feedbacks };
+    fFicha.file("ficha_registro.json", JSON.stringify(ficha,null,2));
+    // Foto do colaborador (referência facial capturada no cadastro)
+    if(pAtual.foto) fImg.file("foto_perfil.jpg", b64ToBytes(pAtual.foto), {binary:true});
+    // Imagens dos documentos — grava BYTES REAIS quando enviados; senão gera um PDF válido
+    DOC_TIPOS.filter(([k])=>docsAtual[k]).forEach(([k,l])=>{
+      const v=docsAtual[k], nome=docNome(v), dados=docDados(v);
+      if(dados){ // arquivo real (imagem/pdf) — abre sem falha
+        fImg.file(nome, b64ToBytes(dados), {binary:true});
+        if(k==="ctps") fAssin.file(nome, b64ToBytes(dados), {binary:true});
+      } else { // demonstração — PDF de referência válido
+        const pn=nome.replace(/\.[^.]+$/,"")+".pdf";
+        const pdf=montarPDF("Documento: "+l, ["Colaborador: "+pAtual.nome, "Arquivo de referência: "+nome, "", "Documento de demonstração — envie o arquivo real no cadastro para", "que a imagem/PDF original seja incluída aqui."]);
+        fImg.file(pn, pdf, {binary:true});
+        if(k==="ctps") fAssin.file(pn, pdf, {binary:true});
+      }
+    });
+    fContrato.file("contrato_"+pAtual.nome.replace(/\s+/g,"-")+".pdf",
+      montarPDF("Contrato de trabalho", ["Colaborador: "+pAtual.nome, "Cargo: "+(pAtual.cargo||"—"), "Unidade: "+unidadeNome(pAtual.unidade,unidades), "Admissão: "+(pAtual.admissao||"—"), "Vínculo: "+(sel.tipo==="clt"?"CLT":"Freelancer")]), {binary:true});
+    // Anexos por categoria — bytes reais quando houver; senão PDF válido
+    (dos.anexos||[]).forEach(a=>{ const alvo = a.categoria==="atestado"?fAtest : a.categoria==="advertencia"?fAssin : fImg;
+      if(a.arquivo){ alvo.file(a.nome, b64ToBytes(a.arquivo), {binary:true}); }
+      else { alvo.file(a.nome.replace(/\.[^.]+$/,"")+".pdf", montarPDF("Anexo — "+a.categoria, ["Arquivo: "+a.nome, "Colaborador: "+pAtual.nome, "Data: "+(a.data||"—")]), {binary:true}); }
+    });
+    const blob=await zip.generateAsync({type:"blob"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a"); a.href=url; a.download=`pasta_${pAtual.nome.replace(/\s+/g,"-")}.zip`; a.click(); URL.revokeObjectURL(url);
+    toast("Pasta extraída em .zip (com subpastas)");
+  };
+  const nDocs=DOC_TIPOS.filter(([k])=>docsAtual[k]).length;
+
+  return <div className="fade-in">
+    <PageHeader title="Dossiê do colaborador" sub="Pasta individual · documentos · faltas e atestados · feedbacks (livro de recordações) · histórico exportável"/>
+    {!editavel && <div className="mb-4 p-3 rounded-xl bg-amber-50 text-amber-700 text-sm flex items-center gap-2"><Icon d={I.shield} className="w-4 h-4"/> Seu perfil pode consultar, mas não tem permissão para editar documentos/registros.</div>}
+    <Card className="p-2 mb-4"><div className="flex items-center gap-2 px-3 py-2">
+      <Icon d={I.search} className="w-4 h-4 text-slate-400"/><input value={q} onChange={e=>setQ(e.target.value)} placeholder="Buscar colaborador…" className="flex-1 outline-none text-sm bg-transparent"/>
+    </div></Card>
+    <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-3">
+      {todos.map(({tipo,p})=>
+        <button key={tipo+p.id} onClick={()=>{setSel({tipo,p});setTab("docs");}} className="text-left">
+          <Card className="p-4 flex items-center gap-3 hover:border-brand-300 transition">
+            <Avatar name={p.nome} src={p.foto} tone={tipo==="clt"?"brand":"free"}/>
+            <div className="flex-1 min-w-0"><div className="font-bold text-slate-900 truncate">{p.nome}</div><div className="text-xs text-slate-500">{p.cargo} · {unidadeNome(p.unidade,unidades)}</div></div>
+            <Badge tone={tipo==="clt"?"brand":"free"}>{tipo==="clt"?"CLT":"Freela"}</Badge>
+          </Card>
+        </button>)}
+    </div>
+
+    <Modal open={!!sel} onClose={()=>setSel(null)} wide>
+      {sel && <div>
+        <div className="grad-ink grad-hero p-6 text-white rounded-t-3xl relative">
+          <button onClick={()=>setSel(null)} className="absolute top-4 right-4 text-white/80 hover:text-white"><Icon d={I.x}/></button>
+          <div className="flex items-center gap-4">
+            <Avatar name={sel.p.nome} src={pAtual?.foto} tone={sel.tipo==="clt"?"brand":"free"} size="w-16 h-16"/>
+            <div className="flex-1"><h3 className="text-2xl font-extrabold">{sel.p.nome}</h3>
+              <p className="text-white/80">{sel.p.cargo} · {unidadeNome(sel.p.unidade,unidades)} · {sel.tipo==="clt"?"CLT":"Freelancer"}</p></div>
+            <Btn variant="soft" icon={I.download} onClick={extrairPasta}>Extrair pasta</Btn>
+          </div>
+        </div>
+        <div className="px-6 pt-4 flex gap-1 border-b border-slate-100 overflow-x-auto">
+          {[["docs","Documentos"],["faltas","Faltas & Atestados"],["fb","Feedbacks"],["hist","Histórico"]].map(([k,l])=>
+            <button key={k} onClick={()=>setTab(k)} className={cx("px-4 py-2.5 text-sm font-semibold border-b-2 -mb-px whitespace-nowrap", tab===k?"border-brand-500 text-brand-700":"border-transparent text-slate-400 hover:text-slate-600")}>{l}</button>)}
+        </div>
+        <div className="p-6">
+          {tab==="docs" && <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <p className="text-sm text-slate-500 flex items-center gap-1.5"><Icon d={I.doc} className="w-4 h-4 text-brand-500"/> Pasta de arquivos — criptografada (LGPD)</p>
+              <Badge tone={nDocs>0?"green":"slate"}>{nDocs}/{DOC_TIPOS.length} enviados</Badge>
+            </div>
+            <div className="grid sm:grid-cols-2 gap-2">
+              {DOC_TIPOS.map(([k,l])=>{ const arq=docsAtual[k];
+                return <div key={k} className={cx("flex items-center gap-2.5 p-3 rounded-xl border", arq?"border-emerald-200 bg-emerald-50/40":"border-slate-200")}>
+                  <div className={cx("w-9 h-9 rounded-lg grid place-items-center shrink-0", arq?"bg-emerald-100 text-emerald-600":"bg-slate-100 text-slate-400")}><Icon d={I.doc} className="w-4 h-4"/></div>
+                  <div className="flex-1 min-w-0"><div className="font-semibold text-slate-800 text-sm">{l}</div>
+                    {arq ? <div className="text-xs text-emerald-700 truncate flex items-center gap-1"><Icon d={I.check} className="w-3 h-3"/>{docNome(arq)}</div>
+                         : <div className="text-xs text-slate-400">Não enviado</div>}</div>
+                  {arq && <Badge tone="green">OK</Badge>}
+                  {editavel && <label className="cursor-pointer shrink-0">
+                    <span className="inline-flex items-center gap-1 text-xs font-semibold text-brand-700 bg-brand-50 hover:bg-brand-100 px-2.5 py-1.5 rounded-lg"><Icon d={I.upload} className="w-3.5 h-3.5"/>{arq?"Trocar":"Enviar"}</span>
+                    <input type="file" accept="image/*,application/pdf" capture="environment" className="hidden" onChange={e=>upDocDossie(k,e.target.files&&e.target.files[0])}/>
+                  </label>}
+                </div>;})}
+            </div>
+
+            {/* Anexos adicionais: atestados, advertências */}
+            <div className="pt-2 border-t border-slate-100">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-semibold text-slate-700">Documentos adicionais (atestados, advertências)</span>
+                {editavel && <div className="flex gap-1.5">
+                  {[["atestado","Atestado"],["advertencia","Advertência"],["outro","Outro"]].map(([cat,lbl])=>
+                    <label key={cat} className="cursor-pointer">
+                      <span className="inline-flex items-center gap-1 text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 px-2.5 py-1.5 rounded-lg"><Icon d={I.plus} className="w-3.5 h-3.5"/>{lbl}</span>
+                      <input type="file" accept="image/*,application/pdf" capture="environment" className="hidden" onChange={e=>upAnexo(cat,e.target.files&&e.target.files[0])}/>
+                    </label>)}
+                </div>}
+              </div>
+              <div className="space-y-2">
+                {(dos.anexos||[]).length===0 && <p className="text-xs text-slate-400 text-center py-3">Nenhum documento adicional anexado.</p>}
+                {(dos.anexos||[]).map(a=>
+                  <div key={a.id} className="flex items-center gap-2.5 p-2.5 rounded-xl border border-slate-200">
+                    <div className="w-8 h-8 rounded-lg bg-slate-100 text-slate-500 grid place-items-center shrink-0"><Icon d={I.doc} className="w-4 h-4"/></div>
+                    <div className="flex-1 min-w-0"><div className="text-sm font-semibold text-slate-800 truncate">{a.nome}</div><div className="text-xs text-slate-400">{new Date(a.data).toLocaleDateString("pt-BR")}</div></div>
+                    <Badge tone={a.categoria==="advertencia"?"red":a.categoria==="atestado"?"blue":"slate"}>{a.categoria}</Badge>
+                  </div>)}
+              </div>
+            </div>
+          </div>}
+
+          {tab==="faltas" && <div>
+            {editavel && <Card className="p-4 mb-4 bg-slate-50/60">
+              <div className="grid sm:grid-cols-4 gap-2 items-end">
+                <Field label="Data"><Input type="date" value={nf.data} onChange={e=>setNf({...nf,data:e.target.value})}/></Field>
+                <Field label="Tipo"><Select value={nf.tipo} onChange={e=>setNf({...nf,tipo:e.target.value})}><option value="falta">Falta</option><option value="atestado">Atestado</option></Select></Field>
+                <Field label="Horas"><Input type="number" value={nf.horas} onChange={e=>setNf({...nf,horas:Number(e.target.value)})}/></Field>
+                <label className="flex items-center gap-2 text-sm pb-2.5"><input type="checkbox" checked={nf.descontar} onChange={e=>setNf({...nf,descontar:e.target.checked})}/> Descontar</label>
+              </div>
+              <div className="flex gap-2 mt-2"><Input value={nf.obs} onChange={e=>setNf({...nf,obs:e.target.value})} placeholder="Observação (opcional)"/><Btn icon={I.plus} onClick={salvarFalta}>Registrar</Btn></div>
+            </Card>}
+            <div className="space-y-2">
+              {dos.faltas.length===0 && <p className="text-sm text-slate-400 text-center py-4">Nenhuma falta ou atestado registrado.</p>}
+              {dos.faltas.map(f=>
+                <div key={f.id} className="flex items-center gap-3 p-3 rounded-xl border border-slate-200">
+                  <Badge tone={f.tipo==="atestado"?"blue":"amber"}>{f.tipo==="atestado"?"Atestado":"Falta"}</Badge>
+                  <div className="flex-1"><div className="text-sm font-semibold text-slate-800">{new Date(f.data).toLocaleDateString("pt-BR")} · {f.horas}h {f.obs&&`— ${f.obs}`}</div></div>
+                  {f.descontar?<Badge tone="red">Desconto ~R$ {(f.horas*12).toFixed(0)}</Badge>:<Badge tone="green">Sem desconto</Badge>}
+                </div>)}
+            </div>
+          </div>}
+
+          {tab==="fb" && <div>
+            <p className="text-sm text-slate-500 mb-3">Livro de recordações: elogios, pontos de atenção e anotações comportamentais.</p>
+            {editavel && <Card className="p-4 mb-4 bg-slate-50/60">
+              <div className="grid sm:grid-cols-3 gap-2">
+                <Field label="Data"><Input type="date" value={nb.data} onChange={e=>setNb({...nb,data:e.target.value})}/></Field>
+                <Field label="Tipo"><Select value={nb.tipo} onChange={e=>setNb({...nb,tipo:e.target.value})}><option value="elogio">Elogio</option><option value="atenção">Atenção</option><option value="nota">Nota</option></Select></Field>
+                <Field label="Autor"><Input value={nb.autor} onChange={e=>setNb({...nb,autor:e.target.value})}/></Field>
+              </div>
+              <div className="flex gap-2 mt-2"><Input value={nb.texto} onChange={e=>setNb({...nb,texto:e.target.value})} placeholder="Escreva o feedback…"/><Btn icon={I.plus} onClick={salvarFeedback}>Adicionar</Btn></div>
+            </Card>}
+            <div className="space-y-2">
+              {dos.feedbacks.length===0 && <p className="text-sm text-slate-400 text-center py-4">Nenhum feedback ainda.</p>}
+              {dos.feedbacks.map(f=>
+                <div key={f.id} className="p-3 rounded-xl border border-slate-200">
+                  <div className="flex items-center gap-2 mb-1"><Badge tone={f.tipo==="elogio"?"green":f.tipo==="atenção"?"amber":"slate"}>{f.tipo}</Badge><span className="text-xs text-slate-400">{new Date(f.data).toLocaleDateString("pt-BR")} · {f.autor}</span></div>
+                  <p className="text-sm text-slate-700">{f.texto}</p>
+                </div>)}
+            </div>
+          </div>}
+
+          {tab==="hist" && <div>
+            <div className="flex justify-end mb-3"><Btn size="sm" variant="ghost" icon={I.download} onClick={extrairPasta}>Exportar histórico</Btn></div>
+            <div className="space-y-2">
+              {historico.length===0 && <p className="text-sm text-slate-400 text-center py-4">Sem registros no histórico.</p>}
+              {historico.map((h,i)=>
+                <div key={i} className="flex gap-3 p-3 rounded-xl bg-slate-50">
+                  <div className={cx("w-2 rounded-full", h.tone==="amber"?"bg-amber-400":"bg-brand-400")}/>
+                  <div className="flex-1"><div className="text-xs text-slate-400">{new Date(h.data).toLocaleDateString("pt-BR")} · {h.t}</div><div className="text-sm text-slate-700">{h.desc}</div></div>
+                </div>)}
+            </div>
+          </div>}
+        </div>
+      </div>}
+    </Modal>
+  </div>;
+}
+
+/* ============================ EQUIPE & PERMISSÕES ============================ */
+function Equipe() {
+  const { perfil, setPerfil, perms, setPerms, can } = useStore();
+  const toast=useContext(ToastCtx);
+  const [membros,setMembros]=useState([
+    {id:1,nome:"Wilami Gestor",papel:"proprietario",email:"gestor@wilami.com",unid:"Todas"},
+    {id:2,nome:"Roberto Dias",papel:"gerente",email:"roberto@wilami.com",unid:"Caktus Osasco"},
+    {id:3,nome:"Marina Costa",papel:"rh_financeiro",email:"marina@wilami.com",unid:"Todas"},
+  ]);
+  const [form,setForm]=useState(null); // {inicial?}
+  const podeGerir=can("equipe");
+
+  const salvar=(m)=>{ setMembros(prev=> m.id?prev.map(x=>x.id===m.id?{...x,...m}:x):[...prev,{...m,id:Date.now()}]); setForm(null); toast(m.id?"Membro atualizado":"Convite enviado"); };
+  const excluir=(id)=>{ setMembros(prev=>prev.filter(x=>x.id!==id)); toast("Membro removido"); };
+  const toggleCap=(papel,cap)=>setPerms(prev=>({...prev,[papel]:{...prev[papel],[cap]:!prev[papel][cap]}}));
+
+  return <div className="fade-in">
+    <PageHeader title="Equipe & permissões" sub="Editar membros · restringir acessos por papel">
+      <Field label="Ver como (simular perfil)"><Select value={perfil} onChange={e=>setPerfil(e.target.value)}>{Object.entries(PAPEIS).map(([k,v])=><option key={k} value={k}>{v}</option>)}</Select></Field>
+      {podeGerir && <Btn icon={I.plus} onClick={()=>setForm({inicial:null})} className="self-end">Convidar</Btn>}
+    </PageHeader>
+
+    <div className="grid lg:grid-cols-2 gap-4">
+      <div className="space-y-3">
+        {membros.map((m)=>
+          <Card key={m.id} className="p-4 flex items-center gap-4">
+            <Avatar name={m.nome} tone={m.papel==="proprietario"?"brand":"slate"} size="w-12 h-12"/>
+            <div className="flex-1 min-w-0"><div className="font-bold text-slate-900">{m.nome}</div><div className="text-sm text-slate-500 truncate">{m.email}</div><div className="text-xs text-slate-400">{m.unid}</div></div>
+            <Badge tone={m.papel==="proprietario"?"brand":"slate"}>{PAPEIS[m.papel]}</Badge>
+            {podeGerir && m.papel!=="proprietario" && <div className="flex gap-1">
+              <button onClick={()=>setForm({inicial:m})} className="w-8 h-8 rounded-lg hover:bg-slate-100 grid place-items-center text-slate-500"><Icon d={I.edit} className="w-4 h-4"/></button>
+              <button onClick={()=>excluir(m.id)} className="w-8 h-8 rounded-lg hover:bg-rose-50 grid place-items-center text-slate-400 hover:text-rose-500"><Icon d={I.trash} className="w-4 h-4"/></button>
+            </div>}
+          </Card>)}
+      </div>
+
+      <Card className="p-5">
+        <h3 className="font-bold text-slate-900 mb-1">Permissões por papel</h3>
+        <p className="text-sm text-slate-500 mb-4">Ex.: o Gerente edita a escala, mas não acessa documentos.</p>
+        <div className="overflow-x-auto"><table className="w-full text-sm">
+          <thead><tr className="text-left text-slate-400"><th className="py-2">Acesso</th><th className="text-center">Gerente</th><th className="text-center">RH/Fin.</th></tr></thead>
+          <tbody className="divide-y divide-slate-50">
+            {CAPS.map(([cap,label])=>
+              <tr key={cap}><td className="py-2.5 text-slate-700">{label}</td>
+                {["gerente","rh_financeiro"].map(papel=>
+                  <td key={papel} className="text-center py-2.5">
+                    <button onClick={()=>podeGerir&&toggleCap(papel,cap)} className={cx("w-9 h-5 rounded-full inline-flex p-0.5 transition", perms[papel][cap]?"grad-brand":"bg-slate-300", !podeGerir&&"opacity-60")}>
+                      <span className={cx("w-4 h-4 bg-white rounded-full transition", perms[papel][cap]&&"translate-x-4")}/>
+                    </button>
+                  </td>)}
+              </tr>)}
+          </tbody>
+        </table></div>
+        <div className="mt-4 p-3 rounded-xl bg-brand-50 text-brand-700 text-xs flex items-center gap-2"><Icon d={I.shield} className="w-4 h-4"/> Perfil atual simulado: <b>{PAPEIS[perfil]}</b>. Troque em "Ver como" e navegue para ver as restrições na prática (Escala e Dossiê).</div>
+      </Card>
+    </div>
+
+    <Modal open={!!form} onClose={()=>setForm(null)}>
+      {form && <MembroForm inicial={form.inicial} onClose={()=>setForm(null)} onSalvar={salvar}/>}
+    </Modal>
+  </div>;
+}
+function MembroForm({inicial,onClose,onSalvar}) {
+  const { unidades } = useStore();
+  const [m,setM]=useState(inicial||{nome:"",email:"",papel:"gerente",unid:"Todas as casas"});
+  const set=(k,v)=>setM(p=>({...p,[k]:v}));
+  return <div className="p-6">
+    <div className="flex items-center justify-between mb-5"><h3 className="text-lg font-bold text-slate-900">{inicial?"Editar membro":"Convidar membro"}</h3>
+      <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><Icon d={I.x}/></button></div>
+    <div className="space-y-4">
+      <Field label="Nome"><Input value={m.nome} onChange={e=>set("nome",e.target.value)}/></Field>
+      <Field label="E-mail"><Input value={m.email} onChange={e=>set("email",e.target.value)}/></Field>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Papel"><Select value={m.papel} onChange={e=>set("papel",e.target.value)}><option value="gerente">Gerente</option><option value="rh_financeiro">RH / Financeiro</option></Select></Field>
+        <Field label="Casa (unidade)"><Select value={m.unid} onChange={e=>set("unid",e.target.value)}>
+          <option value="Todas as casas">Todas as casas</option>
+          {unidades.map(u=><option key={u.id} value={u.nome}>{u.nome}</option>)}
+        </Select></Field>
+      </div>
+    </div>
+    <div className="flex gap-2 mt-6"><Btn variant="ghost" className="flex-1" onClick={onClose}>Cancelar</Btn>
+      <Btn className="flex-1" icon={I.check} disabled={!m.nome||!m.email} onClick={()=>onSalvar(m)}>{inicial?"Salvar":"Convidar"}</Btn></div>
+  </div>;
+}
+
+/* ============================ CONFIGURAÇÕES ============================ */
+function Configuracoes() {
+  const [tol,setTol]=useState(true),[banco,setBanco]=useState(true),[facial,setFacial]=useState(true),[not,setNot]=useState(false);
+  return <div className="fade-in">
+    <PageHeader title="Configurações" sub="Regras de ponto, termos LGPD e identidade da marca"/>
+    <div className="grid lg:grid-cols-2 gap-4">
+      <Card className="p-5">
+        <h3 className="font-bold text-slate-900 mb-4 flex items-center gap-2"><Icon d={I.clock} className="w-4 h-4 text-brand-600"/>Regras de jornada</h3>
+        {[["Tolerância de 10 min (Art. 58 CLT)",tol,setTol],["Banco de horas ativo",banco,setBanco],["Validação facial obrigatória",facial,setFacial],["Freelancer só com escala + cerca",true,()=>{}],["Notificar atrasos por e-mail",not,setNot]].map(([l,v,s],i)=>
+          <div key={i} className="flex items-center justify-between py-3 border-b border-slate-50 last:border-0">
+            <span className="text-sm text-slate-700">{l}</span><Toggle on={v} onChange={s}/></div>)}
+      </Card>
+      <Card className="p-5">
+        <h3 className="font-bold text-slate-900 mb-4 flex items-center gap-2"><Icon d={I.shield} className="w-4 h-4 text-emerald-600"/>Privacidade & LGPD</h3>
+        <div className="space-y-3 text-sm text-slate-600">
+          <div className="p-3 rounded-xl bg-emerald-50 flex items-start gap-2"><Icon d={I.check} className="w-4 h-4 text-emerald-600 mt-0.5"/><span>Consentimento de biometria e geolocalização aceito no 1º acesso.</span></div>
+          <div className="p-3 rounded-xl bg-slate-50 flex items-start gap-2"><Icon d={I.shield} className="w-4 h-4 text-slate-500 mt-0.5"/><span>Selfies e coordenadas criptografadas (AES-256) e retidas pelo prazo legal.</span></div>
+        </div>
+        <h3 className="font-bold text-slate-900 mt-6 mb-3 flex items-center gap-2"><Icon d={I.edit} className="w-4 h-4 text-brand-600"/>Marca</h3>
+        <div className="flex items-center gap-3">
+          <div className="w-12 h-12 grad-brand rounded-xl grid place-items-center text-white"><Icon d={I.clock}/></div>
+          <div className="flex-1"><span className="text-xs text-slate-400 font-semibold">Cor primária</span>
+            <div className="flex gap-2 mt-1">{["#6366f1","#f97316","#10b981","#0ea5e9","#e11d48"].map(c=><button key={c} className="w-7 h-7 rounded-lg ring-2 ring-white shadow" style={{background:c}}/>)}</div></div>
+        </div>
+      </Card>
+    </div>
+  </div>;
+}
+
+/* ============================ AJUDA ============================ */
+function Ajuda() {
+  const faqs=[
+    ["Como um CLT começa a bater ponto?","Ao ser contratado, o CLT entra automaticamente na escala fixa (6x1, 5x2, 6x2) e recebe o link exclusivo de ponto. É só acessar, tirar a selfie e o GPS valida a cerca."],
+    ["Como funciona o ponto do freelancer?","O freelancer usa um link SEPARADO e só consegue registrar se estiver escalado na escala visual naquele dia E dentro da cerca virtual da casa."],
+    ["O que é o painel 'Ponto ao vivo'?","É um monitor em tempo real de quem está registrando o ponto agora, por casa e vínculo — no lugar de um relógio fixo."],
+    ["Como gerencio as casas?","Na aba Unidades você cria, edita e exclui casas dinamicamente, cada uma com sua cerca virtual (raio em metros)."],
+    ["Como pago os freelancers?","Em Pagamentos, os valores aparecem acumulados por freelancer, com filtro por período e por casa, e exportação simplificada para o financeiro."],
+  ];
+  const [open,setOpen]=useState(0);
+  return <div className="fade-in max-w-3xl">
+    <PageHeader title="Central de ajuda" sub="Manual e tutorial do Wilami Ponto"/>
+    <Card className="divide-y divide-slate-100">
+      {faqs.map(([q,a],i)=>
+        <div key={i}>
+          <button onClick={()=>setOpen(open===i?-1:i)} className="w-full flex items-center justify-between gap-3 p-5 text-left">
+            <span className="font-semibold text-slate-800">{q}</span><Icon d={open===i?I.x:I.plus} className="w-4 h-4 text-slate-400 shrink-0"/></button>
+          {open===i && <p className="px-5 pb-5 -mt-2 text-sm text-slate-600 leading-relaxed">{a}</p>}
+        </div>)}
+    </Card>
+  </div>;
+}
+
+/* ============================ APP SHELL ============================ */
+const NAV = [
+  {sec:"Operação", items:[
+    {k:"dashboard",l:"Painel",d:I.grid},
+    {k:"escala",l:"Escala por unidade",d:I.calendar},
+    {k:"ponto",l:"Ponto ao vivo",d:I.broadcast},
+  ]},
+  {sec:"Pessoas", items:[
+    {k:"clt",l:"Colaboradores CLT",d:I.user},
+    {k:"freelas",l:"Freelancers",d:I.coffee},
+    {k:"dossie",l:"Dossiê",d:I.doc},
+    {k:"equipe",l:"Equipe & permissões",d:I.team},
+  ]},
+  {sec:"Gestão", items:[
+    {k:"relatorios",l:"Relatórios",d:I.chart},
+    {k:"financeiro",l:"Financeiro",d:I.wallet},
+    {k:"pagamentos",l:"Pagamentos",d:I.pix},
+    {k:"unidades",l:"Unidades",d:I.pin},
+    {k:"links",l:"Links & QR",d:I.qr},
+  ]},
+  {sec:"Sistema", items:[
+    {k:"config",l:"Configurações",d:I.gear},
+    {k:"ajuda",l:"Ajuda",d:I.help},
+  ]},
+];
+const TITULOS={dashboard:"Painel",escala:"Escala por unidade",ponto:"Ponto ao vivo",clt:"Colaboradores CLT",freelas:"Freelancers",dossie:"Dossiê do colaborador",equipe:"Equipe & permissões",relatorios:"Relatórios",financeiro:"Financeiro",pagamentos:"Pagamentos",unidades:"Unidades",links:"Links & QR",config:"Configurações",ajuda:"Ajuda"};
+
+function Sidebar({view,setView,open,setOpen}) {
+  return <>
+    {open && <div className="fixed inset-0 bg-black/30 z-30 lg:hidden" onClick={()=>setOpen(false)}/>}
+    <aside className={cx("fixed lg:sticky top-0 z-40 h-screen w-64 shrink-0 grad-ink text-white flex flex-col transition-transform lg:translate-x-0", open?"translate-x-0":"-translate-x-full")}>
+      <div className="p-5"><Logo light/></div>
+      <div className="px-3 flex-1 overflow-y-auto">
+        {NAV.map(g=>
+          <div key={g.sec} className="mb-4">
+            <div className="px-3 text-[11px] uppercase tracking-wider text-white/35 font-bold mb-1">{g.sec}</div>
+            {g.items.map(it=>
+              <button key={it.k} onClick={()=>{setView(it.k);setOpen(false);}}
+                className={cx("w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition mb-0.5",
+                  view===it.k?"bg-white/10 text-white":"text-white/60 hover:text-white hover:bg-white/5")}>
+                <Icon d={it.d} className="w-[18px] h-[18px]"/>{it.l}
+                {view===it.k && <span className="ml-auto w-1.5 h-1.5 rounded-full bg-brand-400"/>}
+              </button>)}
+          </div>)}
+      </div>
+      <div className="p-3 border-t border-white/10">
+        <div className="flex items-center gap-3 px-2 py-2"><Avatar name="Wilami Gestor" tone="brand"/>
+          <div className="flex-1 min-w-0"><div className="text-sm font-semibold truncate">Wilami Gestor</div><div className="text-xs text-white/50 truncate">Proprietário</div></div></div>
+      </div>
+    </aside>
+  </>;
+}
+
+function Shell() {
+  const [view,setView]=useState("dashboard");
+  const [sbOpen,setSbOpen]=useState(false);
+  const [toasts,setToasts]=useState([]);
+  const pushToast=(msg)=>{ const id=Math.random(); setToasts(t=>[...t,{id,msg}]); setTimeout(()=>setToasts(t=>t.filter(x=>x.id!==id)),2600); };
+  const views={ dashboard:<Dashboard go={setView}/>, escala:<EscalaVisual/>, ponto:<PontoLive/>, clt:<ColaboradoresCLT/>, freelas:<Freelancers/>,
+    dossie:<Dossie/>, equipe:<Equipe/>, relatorios:<Relatorios/>, financeiro:<Financeiro/>, pagamentos:<Pagamentos/>, unidades:<Unidades/>, links:<LinksQR/>, config:<Configuracoes/>, ajuda:<Ajuda/> };
+  return <ToastCtx.Provider value={pushToast}>
+    <div className="flex min-h-screen">
+      <Sidebar view={view} setView={setView} open={sbOpen} setOpen={setSbOpen}/>
+      <div className="flex-1 min-w-0 flex flex-col">
+        <header className="sticky top-0 z-20 glass border-b border-slate-200/70 px-4 lg:px-8 py-1.5 flex items-center gap-3">
+          <button className="lg:hidden text-slate-600" onClick={()=>setSbOpen(true)}><Icon d={I.menu}/></button>
+          <div className="hidden sm:flex items-center gap-2 text-sm text-slate-400"><Icon d={I.grid} className="w-4 h-4"/> / <span className="text-slate-700 font-semibold">{TITULOS[view]}</span></div>
+          <div className="ml-auto flex items-center gap-2">
+            <button className="relative w-9 h-9 rounded-xl bg-white border border-slate-200 grid place-items-center text-slate-500 hover:bg-slate-50"><Icon d={I.bell} className="w-4 h-4"/><span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-rose-500"/></button>
+          </div>
+        </header>
+        <main className="flex-1 px-4 lg:px-8 py-5">{views[view]}</main>
+      </div>
+    </div>
+    <div className="fixed bottom-5 right-5 z-[60] space-y-2">
+      {toasts.map(t=>
+        <div key={t.id} className="fade-in bg-ink-900 text-white px-4 py-3 rounded-xl shadow-glow flex items-center gap-2 text-sm max-w-xs">
+          <div className="w-6 h-6 rounded-full bg-emerald-500 grid place-items-center shrink-0"><Icon d={I.check} className="w-3.5 h-3.5" stroke={3}/></div>{t.msg}
+        </div>)}
+    </div>
+  </ToastCtx.Provider>;
+}
+
+// Roteamento por hash para os LINKS de cadastro/ponto (CLT e Freelancer).
+// Ex.: abrir  ...wilami-ponto-app.html#ponto-clt  já abre o quiosque CLT (público).
+function usePontoHash() {
+  const read=()=>{ const h=(window.location.hash||"").replace("#",""); return h==="ponto-clt"?"clt": h==="ponto-free"?"free": null; };
+  const [mode,setMode]=useState(read());
+  useEffect(()=>{ const on=()=>setMode(read()); window.addEventListener("hashchange",on); return ()=>window.removeEventListener("hashchange",on); },[]);
+  return [mode, ()=>{ if(window.location.hash){ window.history.replaceState(null,"",window.location.pathname+window.location.search); } setMode(null); }];
+}
+function App() {
+  const [logged,setLogged]=useState(false);
+  const [pontoMode,fecharPonto]=usePontoHash();
+  return <StoreProvider>
+    {pontoMode ? <PontoKiosk mode={pontoMode} onClose={fecharPonto}/>
+     : !logged ? <LoginScreen onLogin={()=>setLogged(true)}/>
+     : <Shell/>}
+  </StoreProvider>;
+}
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
