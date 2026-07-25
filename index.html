@@ -2,8 +2,26 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <title>Wilami Ponto — Registro de Ponto Digital para Restaurantes</title>
+<!-- PWA: instalável como app "Wilami Ponto" (Adicionar à tela inicial → abre em tela cheia) -->
+<meta name="theme-color" content="#4f46e5" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Wilami Ponto" />
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='512'%20height='512'%3E%3Crect%20width='512'%20height='512'%20rx='96'%20fill='%234f46e5'/%3E%3Cg%20fill='none'%20stroke='%23fff'%20stroke-width='34'%20stroke-linecap='round'%3E%3Ccircle%20cx='256'%20cy='256'%20r='150'/%3E%3Cpath%20d='M256%20168V256l64%2044'/%3E%3C/g%3E%3C/svg%3E" />
+<link rel="manifest" id="wp-manifest" />
+<script>
+(function(){
+  try{
+    var icon="data:image/svg+xml,"+encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' width='512' height='512'><rect width='512' height='512' rx='96' fill='#4f46e5'/><g fill='none' stroke='#fff' stroke-width='34' stroke-linecap='round'><circle cx='256' cy='256' r='150'/><path d='M256 168V256l64 44'/></g></svg>");
+    var m={name:"Wilami Ponto",short_name:"Wilami Ponto",description:"Registro de ponto digital para restaurantes (CLT e Freelancer).",start_url:".",scope:".",display:"standalone",orientation:"portrait",background_color:"#0f172a",theme_color:"#4f46e5",icons:[{src:icon,sizes:"192x192",type:"image/svg+xml",purpose:"any"},{src:icon,sizes:"512x512",type:"image/svg+xml",purpose:"any maskable"}]};
+    var blob=new Blob([JSON.stringify(m)],{type:"application/manifest+json"});
+    document.getElementById("wp-manifest").href=URL.createObjectURL(blob);
+  }catch(e){}
+})();
+</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
@@ -186,6 +204,12 @@ const useClock = () => {
   useEffect(()=>{ const id=setInterval(()=>setT(new Date()),1000); return ()=>clearInterval(id); },[]);
   return t;
 };
+// Persistência no dispositivo (localStorage) — cadastros e escala NÃO somem ao recarregar.
+function usePersist(key, initial){
+  const [v,setV]=useState(()=>{ try{ const s=localStorage.getItem("wp_"+key); return s!=null?JSON.parse(s):initial; }catch{ return initial; } });
+  useEffect(()=>{ try{ localStorage.setItem("wp_"+key, JSON.stringify(v)); }catch{} },[key,v]);
+  return [v,setV];
+}
 function haversine(la1,lo1,la2,lo2){
   const R=6371000, r=Math.PI/180, dLa=(la2-la1)*r, dLo=(lo2-lo1)*r;
   const a=Math.sin(dLa/2)**2+Math.cos(la1*r)*Math.cos(la2*r)*Math.sin(dLo/2)**2;
@@ -236,16 +260,8 @@ const INIT_FREELAS = [
     jornadasHist:[{data:"2026-07-03",unidade:4,horas:8,valor:140},{data:"2026-07-10",unidade:4,horas:8,valor:140},{data:"2026-07-17",unidade:5,horas:8,valor:140},{data:"2026-07-19",unidade:4,horas:6,valor:105}] },
 ];
 // Histórico de ponto (apuração de horas e extras) — separado do feed ao vivo
-const INIT_PONTOHIST = [
-  { nome:"Ana Beatriz Souza", tipo:"clt", dia:"2026-07-24", unidade:"Pitz Burguer Osasco", acao:"Entrada", min:480 },
-  { nome:"Ana Beatriz Souza", tipo:"clt", dia:"2026-07-24", unidade:"Pitz Burguer Osasco", acao:"Início intervalo", min:720 },
-  { nome:"Ana Beatriz Souza", tipo:"clt", dia:"2026-07-24", unidade:"Pitz Burguer Osasco", acao:"Fim intervalo", min:780 },
-  { nome:"Ana Beatriz Souza", tipo:"clt", dia:"2026-07-24", unidade:"Pitz Burguer Osasco", acao:"Saída", min:1140 }, // 10h úteis => +2h extra
-  { nome:"Carlos Mendes Lima", tipo:"clt", dia:"2026-07-24", unidade:"Caktus Osasco", acao:"Entrada", min:600 },
-  { nome:"Carlos Mendes Lima", tipo:"clt", dia:"2026-07-24", unidade:"Caktus Osasco", acao:"Saída", min:1140 }, // 8h54 => +0h54
-  { nome:"Hugo Pereira Dias", tipo:"free", dia:"2026-07-24", unidade:"Pitz Burguer Osasco", acao:"Entrada", min:1080 }, // check-in 18:00
-  { nome:"Hugo Pereira Dias", tipo:"free", dia:"2026-07-24", unidade:"Pitz Burguer Osasco", acao:"Saída", min:1380 }, // checkout 23:00 => 5h
-];
+// Sem registros de teste — a apuração começa vazia e só mostra pontos REAIS batidos pelos colaboradores.
+const INIT_PONTOHIST = [];
 
 /* ===== Cálculo de jornada (horas trabalhadas + extras) ===== */
 const horaMin = (str)=>{ const [h,m]=(str||"0:0").split(":"); return (+h)*60+(+m); };
@@ -358,14 +374,14 @@ const CAPS = [["escala","Editar escala"],["colaboradores","Gerir colaboradores"]
 const PAPEIS = { proprietario:"Proprietário", gerente:"Gerente", rh_financeiro:"RH / Financeiro" };
 
 function StoreProvider({children}) {
-  const [unidades,setUnidades]=useState(INIT_UNIDADES);
-  const [clts,setClts]=useState(INIT_CLTS);
-  const [freelas,setFreelas]=useState(INIT_FREELAS);
-  const [escala,setEscala]=useState(escalaInicial());        // por unidade
-  const [registros,setRegistros]=useState([]);               // feed ao vivo (só reais)
-  const [pontoHist,setPontoHist]=useState(INIT_PONTOHIST);   // histórico p/ apuração de horas
-  const [cargosFreela,setCargosFreela]=useState(INIT_CARGOS_FREELA);
-  const [dossie,setDossie]=useState({});                     // { "clt-1": {faltas:[],feedbacks:[]} }
+  const [unidades,setUnidades]=usePersist("unidades",INIT_UNIDADES);
+  const [clts,setClts]=usePersist("clts",INIT_CLTS);
+  const [freelas,setFreelas]=usePersist("freelas",INIT_FREELAS);
+  const [escala,setEscala]=usePersist("escala",escalaInicial());        // por unidade
+  const [registros,setRegistros]=usePersist("registros",[]);           // feed ao vivo (só reais)
+  const [pontoHist,setPontoHist]=usePersist("pontoHist",INIT_PONTOHIST);// histórico p/ apuração
+  const [cargosFreela,setCargosFreela]=usePersist("cargos",INIT_CARGOS_FREELA);
+  const [dossie,setDossie]=usePersist("dossie",{});          // { "clt-1": {faltas:[],feedbacks:[]} }
   const [perfil,setPerfil]=useState("proprietario");         // papel simulado
   const [perms,setPerms]=useState(PERMS_INIT);
   const can=(cap)=> perfil==="proprietario" ? true : !!(perms[perfil] && perms[perfil][cap]);
@@ -462,7 +478,8 @@ const StatCard = ({icon, label, value, delta, tone="brand", chart}) => {
 
 /* ============================ LOGIN ============================ */
 function LoginScreen({ onLogin }) {
-  const [tab,setTab]=useState("admin");
+  const [tab,setTab]=useState("colab");
+  const irPonto=(m)=>{ window.location.hash="ponto-"+m; window.dispatchEvent(new HashChangeEvent("hashchange")); };
   return <div className="min-h-screen grad-ink grad-hero grid lg:grid-cols-2">
     <div className="hidden lg:flex flex-col justify-between p-12 text-white">
       <Logo light size="text-2xl"/>
@@ -483,7 +500,7 @@ function LoginScreen({ onLogin }) {
       <Card className="w-full max-w-md p-8">
         <div className="lg:hidden mb-6"><Logo/></div>
         <div className="flex gap-2 p-1 bg-slate-100 rounded-xl mb-6">
-          {[["admin","Administração"],["colab","Sou colaborador"]].map(([k,l])=>
+          {[["colab","Registrar meu ponto"],["admin","Acesso do gestor"]].map(([k,l])=>
             <button key={k} onClick={()=>setTab(k)} className={cx("flex-1 py-2 rounded-lg text-sm font-semibold transition", tab===k?"bg-white shadow-soft text-brand-700":"text-slate-500")}>{l}</button>)}
         </div>
         {tab==="admin" ? <>
@@ -500,17 +517,17 @@ function LoginScreen({ onLogin }) {
             Continuar com Google
           </button>
         </> : <>
-          <h2 className="text-xl font-bold text-slate-900">Registrar ponto</h2>
-          <p className="text-slate-500 text-sm mt-1">Cada vínculo tem seu link exclusivo de registro.</p>
+          <h2 className="text-xl font-bold text-slate-900">Registrar meu ponto</h2>
+          <p className="text-slate-500 text-sm mt-1">Escolha seu vínculo e informe seu CPF. Só quem está na escala de hoje registra.</p>
           <div className="mt-6 space-y-3">
-            <button onClick={onLogin} className="w-full p-4 rounded-2xl border border-slate-200 hover:border-brand-400 hover:bg-brand-50/40 flex items-center gap-4 text-left transition">
+            <button onClick={()=>irPonto("clt")} className="w-full p-4 rounded-2xl border border-slate-200 hover:border-brand-400 hover:bg-brand-50/40 flex items-center gap-4 text-left transition">
               <div className="w-11 h-11 grad-brand rounded-xl grid place-items-center text-white"><Icon d={I.user}/></div>
-              <div><div className="font-bold text-slate-900">Colaborador CLT</div><div className="text-sm text-slate-500">Link exclusivo · escala fixa</div></div>
+              <div><div className="font-bold text-slate-900">Sou CLT</div><div className="text-sm text-slate-500">Registrar jornada · escala fixa</div></div>
               <Icon d={I.arrow} className="w-4 h-4 ml-auto text-slate-400"/>
             </button>
-            <button onClick={onLogin} className="w-full p-4 rounded-2xl border border-slate-200 hover:border-free-400 hover:bg-free-50/40 flex items-center gap-4 text-left transition">
+            <button onClick={()=>irPonto("free")} className="w-full p-4 rounded-2xl border border-slate-200 hover:border-free-400 hover:bg-free-50/40 flex items-center gap-4 text-left transition">
               <div className="w-11 h-11 bg-free-500 rounded-xl grid place-items-center text-white"><Icon d={I.coffee}/></div>
-              <div><div className="font-bold text-slate-900">Freelancer</div><div className="text-sm text-slate-500">Link separado · exige escala + cerca</div></div>
+              <div><div className="font-bold text-slate-900">Sou Freelancer</div><div className="text-sm text-slate-500">Check-in/checkout · exige escala + cerca</div></div>
               <Icon d={I.arrow} className="w-4 h-4 ml-auto text-slate-400"/>
             </button>
           </div>
@@ -587,6 +604,8 @@ function EscalaVisual() {
   const remover=(dia,id)=>setEscala(prev=>{ const u={...prev[uSel]}; u[dia]=u[dia].filter(a=>a.id!==id); return {...prev,[uSel]:u}; });
   const setMarca=(dia,id,marca)=>setEscala(prev=>{ const u={...prev[uSel]}; u[dia]=u[dia].map(a=>a.id===id?{...a,marca}:a); return {...prev,[uSel]:u}; });
   const setTurnoTo=(dia,id,turno)=>setEscala(prev=>{ const u={...prev[uSel]}; u[dia]=u[dia].map(a=>a.id===id?{...a,turno,marca:turno==="folga"?null:a.marca}:a); return {...prev,[uSel]:u}; });
+  const setHorario=(dia,id,h)=>setEscala(prev=>{ const u={...prev[uSel]}; u[dia]=u[dia].map(a=>a.id===id?{...a,h}:a); return {...prev,[uSel]:u}; });
+  const [editH,setEditH]=useState(null); // {di,id,hi,hf}
   const addFreela=(dia,pid)=>{ setEscala(prev=>{ const u={...(prev[uSel]||escalaVaziaUnidade())}; u[dia]=[...(u[dia]||[]),{id:"f"+Date.now(),pid,tipo:"free",turno:"noite"}]; return {...prev,[uSel]:u}; }); setAdd(null); toast("Freelancer inserido na escala desta casa"); };
 
   const tot=Object.values(escU).flat();
@@ -649,7 +668,7 @@ function EscalaVisual() {
                     </div>
                     <div className="flex items-center gap-1 mt-1 flex-wrap">
                       <span className="text-[9px] font-bold px-1.5 py-0.5 rounded" style={{background:(setor?.c||"#6366f1")+"22",color:setor?.c}}>{t.l}</span>
-                      {a.turno!=="folga" && <span className="text-[9px] font-semibold text-slate-500 tabular-nums">{t.h}</span>}
+                      {a.turno!=="folga" && <span className="text-[9px] font-semibold text-slate-500 tabular-nums">{a.h||t.h}</span>}
                       {a.marca==="faltou" && <Badge tone="red">Faltou</Badge>}
                       {a.marca==="atrasou" && <Badge tone="amber">Atrasou</Badge>}
                     </div>
@@ -657,6 +676,7 @@ function EscalaVisual() {
                   {aberto && <div className="absolute z-30 top-full left-0 mt-1 w-40 bg-white rounded-xl shadow-2xl border border-slate-100 p-1.5 text-xs">
                     <div className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase">Turno</div>
                     {[["manha","Manhã"],["tarde","Tarde"],["noite","Noite"],["folga","Folga"]].map(([k,l])=><button key={k} onClick={()=>{setTurnoTo(di,a.id,k);setMenu(null);}} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50">{l}</button>)}
+                    {a.turno!=="folga" && <button onClick={()=>{ const cur=(a.h||t.h||"").split("–"); setEditH({di,id:a.id,hi:cur[0]||"08:00",hf:cur[1]||"16:00"}); setMenu(null); }} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-brand-50 text-brand-700 border-t border-slate-100 mt-1">Editar horário…</button>}
                     <div className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase border-t border-slate-100 mt-1">Marcar</div>
                     <button onClick={()=>{setMarca(di,a.id,"faltou");setMenu(null);}} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-rose-50 text-rose-600">Faltou</button>
                     <button onClick={()=>{setMarca(di,a.id,"atrasou");setMenu(null);}} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-amber-50 text-amber-600">Atrasou</button>
@@ -668,6 +688,24 @@ function EscalaVisual() {
           </div>)}
       </div>
     </Card>
+
+    <Modal open={!!editH} onClose={()=>setEditH(null)}>
+      {editH && <div className="p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-bold text-slate-900">Editar horário — {DIAS[editH.di]}</h3>
+          <button onClick={()=>setEditH(null)} className="text-slate-400 hover:text-slate-600"><Icon d={I.x}/></button>
+        </div>
+        <div className="flex items-end gap-3">
+          <Field label="Entrada"><Input type="time" value={editH.hi} onChange={e=>setEditH({...editH,hi:e.target.value})}/></Field>
+          <span className="pb-3 text-slate-400">até</span>
+          <Field label="Saída"><Input type="time" value={editH.hf} onChange={e=>setEditH({...editH,hf:e.target.value})}/></Field>
+        </div>
+        <div className="flex gap-2 mt-5">
+          <Btn variant="ghost" className="flex-1" onClick={()=>setEditH(null)}>Cancelar</Btn>
+          <Btn className="flex-1" icon={I.check} onClick={()=>{ setHorario(editH.di,editH.id,`${editH.hi}–${editH.hf}`); setEditH(null); toast("Horário atualizado"); }}>Salvar horário</Btn>
+        </div>
+      </div>}
+    </Modal>
 
     <Modal open={add!==null} onClose={()=>setAdd(null)}>
       <div className="p-6">
@@ -847,12 +885,24 @@ function PontoLive() {
 
 /* ============================ QUIOSQUE DE PONTO ============================ */
 function PontoKiosk({ mode, onClose }) {
-  const { unidades, clts, freelas, freelancerEscaladoHoje, addRegistro, salvarClt, salvarFreela } = useStore();
+  const { unidades, clts, freelas, escala, freelancerEscaladoHoje, addRegistro, salvarClt, salvarFreela } = useStore();
   const ativos = mode==="clt" ? clts : freelas.filter(f=>f.status==="ativo");
   const [fluxo,setFluxo]=useState("escolha"); // escolha | registro | cadastro
   const [unidadeId,setUnidadeId]=useState(unidades[0]?.id);
-  const [pid,setPid]=useState(ativos[0]?.id);
-  const [step,setStep]=useState(0); // 0 seleção · 1 selfie · 2 gps · 3 confirmar
+  const [pid,setPid]=useState(null);
+  const [cpf,setCpf]=useState("");
+  const [cpfErr,setCpfErr]=useState("");
+  const soDigitos=(s)=>(s||"").replace(/\D/g,"");
+  const escaladoHojePid=(p)=> !!p && Object.values(escala||{}).some(dias=>((dias&&dias[HOJE_IDX])||[]).some(a=>a.pid===p.id && a.tipo===mode && a.turno!=="folga"));
+  const buscarCpf=()=>{
+    const d=soDigitos(cpf);
+    if(d.length<11){ setCpfErr("Digite os 11 números do CPF."); return; }
+    const p=ativos.find(x=>soDigitos(x.cpf)===d);
+    if(!p){ setCpfErr("CPF não encontrado. Use “Fazer cadastro (1º acesso)”."); return; }
+    if(!escaladoHojePid(p)){ setCpfErr(p.nome.split(" ")[0]+", você não está na escala de hoje — não é possível registrar ponto."); return; }
+    setPid(p.id); setUnidadeId(p.unidade||unidades[0]?.id); setCpfErr(""); setStep(1);
+  };
+  const [step,setStep]=useState(0); // 0 CPF · 1 selfie · 2 gps · 3 confirmar
   const [foto,setFoto]=useState(null);
   const [camErr,setCamErr]=useState(null);
   const [geo,setGeo]=useState(null);
@@ -929,19 +979,17 @@ function PontoKiosk({ mode, onClose }) {
           </div>
 
           {step===0 && <div className="fade-in">
-            <Field label="Quem vai registrar?">
-              <Select value={pid} onChange={e=>setPid(Number(e.target.value))}>
-                {ativos.map(x=><option key={x.id} value={x.id}>{x.nome}</option>)}
-              </Select>
+            <div className="text-center mb-4">
+              <div className="w-14 h-14 mx-auto rounded-2xl grad-brand grid place-items-center text-white mb-2"><Icon d={I.user} className="w-7 h-7"/></div>
+              <p className="text-sm text-slate-500">Digite seu <b>CPF</b> para registrar o ponto. Só quem está na <b>escala de hoje</b> consegue bater.</p>
+            </div>
+            <Field label="Seu CPF">
+              <Input value={cpf} inputMode="numeric" placeholder="000.000.000-00"
+                onChange={e=>{setCpf(e.target.value); setCpfErr("");}}
+                onKeyDown={e=>{ if(e.key==="Enter") buscarCpf(); }}/>
             </Field>
-            <div className="mt-3"><Field label="Unidade">
-              <Select value={unidadeId} onChange={e=>setUnidadeId(Number(e.target.value))}>{unidades.map(u=><option key={u.id} value={u.id}>{u.nome}</option>)}</Select>
-            </Field></div>
-            {mode==="free" && <div className={cx("mt-4 p-3 rounded-xl flex items-center gap-2 text-sm", escalado?"bg-emerald-50 text-emerald-700":"bg-rose-50 text-rose-700")}>
-              <Icon d={escalado?I.check:I.x} className="w-4 h-4"/>
-              {escalado?"Freelancer escalado hoje — pode registrar":"Não está escalado hoje. Inclua-o na escala para liberar o ponto."}
-            </div>}
-            <Btn className="w-full mt-4" disabled={mode==="free"&&!escalado} icon={I.arrow} variant={accent==="clt"?"primary":"free"} onClick={()=>setStep(1)}>Continuar</Btn>
+            {cpfErr && <div className="mt-3 p-3 rounded-xl bg-rose-50 text-rose-700 text-sm flex items-center gap-2"><Icon d={I.x} className="w-4 h-4 shrink-0"/>{cpfErr}</div>}
+            <Btn className="w-full mt-4" icon={I.arrow} variant={accent==="clt"?"primary":"free"} onClick={buscarCpf}>Continuar</Btn>
           </div>}
 
           {step===1 && <div className="fade-in">
@@ -1028,23 +1076,39 @@ function ColabForm({ tipo, inicial, onSalvar, onClose }) {
     rd.onload=()=>setF(p=>({...p,docs:{...(p.docs||{}),[k]:{nome:file.name,dados:rd.result}}}));
     rd.readAsDataURL(file); };
   const rmDoc=(k)=>setF(p=>{ const d={...(p.docs||{})}; delete d[k]; return {...p,docs:d}; });
-  const nomeOk=f.nome.trim().split(" ").filter(Boolean).length>=2;
-  const valido = tipo==="clt" ? nomeOk
-    : nomeOk && !!f.cargo && !!(f.cpf||"").trim() && !!f.tipoPix && !!(f.pix||"").trim() && !!(f.banco||"").trim();
-  const req=(l)=> tipo==="free" ? l+" *" : l;
-  return <div className="p-6">
-    <div className="flex items-center justify-between mb-5">
-      <h3 className="text-lg font-bold text-slate-900">{inicial?"Editar":tipo==="clt"?"Contratar CLT":"Novo freelancer"}</h3>
-      <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><Icon d={I.x}/></button>
+  const [showDocs,setShowDocs]=useState(false);
+  const nDocsUp=DOC_TIPOS.filter(([k])=>f.docs&&f.docs[k]).length;
+  const nomeOk=f.nome.trim().length>=2;
+  // Lista clara do que falta — evita "botão desativado sem explicação"
+  const faltando=[];
+  if(!nomeOk) faltando.push("nome");
+  if(!f.foto) faltando.push("foto");
+  if(!(f.cpf||"").trim()) faltando.push("CPF");
+  if(tipo==="free"){
+    if(!f.cargo) faltando.push("cargo");
+    if(!f.tipoPix) faltando.push("tipo Pix");
+    if(!(f.pix||"").trim()) faltando.push("chave Pix");
+    if(!(f.banco||"").trim()) faltando.push("nome do banco");
+  }
+  const valido = faltando.length===0;
+  const req=(l)=> l+" *";
+  return <div className="flex flex-col max-h-[85vh]">
+    {/* Cabeçalho fixo com botão de VOLTAR intuitivo */}
+    <div className="flex items-center gap-2 px-5 py-3 border-b border-slate-100 shrink-0">
+      <button onClick={onClose} className="flex items-center gap-1 text-sm font-semibold text-slate-600 hover:text-slate-900 -ml-1 pr-2"><Icon d={I.arrow} className="w-4 h-4 rotate-180"/>Voltar</button>
+      <h3 className="text-base font-bold text-slate-900 ml-1">{inicial?"Editar":tipo==="clt"?"Contratar CLT":"Novo freelancer"}</h3>
+      <button onClick={onClose} className="ml-auto text-slate-400 hover:text-slate-600"><Icon d={I.x}/></button>
     </div>
-    {/* Foto do colaborador (referência facial) — obrigatória p/ o check-in reconhecer a pessoa */}
-    <div className="flex items-center gap-4 mb-4 p-3 rounded-2xl border border-slate-200 bg-slate-50/60">
-      <div className="w-20 h-20 rounded-2xl overflow-hidden bg-white ring-1 ring-slate-200 grid place-items-center shrink-0">
-        {f.foto ? <img src={f.foto} alt="foto" className="w-full h-full object-cover"/> : <Icon d={I.camera} className="w-7 h-7 text-slate-300"/>}
+    {/* Corpo rolável */}
+    <div className="overflow-y-auto px-5 py-4">
+    {/* Foto do colaborador (OBRIGATÓRIA) — referência facial do check-in */}
+    <div className={cx("flex items-center gap-3 mb-3 p-3 rounded-2xl border", f.foto?"border-emerald-200 bg-emerald-50/40":"border-rose-200 bg-rose-50/40")}>
+      <div className="w-16 h-16 rounded-2xl overflow-hidden bg-white ring-1 ring-slate-200 grid place-items-center shrink-0">
+        {f.foto ? <img src={f.foto} alt="foto" className="w-full h-full object-cover"/> : <Icon d={I.camera} className="w-6 h-6 text-slate-300"/>}
       </div>
       <div className="flex-1 min-w-0">
-        <div className="text-sm font-semibold text-slate-800">Foto do colaborador</div>
-        <div className="text-xs text-slate-500 mb-2">Tire uma foto ou envie do dispositivo — usada como referência no check-in.</div>
+        <div className="text-sm font-semibold text-slate-800">Foto do colaborador <span className="text-rose-500">*</span></div>
+        <div className="text-xs text-slate-500 mb-2">{f.foto?"Foto adicionada ✓":"Obrigatória — tire uma foto ou envie do dispositivo."}</div>
         <div className="flex gap-2">
           <label className="cursor-pointer">
             <span className="inline-flex items-center gap-1 text-xs font-semibold text-white bg-brand-600 hover:bg-brand-700 px-3 py-1.5 rounded-lg"><Icon d={I.camera} className="w-3.5 h-3.5"/>{f.foto?"Trocar foto":"Tirar/enviar foto"}</span>
@@ -1054,7 +1118,7 @@ function ColabForm({ tipo, inicial, onSalvar, onClose }) {
         </div>
       </div>
     </div>
-    <div className="grid sm:grid-cols-2 gap-4">
+    <div className="grid sm:grid-cols-2 gap-3">
       <div className="sm:col-span-2"><Field label={req("Nome e sobrenome")}><Input value={f.nome} onChange={e=>set("nome",e.target.value)} placeholder="Ex.: João da Silva"/></Field></div>
       {tipo==="clt" ? <>
         <Field label="Cargo / função"><Select value={f.cargo} onChange={e=>setCargoClt(e.target.value)}>{CARGOS.map(c=><option key={c}>{c}</option>)}</Select></Field>
@@ -1075,9 +1139,12 @@ function ColabForm({ tipo, inicial, onSalvar, onClose }) {
       <Field label={req("Nome do Banco")}><Input value={f.banco} onChange={e=>set("banco",e.target.value)} placeholder="Ex.: Nubank, Itaú, Caixa"/></Field>
     </div>
 
-    {tipo==="clt" && <div className="mt-5">
-      <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2 flex items-center gap-1.5"><Icon d={I.doc} className="w-3.5 h-3.5"/> Documentos <span className="normal-case font-normal text-slate-400">— foto pelo celular ou arquivo do PC</span></div>
-      <div className="grid sm:grid-cols-2 gap-2">
+    {tipo==="clt" && <div className="mt-4">
+      <button onClick={()=>setShowDocs(v=>!v)} className="w-full flex items-center gap-2 text-xs font-semibold text-slate-600 hover:text-slate-900 py-2 px-3 rounded-xl bg-slate-50 border border-slate-200">
+        <Icon d={I.doc} className="w-3.5 h-3.5"/> Documentos (opcional) {nDocsUp>0 && <Badge tone="green">{nDocsUp} enviado(s)</Badge>}
+        <Icon d={I.arrow} className={cx("w-3.5 h-3.5 ml-auto transition", showDocs?"rotate-90":"rotate-0")}/>
+      </button>
+      {showDocs && <div className="grid sm:grid-cols-2 gap-2 mt-2">
         {DOC_TIPOS.map(([k,l])=>{ const arq=f.docs?.[k];
           return <div key={k} className={cx("flex items-center gap-2.5 p-2.5 rounded-xl border", arq?"border-emerald-200 bg-emerald-50/40":"border-slate-200")}>
             <div className={cx("w-8 h-8 rounded-lg grid place-items-center shrink-0", arq?"bg-emerald-100 text-emerald-600":"bg-slate-100 text-slate-400")}><Icon d={I.doc} className="w-4 h-4"/></div>
@@ -1090,16 +1157,18 @@ function ColabForm({ tipo, inicial, onSalvar, onClose }) {
               <input type="file" accept="image/*,application/pdf" capture="environment" className="hidden" onChange={e=>upDoc(k,e.target.files&&e.target.files[0])}/>
             </label>
           </div>;})}
-      </div>
+      </div>}
     </div>}
-    {tipo==="free" && <p className="text-xs text-slate-500 mt-3 flex items-center gap-1"><Icon d={I.coffee} className="w-3.5 h-3.5"/> Cadastro de freelancer é simplificado — sem a documentação exigida do CLT.</p>}
-
     {tipo==="clt" && !inicial && <p className="text-xs text-slate-500 mt-3 flex items-center gap-1"><Icon d={I.calendar} className="w-3.5 h-3.5"/> Ao cadastrar, o CLT entra automaticamente na escala fixa ({f.escala}) da sua casa.</p>}
-    <div className="flex gap-2 mt-6">
-      <Btn variant="ghost" className="flex-1" onClick={onClose}>Cancelar</Btn>
-      <Btn className="flex-1" disabled={!valido} icon={I.check} variant={tipo==="clt"?"primary":"free"} onClick={()=>onSalvar(f)}>{inicial?"Salvar alterações":"Cadastrar"}</Btn>
     </div>
-    {!valido && <p className="text-xs text-rose-500 mt-2 text-center">{tipo==="free"?"Preencha os campos obrigatórios (*).":"Informe nome e sobrenome."}</p>}
+    {/* Rodapé fixo — sempre visível, com o que falta */}
+    <div className="border-t border-slate-100 px-5 py-3 shrink-0 bg-white rounded-b-3xl">
+      {!valido && <p className="text-xs text-rose-500 mb-2 text-center">Falta preencher: <b>{faltando.join(", ")}</b></p>}
+      <div className="flex gap-2">
+        <Btn variant="ghost" onClick={onClose}>Voltar</Btn>
+        <Btn className="flex-1" disabled={!valido} icon={I.check} variant={tipo==="clt"?"primary":"free"} onClick={()=>onSalvar(f)}>{inicial?"Salvar alterações":"Cadastrar"}</Btn>
+      </div>
+    </div>
   </div>;
 }
 
@@ -2031,13 +2100,41 @@ function usePontoHash() {
   useEffect(()=>{ const on=()=>setMode(read()); window.addEventListener("hashchange",on); return ()=>window.removeEventListener("hashchange",on); },[]);
   return [mode, ()=>{ if(window.location.hash){ window.history.replaceState(null,"",window.location.pathname+window.location.search); } setMode(null); }];
 }
+// Instruções básicas no PRIMEIRO acesso
+function Onboarding({ onClose }){
+  const passos=[
+    { d:I.user, t:"Colaborador registra por CPF", s:"Na tela inicial, o colaborador escolhe o vínculo e digita o CPF. Só quem está na escala do dia consegue bater o ponto." },
+    { d:I.camera, t:"Foto + GPS no check-in", s:"O ponto é registrado com foto (selfie) e localização dentro da cerca da unidade — tudo conforme a Portaria 671/2021." },
+    { d:I.calendar, t:"Gestor monta a escala", s:"Em “Acesso do gestor”, cadastre colaboradores (com foto) e monte a escala visual por unidade, com horários." },
+    { d:I.broadcast, t:"Acompanhe ao vivo", s:"No painel “Ponto ao vivo” você vê quem está trabalhando, o tempo em jornada e a apuração de horas e extras." },
+  ];
+  return <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
+    <div className="bg-white rounded-3xl w-full max-w-lg overflow-hidden" onClick={e=>e.stopPropagation()}>
+      <div className="grad-ink grad-hero p-6 text-white text-center">
+        <div className="flex justify-center mb-2"><Logo light/></div>
+        <h2 className="text-2xl font-extrabold">Bem-vindo ao Wilami Ponto</h2>
+        <p className="text-white/70 text-sm mt-1">Como funciona, em 4 passos:</p>
+      </div>
+      <div className="p-5 space-y-3">
+        {passos.map((p,i)=><div key={i} className="flex items-start gap-3">
+          <div className="w-9 h-9 rounded-xl grad-brand grid place-items-center text-white shrink-0"><Icon d={p.d} className="w-4 h-4"/></div>
+          <div><div className="font-bold text-slate-900 text-sm">{i+1}. {p.t}</div><div className="text-sm text-slate-500">{p.s}</div></div>
+        </div>)}
+        <Btn className="w-full mt-2" size="lg" icon={I.arrow} onClick={onClose}>Começar</Btn>
+      </div>
+    </div>
+  </div>;
+}
 function App() {
   const [logged,setLogged]=useState(false);
   const [pontoMode,fecharPonto]=usePontoHash();
+  const [onboard,setOnboard]=useState(()=>{ try{ return !localStorage.getItem("wp_onboarded"); }catch{ return true; } });
+  const fecharOnboard=()=>{ try{ localStorage.setItem("wp_onboarded","1"); }catch{} setOnboard(false); };
   return <StoreProvider>
     {pontoMode ? <PontoKiosk mode={pontoMode} onClose={fecharPonto}/>
      : !logged ? <LoginScreen onLogin={()=>setLogged(true)}/>
      : <Shell/>}
+    {onboard && !pontoMode && <Onboarding onClose={fecharOnboard}/>}
   </StoreProvider>;
 }
 ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
