@@ -29,6 +29,18 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<!-- Firebase (banco central em tempo real — Firestore) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js"></script>
+<script>
+(function(){
+  try{
+    var cfg={apiKey:"AIzaSyAVSLJ_YO2_fP-IWHk5-5IuiPZ0WKyIUgM",authDomain:"twilami-ponto.firebaseapp.com",projectId:"twilami-ponto",storageBucket:"twilami-ponto.firebasestorage.app",messagingSenderId:"800456974595",appId:"1:800456974595:web:2ef4bc5a40d5627e7fc936"};
+    if(window.firebase&&firebase.initializeApp){ firebase.initializeApp(cfg); window.__WPDB=firebase.firestore(); try{ window.__WPAUTH=firebase.auth(); }catch(e){} }
+  }catch(e){ console.warn("Firebase indisponível — usando armazenamento local:", e && e.message); }
+})();
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
 <script>
@@ -204,11 +216,32 @@ const useClock = () => {
   useEffect(()=>{ const id=setInterval(()=>setT(new Date()),1000); return ()=>clearInterval(id); },[]);
   return t;
 };
-// Persistência no dispositivo (localStorage) — cadastros e escala NÃO somem ao recarregar.
+// Banco central em TEMPO REAL (Firestore) com fallback para localStorage.
+// Cada "fatia" do estado (clts, freelas, escala, registros...) vira um documento
+// em "wilami/{key}". onSnapshot mantém todos os aparelhos sincronizados ao vivo.
 function usePersist(key, initial){
   const [v,setV]=useState(()=>{ try{ const s=localStorage.getItem("wp_"+key); return s!=null?JSON.parse(s):initial; }catch{ return initial; } });
-  useEffect(()=>{ try{ localStorage.setItem("wp_"+key, JSON.stringify(v)); }catch{} },[key,v]);
-  return [v,setV];
+  const remoto=useRef(false);
+  useEffect(()=>{
+    const db=window.__WPDB; if(!db) return;
+    try{
+      return db.collection("wilami").doc(key).onSnapshot(function(snap){
+        const d=snap && snap.exists ? snap.data() : null;
+        if(d && Object.prototype.hasOwnProperty.call(d,"v")){ remoto.current=true; setV(d.v); }
+      }, function(){ /* sem permissão/erro — segue com local */ });
+    }catch(e){ return; }
+  },[key]);
+  const setBoth=(upd)=>{
+    setV(prev=>{
+      const nv = typeof upd==="function" ? upd(prev) : upd;
+      try{ localStorage.setItem("wp_"+key, JSON.stringify(nv)); }catch{}
+      const db=window.__WPDB;
+      if(db && !remoto.current){ try{ db.collection("wilami").doc(key).set({v:nv}); }catch(e){} }
+      remoto.current=false;
+      return nv;
+    });
+  };
+  return [v,setBoth];
 }
 function haversine(la1,lo1,la2,lo2){
   const R=6371000, r=Math.PI/180, dLa=(la2-la1)*r, dLo=(lo2-lo1)*r;
@@ -324,6 +357,19 @@ function montarPDF(titulo, linhas){
 }
 // tempo em jornada -> "8h07:35"
 const fmtHMS=(sec)=>{ sec=Math.max(0,sec|0); const h=(sec/3600)|0, m=((sec%3600)/60)|0, s=sec%60; return `${h}h${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`; };
+// Comprime imagem (dataURL) para caber no banco central — reduz p/ ~máx 640px JPEG.
+function compressImg(dataUrl, max=640, q=0.62){
+  return new Promise(function(res){
+    try{
+      const img=new Image();
+      img.onload=function(){ let w=img.width,h=img.height; const s=Math.min(1,max/Math.max(w,h)); w=Math.round(w*s); h=Math.round(h*s);
+        const c=document.createElement("canvas"); c.width=w; c.height=h; c.getContext("2d").drawImage(img,0,0,w,h);
+        try{ res(c.toDataURL("image/jpeg",q)); }catch(e){ res(dataUrl); } };
+      img.onerror=function(){ res(dataUrl); };
+      img.src=dataUrl;
+    }catch(e){ res(dataUrl); }
+  });
+}
 // Copiar texto — funciona também em file:// e navegadores sem clipboard API
 function copyText(t){
   try{ if(navigator.clipboard && window.isSecureContext){ navigator.clipboard.writeText(t); return true; } }catch{}
@@ -480,6 +526,25 @@ const StatCard = ({icon, label, value, delta, tone="brand", chart}) => {
 function LoginScreen({ onLogin }) {
   const [tab,setTab]=useState("colab");
   const irPonto=(m)=>{ window.location.hash="ponto-"+m; window.dispatchEvent(new HashChangeEvent("hashchange")); };
+  const auth=typeof window!=="undefined"?window.__WPAUTH:null;
+  const [email,setEmail]=useState("");
+  const [senha,setSenha]=useState("");
+  const [modo,setModo]=useState("entrar"); // entrar | criar
+  const [erroAuth,setErroAuth]=useState("");
+  const [carregando,setCarregando]=useState(false);
+  const traduz=(c)=>({ "auth/invalid-email":"E-mail inválido.","auth/missing-password":"Digite a senha.","auth/weak-password":"A senha precisa ter ao menos 6 caracteres.","auth/email-already-in-use":"Este e-mail já tem conta — use Entrar.","auth/invalid-credential":"E-mail ou senha incorretos.","auth/user-not-found":"Conta não encontrada — crie uma conta.","auth/wrong-password":"Senha incorreta." }[c]||("Erro: "+c));
+  // Permite login por USUÁRIO (ex.: "Wilami") ou por e-mail. Usuário vira e-mail interno.
+  const emailLogin=(v)=>{ v=(v||"").trim(); return v.includes("@")?v:(v.toLowerCase().replace(/\s+/g,"")+"@wilami.app"); };
+  const submeterAuth=async()=>{
+    if(!auth){ onLogin(); return; }
+    setErroAuth(""); setCarregando(true);
+    try{
+      const em=emailLogin(email);
+      if(modo==="criar") await auth.createUserWithEmailAndPassword(em,senha);
+      else await auth.signInWithEmailAndPassword(em,senha);
+    }catch(e){ setErroAuth(traduz(e.code||"")); }
+    setCarregando(false);
+  };
   return <div className="min-h-screen grad-ink grad-hero grid lg:grid-cols-2">
     <div className="hidden lg:flex flex-col justify-between p-12 text-white">
       <Logo light size="text-2xl"/>
@@ -504,18 +569,16 @@ function LoginScreen({ onLogin }) {
             <button key={k} onClick={()=>setTab(k)} className={cx("flex-1 py-2 rounded-lg text-sm font-semibold transition", tab===k?"bg-white shadow-soft text-brand-700":"text-slate-500")}>{l}</button>)}
         </div>
         {tab==="admin" ? <>
-          <h2 className="text-xl font-bold text-slate-900">Bem-vindo de volta 👋</h2>
-          <p className="text-slate-500 text-sm mt-1">Acesse o painel de gestão.</p>
+          <h2 className="text-xl font-bold text-slate-900">{modo==="criar"?"Criar conta do gestor":"Acesso do gestor"}</h2>
+          <p className="text-slate-500 text-sm mt-1">{modo==="criar"?"Crie sua conta para gerenciar o sistema.":"Entre com seu e-mail e senha."}</p>
           <div className="mt-6 space-y-3">
-            <Input placeholder="E-mail" defaultValue="gestor@wilami.com"/>
-            <Input type="password" placeholder="Senha" defaultValue="••••••••"/>
+            <Input placeholder="E-mail ou usuário (ex.: Wilami)" type="text" value={email} onChange={e=>setEmail(e.target.value)}/>
+            <Input type="password" placeholder="Senha (mín. 6 caracteres)" value={senha} onChange={e=>setSenha(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")submeterAuth();}}/>
           </div>
-          <Btn className="w-full mt-5" size="lg" onClick={onLogin} icon={I.arrow}>Entrar no painel</Btn>
-          <div className="flex items-center gap-3 my-5"><div className="h-px bg-slate-200 flex-1"/><span className="text-xs text-slate-400">ou</span><div className="h-px bg-slate-200 flex-1"/></div>
-          <button onClick={onLogin} className="w-full py-3 rounded-xl border border-slate-200 hover:bg-slate-50 flex items-center justify-center gap-3 font-semibold text-slate-700">
-            <svg className="w-5 h-5" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A11 11 0 0 0 12 23z"/><path fill="#FBBC05" d="M5.84 14.1a6.6 6.6 0 0 1 0-4.2V7.06H2.18a11 11 0 0 0 0 9.88z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1A11 11 0 0 0 2.18 7.06l3.66 2.84C6.71 7.31 9.14 5.38 12 5.38z"/></svg>
-            Continuar com Google
-          </button>
+          {erroAuth && <p className="text-sm text-rose-500 mt-3">{erroAuth}</p>}
+          <Btn className="w-full mt-5" size="lg" onClick={submeterAuth} disabled={carregando} icon={I.arrow}>{carregando?"Aguarde…":(modo==="criar"?"Criar conta e entrar":"Entrar no painel")}</Btn>
+          <button onClick={()=>{setModo(modo==="criar"?"entrar":"criar");setErroAuth("");}} className="w-full mt-3 text-sm text-brand-700 font-semibold hover:underline">{modo==="criar"?"Já tenho conta — Entrar":"Primeiro acesso? Criar conta do gestor"}</button>
+          {!auth && <p className="text-xs text-amber-600 mt-3 text-center">Modo offline (sem login) — os dados ficam só neste aparelho.</p>}
         </> : <>
           <h2 className="text-xl font-bold text-slate-900">Registrar meu ponto</h2>
           <p className="text-slate-500 text-sm mt-1">Escolha seu vínculo e informe seu CPF. Só quem está na escala de hoje registra.</p>
@@ -912,9 +975,10 @@ function PontoKiosk({ mode, onClose }) {
   const [cadOk,setCadOk]=useState(false);
   const videoRef=useRef(null); const streamRef=useRef(null);
   const clock=useClock();
-  const unidade=unidades.find(u=>u.id===unidadeId)||unidades[0];
   const accent = mode==="clt"?"brand":"free";
   const pSel=(mode==="clt"?clts:freelas).find(x=>x.id===pid);
+  // LOCAL DINÂMICO: a casa vem do cadastro do colaborador identificado pelo CPF (não é fixo).
+  const unidade=(pSel && unidades.find(u=>u.id===pSel.unidade)) || unidades.find(u=>u.id===unidadeId) || unidades[0];
   const escalado = mode==="clt" || (pid && freelancerEscaladoHoje(pid));
 
   const startCam=async()=>{ setCamErr(null);
@@ -924,7 +988,7 @@ function PontoKiosk({ mode, onClose }) {
   useEffect(()=>{ if(fluxo==="registro"&&step===1&&!foto) startCam(); return stopCam; },[step,fluxo]);
 
   const capturar=()=>{ const v=videoRef.current;
-    if(v&&v.videoWidth){ const c=document.createElement("canvas"); c.width=v.videoWidth; c.height=v.videoHeight; c.getContext("2d").drawImage(v,0,0); setFoto(c.toDataURL("image/jpeg",0.8)); }
+    if(v&&v.videoWidth){ const c=document.createElement("canvas"); c.width=v.videoWidth; c.height=v.videoHeight; c.getContext("2d").drawImage(v,0,0); compressImg(c.toDataURL("image/jpeg",0.8)).then(setFoto); }
     else setFoto("data:image/svg+xml;utf8,"+encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' width='300' height='300'><rect width='300' height='300' fill='#1e1b4b'/><circle cx='150' cy='120' r='55' fill='${accent==="clt"?"#6366f1":"#f97316"}'/><rect x='80' y='190' width='140' height='90' rx='45' fill='${accent==="clt"?"#6366f1":"#f97316"}'/><text x='150' y='285' font-size='16' fill='#fff' text-anchor='middle' font-family='sans-serif'>selfie simulada</text></svg>`));
     stopCam(); };
   const pegarGeo=()=>{ setGeoErr(null);
@@ -975,7 +1039,7 @@ function PontoKiosk({ mode, onClose }) {
         : <>
           <div className="text-center mb-5">
             <div className="text-4xl font-extrabold tracking-tight text-slate-900 tabular-nums">{clock.toLocaleTimeString("pt-BR")}</div>
-            <div className="text-slate-500 text-sm mt-1">{unidade?.nome}</div>
+            <div className="text-slate-500 text-sm mt-1">{pSel ? <>Sua casa: <b className="text-slate-700">{unidade?.nome}</b></> : "Identifique-se pelo CPF"}</div>
           </div>
 
           {step===0 && <div className="fade-in">
@@ -1003,7 +1067,7 @@ function PontoKiosk({ mode, onClose }) {
                   <Btn className="flex-1" icon={I.camera} onClick={capturar} variant={accent==="clt"?"primary":"free"}>Capturar selfie</Btn>
                   <label className="cursor-pointer">
                     <span className="inline-flex items-center gap-1 text-sm font-semibold rounded-xl px-4 py-2.5 border border-slate-200 text-slate-700 hover:bg-slate-50"><Icon d={I.upload} className="w-4 h-4"/>Foto</span>
-                    <input type="file" accept="image/*" capture="user" className="hidden" onChange={e=>{ const fl=e.target.files&&e.target.files[0]; if(fl){ const rd=new FileReader(); rd.onload=()=>{stopCam();setFoto(rd.result);}; rd.readAsDataURL(fl); } }}/>
+                    <input type="file" accept="image/*" capture="user" className="hidden" onChange={e=>{ const fl=e.target.files&&e.target.files[0]; if(fl){ const rd=new FileReader(); rd.onload=async()=>{stopCam();setFoto(await compressImg(rd.result));}; rd.readAsDataURL(fl); } }}/>
                   </label>
                 </>
                 : <><Btn variant="ghost" onClick={()=>{setFoto(null);startCam();}}>Refazer</Btn>
@@ -1069,11 +1133,11 @@ function ColabForm({ tipo, inicial, onSalvar, onClose }) {
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
   // Foto do colaborador no CADASTRO (referência facial). Usa input de arquivo/câmera:
   // funciona em file://, no PC e abre a câmera no celular (capture="user").
-  const upFoto=(file)=>{ if(!file) return; const rd=new FileReader(); rd.onload=()=>set("foto",rd.result); rd.readAsDataURL(file); };
+  const upFoto=(file)=>{ if(!file) return; const rd=new FileReader(); rd.onload=async()=>set("foto", await compressImg(rd.result)); rd.readAsDataURL(file); };
   const setCargoClt=(cg)=>setF(p=>({...p,cargo:cg,setor:SETOR_POR_CARGO[cg]||p.setor}));
   const setCargoFree=(nm)=>{ const c=cargosFreela.find(x=>x.nome===nm); setF(p=>({...p,cargo:nm,valor:c?c.valor:p.valor,setor:SETOR_POR_CARGO[nm]||p.setor})); };
   const upDoc=(k,file)=>{ if(!file) return; const rd=new FileReader();
-    rd.onload=()=>setF(p=>({...p,docs:{...(p.docs||{}),[k]:{nome:file.name,dados:rd.result}}}));
+    rd.onload=async()=>{ const dados=file.type&&file.type.indexOf("image")===0?await compressImg(rd.result):rd.result; setF(p=>({...p,docs:{...(p.docs||{}),[k]:{nome:file.name,dados}}})); };
     rd.readAsDataURL(file); };
   const rmDoc=(k)=>setF(p=>{ const d={...(p.docs||{})}; delete d[k]; return {...p,docs:d}; });
   const [showDocs,setShowDocs]=useState(false);
@@ -1683,10 +1747,10 @@ function Dossie() {
   const salvarFalta=()=>{ addFalta(key,nf); setNf({...nf,obs:""}); toast("Falta/atestado registrado"); };
   const salvarFeedback=()=>{ if(!nb.texto.trim())return; addFeedback(key,nb); setNb({...nb,texto:""}); toast("Feedback adicionado ao livro de recordações"); };
   const upDocDossie=(k,file)=>{ if(!file) return; const rd=new FileReader();
-    rd.onload=()=>{ anexarDoc(sel.tipo,sel.p.id,k,{nome:file.name,dados:rd.result}); toast("Documento anexado à pasta"); };
+    rd.onload=async()=>{ const dados=file.type&&file.type.indexOf("image")===0?await compressImg(rd.result):rd.result; anexarDoc(sel.tipo,sel.p.id,k,{nome:file.name,dados}); toast("Documento anexado à pasta"); };
     rd.readAsDataURL(file); };
   const upAnexo=(categoria,file)=>{ if(!file) return; const rd=new FileReader();
-    rd.onload=()=>{ addAnexo(key,{categoria,nome:file.name,data:"2026-07-20",arquivo:rd.result}); toast("Documento adicional anexado"); };
+    rd.onload=async()=>{ const arquivo=file.type&&file.type.indexOf("image")===0?await compressImg(rd.result):rd.result; addAnexo(key,{categoria,nome:file.name,data:"2026-07-20",arquivo}); toast("Documento adicional anexado"); };
     rd.readAsDataURL(file); };
 
   const historico = sel ? [
@@ -2036,7 +2100,7 @@ const NAV = [
 ];
 const TITULOS={dashboard:"Painel",escala:"Escala por unidade",ponto:"Ponto ao vivo",clt:"Colaboradores CLT",freelas:"Freelancers",dossie:"Dossiê do colaborador",equipe:"Equipe & permissões",relatorios:"Relatórios",financeiro:"Financeiro",pagamentos:"Pagamentos",unidades:"Unidades",links:"Links & QR",config:"Configurações",ajuda:"Ajuda"};
 
-function Sidebar({view,setView,open,setOpen}) {
+function Sidebar({view,setView,open,setOpen,onLogout}) {
   return <>
     {open && <div className="fixed inset-0 bg-black/30 z-30 lg:hidden" onClick={()=>setOpen(false)}/>}
     <aside className={cx("fixed lg:sticky top-0 z-40 h-screen w-64 shrink-0 grad-ink text-white flex flex-col transition-transform lg:translate-x-0", open?"translate-x-0":"-translate-x-full")}>
@@ -2056,13 +2120,14 @@ function Sidebar({view,setView,open,setOpen}) {
       </div>
       <div className="p-3 border-t border-white/10">
         <div className="flex items-center gap-3 px-2 py-2"><Avatar name="Wilami Gestor" tone="brand"/>
-          <div className="flex-1 min-w-0"><div className="text-sm font-semibold truncate">Wilami Gestor</div><div className="text-xs text-white/50 truncate">Proprietário</div></div></div>
+          <div className="flex-1 min-w-0"><div className="text-sm font-semibold truncate">Wilami Gestor</div><div className="text-xs text-white/50 truncate">Proprietário</div></div>
+          {onLogout && <button onClick={onLogout} title="Sair" className="w-8 h-8 rounded-lg text-white/60 hover:text-white hover:bg-white/10 grid place-items-center"><Icon d={I.logout||I.arrow} className="w-4 h-4"/></button>}</div>
       </div>
     </aside>
   </>;
 }
 
-function Shell() {
+function Shell({ onLogout }) {
   const [view,setView]=useState("dashboard");
   const [sbOpen,setSbOpen]=useState(false);
   const [toasts,setToasts]=useState([]);
@@ -2071,7 +2136,7 @@ function Shell() {
     dossie:<Dossie/>, equipe:<Equipe/>, relatorios:<Relatorios/>, financeiro:<Financeiro/>, pagamentos:<Pagamentos/>, unidades:<Unidades/>, links:<LinksQR/>, config:<Configuracoes/>, ajuda:<Ajuda/> };
   return <ToastCtx.Provider value={pushToast}>
     <div className="flex min-h-screen">
-      <Sidebar view={view} setView={setView} open={sbOpen} setOpen={setSbOpen}/>
+      <Sidebar view={view} setView={setView} open={sbOpen} setOpen={setSbOpen} onLogout={onLogout}/>
       <div className="flex-1 min-w-0 flex flex-col">
         <header className="sticky top-0 z-20 glass border-b border-slate-200/70 px-4 lg:px-8 py-1.5 flex items-center gap-3">
           <button className="lg:hidden text-slate-600" onClick={()=>setSbOpen(true)}><Icon d={I.menu}/></button>
@@ -2126,15 +2191,21 @@ function Onboarding({ onClose }){
   </div>;
 }
 function App() {
-  const [logged,setLogged]=useState(false);
+  const [localLogged,setLocalLogged]=useState(false);
+  const [user,setUser]=useState(null);
+  const [authReady,setAuthReady]=useState(()=>!window.__WPAUTH);
   const [pontoMode,fecharPonto]=usePontoHash();
   const [onboard,setOnboard]=useState(()=>{ try{ return !localStorage.getItem("wp_onboarded"); }catch{ return true; } });
   const fecharOnboard=()=>{ try{ localStorage.setItem("wp_onboarded","1"); }catch{} setOnboard(false); };
+  useEffect(()=>{ const a=window.__WPAUTH; if(!a) return; return a.onAuthStateChanged(u=>{ setUser(u); setAuthReady(true); }); },[]);
+  const logged = window.__WPAUTH ? !!user : localLogged;
+  const logout=()=>{ try{ window.__WPAUTH&&window.__WPAUTH.signOut(); }catch(e){} setLocalLogged(false); };
   return <StoreProvider>
     {pontoMode ? <PontoKiosk mode={pontoMode} onClose={fecharPonto}/>
-     : !logged ? <LoginScreen onLogin={()=>setLogged(true)}/>
-     : <Shell/>}
-    {onboard && !pontoMode && <Onboarding onClose={fecharOnboard}/>}
+     : !authReady ? <div className="min-h-screen grad-ink grad-hero grid place-items-center text-white"><div className="text-center"><div className="w-10 h-10 mx-auto rounded-full border-2 border-white/30 border-t-white animate-spin mb-3"/><Logo light/></div></div>
+     : logged ? <Shell onLogout={logout}/>
+     : <LoginScreen onLogin={()=>setLocalLogged(true)}/>}
+    {onboard && !pontoMode && !logged && <Onboarding onClose={fecharOnboard}/>}
   </StoreProvider>;
 }
 ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
