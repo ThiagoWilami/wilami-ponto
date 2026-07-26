@@ -439,6 +439,27 @@ function useCadastros(){
   const remove=(docId)=>{ const db=window.__WPDB; if(db){ try{ db.collection("cadastros").doc(docId).delete(); }catch(e){} } };
   return [items,{add,update,remove}];
 }
+
+// Data de hoje (AAAA-MM-DD, fuso local) — usada para separar os registros do dia.
+function hojeStr(){ const d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+
+// Coleção PÚBLICA de registros de ponto (batidos pelo celular, SEM login).
+// Cada batida é um documento próprio → o celular só CRIA (não sobrescreve nada).
+// O painel "Ponto ao vivo" escuta em tempo real e mostra na hora.
+function useRegistrosPub(){
+  const [items,setItems]=useState([]);
+  useEffect(()=>{
+    const db=window.__WPDB; if(!db) return;
+    try{
+      return db.collection("registros").orderBy("ts","desc").limit(300).onSnapshot(function(snap){
+        const arr=[]; snap.forEach(function(d){ const x=d.data()||{}; arr.push({...x, id:d.id, _docId:d.id}); });
+        setItems(arr);
+      }, function(){ /* sem permissão/erro */ });
+    }catch(e){}
+  },[]);
+  const add=(obj)=>{ const db=window.__WPDB; if(!db) return Promise.reject(new Error("sem-banco")); return db.collection("registros").add(obj); };
+  return [items,{add}];
+}
 function StoreProvider({children}) {
   const [unidades,setUnidades]=usePersist("unidades",INIT_UNIDADES);
   const [cltsBase,setClts]=usePersist("clts",INIT_CLTS);
@@ -448,7 +469,9 @@ function StoreProvider({children}) {
   const clts=[...cltsBase, ...cadAuto.filter(c=>c.tipo==="clt")];
   const freelas=[...freelasBase, ...cadAuto.filter(c=>c.tipo==="free")];
   const [escala,setEscala]=usePersist("escala",escalaInicial());        // por unidade
-  const [registros,setRegistros]=usePersist("registros",[]);           // feed ao vivo (só reais)
+  const [registrosLocal,setRegistrosLocal]=usePersist("registros",[]);  // fallback sem banco
+  const [regPub,regPubOps]=useRegistrosPub();                           // feed ao vivo (coleção pública)
+  const registros = window.__WPDB ? regPub : registrosLocal;            // banco central quando disponível
   const [pontoHist,setPontoHist]=usePersist("pontoHist",INIT_PONTOHIST);// histórico p/ apuração
   const [cargosFreela,setCargosFreela]=usePersist("cargos",INIT_CARGOS_FREELA);
   const [dossie,setDossie]=usePersist("dossie",{});          // { "clt-1": {faltas:[],feedbacks:[]} }
@@ -502,7 +525,11 @@ function StoreProvider({children}) {
   const addRegistro=(r)=>{
     const now=new Date();
     const min = r.min!=null ? r.min : now.getHours()*60+now.getMinutes();
-    setRegistros(prev=>[{...r, min, dia:"hoje", id:Math.random().toString(36).slice(2)}, ...prev].slice(0,60));
+    const rec={...r, min, dia:"hoje", data:hojeStr(), ts:now.getTime()};
+    // Com banco: grava na coleção pública "registros" (funciona SEM login, no celular do colaborador).
+    // Sem banco: cai no armazenamento local (modo demonstração/offline).
+    if(window.__WPDB){ regPubOps.add(rec).catch(function(){ setRegistrosLocal(prev=>[{...rec, id:Math.random().toString(36).slice(2)}, ...prev].slice(0,60)); }); }
+    else { setRegistrosLocal(prev=>[{...rec, id:Math.random().toString(36).slice(2)}, ...prev].slice(0,60)); }
   };
   // freelancer escalado hoje em QUALQUER casa
   const freelancerEscaladoHoje=(pid)=> Object.values(escala).some(dias=> (dias[HOJE_IDX]||[]).some(a=>a.pid===pid && a.tipo==="free" && a.turno!=="folga"));
@@ -836,7 +863,10 @@ const STATUS = {
   faltou:{l:"Faltou",tone:"red",c:"#f43f5e"},
 };
 function PontoLive() {
-  const { registros, clts, freelas, unidades, escala, pontoHist } = useStore();
+  const { registros:registrosAll, clts, freelas, unidades, escala, pontoHist } = useStore();
+  // Só os registros de HOJE alimentam o status ao vivo (a coleção persiste entre os dias).
+  const _hoje=hojeStr();
+  const registros = registrosAll.filter(r=>!r.data || r.data===_hoje);
   const [linkModal,setLinkModal]=useState(null); // null | 'clt' | 'free'
   const clock=useClock();
   const toast=useContext(ToastCtx);
@@ -1002,7 +1032,8 @@ function PontoKiosk({ mode, onClose }) {
     if(!escaladoHojePid(p)){ setCpfErr(p.nome.split(" ")[0]+", você não está na escala de hoje — não é possível registrar ponto."); return; }
     setPid(p.id); setUnidadeId(p.unidade||unidades[0]?.id); setCpfErr("");
     // Já tem jornada ABERTA hoje? (último registro não é Saída) → vai direto p/ tela de tempo + checkout
-    const meus=(registros||[]).filter(r=>r.nome===p.nome);
+    const _hoje=hojeStr();
+    const meus=(registros||[]).filter(r=>r.nome===p.nome && (!r.data || r.data===_hoje));
     const ultimo=meus[0];
     if(ultimo && ultimo.acao!=="Saída"){
       const ent=meus.find(r=>r.acao==="Entrada");
@@ -1607,6 +1638,25 @@ function UnidadeForm({ inicial, onSalvar, onClose }) {
   const [u,setU]=useState(inicial || { nome:"", end:"", lat:-23.55, lng:-46.63, raio:100, cor:"#6366f1" });
   const set=(k,v)=>setU(p=>({...p,[k]:v}));
   const cores=["#6366f1","#f97316","#10b981","#0ea5e9","#e11d48","#8b5cf6"];
+  const [geoMsg,setGeoMsg]=useState(null);      // {tone:'ok'|'erro'|'buscando', txt}
+  const [buscando,setBuscando]=useState(false);
+  // Usa a localização ATUAL do dispositivo (GPS/Wi-Fi) para preencher latitude/longitude.
+  const usarLocalAtual=()=>{
+    if(!navigator.geolocation){ setGeoMsg({tone:"erro",txt:"Seu dispositivo não suporta geolocalização."}); return; }
+    setBuscando(true); setGeoMsg({tone:"buscando",txt:"Obtendo a localização do dispositivo…"});
+    navigator.geolocation.getCurrentPosition(
+      pos=>{ const {latitude,longitude,accuracy}=pos.coords;
+        setU(p=>({...p, lat:Number(latitude.toFixed(6)), lng:Number(longitude.toFixed(6))}));
+        setBuscando(false);
+        setGeoMsg({tone:"ok",txt:"Localização capturada"+(accuracy?` (precisão ~${Math.round(accuracy)} m)`:"")+". Confira no mapa e ajuste a cerca se precisar."}); },
+      err=>{ setBuscando(false);
+        setGeoMsg({tone:"erro",txt: err && err.code===1 ? "Permissão de localização negada. Autorize o acesso no navegador e tente de novo." : "Não foi possível obter a localização agora. Tente novamente."}); },
+      {enableHighAccuracy:true, timeout:10000, maximumAge:0});
+  };
+  const temCoord = Number.isFinite(u.lat) && Number.isFinite(u.lng) && !(u.lat===0 && u.lng===0);
+  // Mapa do Google embutido (sem chave de API) mostrando o ponto marcado.
+  const mapSrc = temCoord ? `https://www.google.com/maps?q=${u.lat},${u.lng}&z=16&hl=pt-BR&output=embed` : null;
+  const mapLink = temCoord ? `https://www.google.com/maps?q=${u.lat},${u.lng}` : null;
   return <div className="p-6">
     <div className="flex items-center justify-between mb-5">
       <h3 className="text-lg font-bold text-slate-900">{inicial?"Editar unidade":"Nova unidade (casa)"}</h3>
@@ -1615,11 +1665,32 @@ function UnidadeForm({ inicial, onSalvar, onClose }) {
     <div className="space-y-4">
       <Field label="Nome da casa"><Input value={u.nome} onChange={e=>set("nome",e.target.value)} placeholder="Ex.: Caktus Osasco"/></Field>
       <Field label="Endereço"><Input value={u.end} onChange={e=>set("end",e.target.value)} placeholder="Rua, número — Cidade/UF"/></Field>
+
+      <Btn variant="ghost" className="w-full" icon={I.gps} onClick={usarLocalAtual} disabled={buscando}>
+        {buscando?"Obtendo localização…":"Usar minha localização atual"}
+      </Btn>
+      {geoMsg && <div className={cx("text-xs rounded-lg px-3 py-2 flex items-center gap-2",
+        geoMsg.tone==="ok"?"bg-emerald-50 text-emerald-700":geoMsg.tone==="erro"?"bg-rose-50 text-rose-600":"bg-slate-50 text-slate-500")}>
+        {geoMsg.tone==="buscando" && <span className="w-3.5 h-3.5 rounded-full border-2 border-slate-300 border-t-slate-500 animate-spin shrink-0"/>}
+        <span>{geoMsg.txt}</span></div>}
+
       <div className="grid grid-cols-3 gap-3">
-        <Field label="Latitude"><Input type="number" step="0.0001" value={u.lat} onChange={e=>set("lat",Number(e.target.value))}/></Field>
-        <Field label="Longitude"><Input type="number" step="0.0001" value={u.lng} onChange={e=>set("lng",Number(e.target.value))}/></Field>
+        <Field label="Latitude"><Input type="number" step="0.000001" value={u.lat} onChange={e=>set("lat",Number(e.target.value))}/></Field>
+        <Field label="Longitude"><Input type="number" step="0.000001" value={u.lng} onChange={e=>set("lng",Number(e.target.value))}/></Field>
         <Field label="Cerca (m)"><Input type="number" value={u.raio} onChange={e=>set("raio",Number(e.target.value))}/></Field>
       </div>
+
+      {mapSrc && <div>
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Localização no mapa</span>
+          <a href={mapLink} target="_blank" rel="noopener" className="text-xs font-semibold text-brand-600 hover:underline flex items-center gap-1"><Icon d={I.link} className="w-3 h-3"/>Abrir no Google Maps</a>
+        </div>
+        <div className="rounded-xl overflow-hidden border border-slate-200 bg-slate-50">
+          <iframe key={u.lat+","+u.lng} title="mapa" src={mapSrc} className="w-full" style={{height:220,border:0}} loading="lazy" referrerPolicy="no-referrer-when-downgrade"/>
+        </div>
+        <p className="text-[11px] text-slate-400 mt-1.5">O pino marca a coordenada. A cerca virtual ({u.raio} m) é o raio em volta desse ponto.</p>
+      </div>}
+
       <Field label="Cor"><div className="flex gap-2">{cores.map(c=><button key={c} onClick={()=>set("cor",c)} className={cx("w-8 h-8 rounded-lg shadow", u.cor===c&&"ring-2 ring-offset-2 ring-slate-400")} style={{background:c}}/>)}</div></Field>
     </div>
     <div className="flex gap-2 mt-6"><Btn variant="ghost" className="flex-1" onClick={onClose}>Cancelar</Btn>
