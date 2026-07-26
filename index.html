@@ -310,18 +310,23 @@ function calcTrabalho(punches){ // punches: [{acao,min}]
   return Math.max(0, fim-ent-interv);
 }
 const JORNADA_CLT=480, TOL=10; // 8h e tolerância 10min (Art. 58 CLT)
-function extrasDe(trabalhado, tipo){
-  const base = tipo==="clt" ? JORNADA_CLT : 0;
-  const saldo = trabalhado - base;
-  return { extras: saldo>TOL?saldo:0, atraso: (tipo==="clt"&&saldo<-TOL)?-saldo:0 };
+// extras: minutos de hora extra "normal" (acima de 8h em dia útil)
+// extras100: minutos de hora extra 100% (trabalho em dia de FOLGA) — Freela nunca gera extras.
+function extrasDe(trabalhado, tipo, ehFolga){
+  if(tipo!=="clt") return { extras:0, extras100:0, atraso:0 };
+  if(ehFolga) return { extras:0, extras100:trabalhado, atraso:0 };   // folga trabalhada = 100%
+  const saldo = trabalhado - JORNADA_CLT;
+  return { extras: saldo>TOL?saldo:0, extras100:0, atraso: saldo<-TOL?-saldo:0 };
 }
-function apurarHoras(registros){ // agrupa por nome+dia e calcula
+// folgaDe(grupo) → true se aquele colaborador estava de FOLGA naquele dia (opcional)
+function apurarHoras(registros, folgaDe){ // agrupa por nome+dia e calcula
   const grupos={};
-  registros.forEach(r=>{ if(r.min==null) return; const k=r.nome+"|"+(r.dia||"hoje");
-    (grupos[k]=grupos[k]||{nome:r.nome,tipo:r.tipo,dia:r.dia||"hoje",unidade:r.unidade,punches:[]}).punches.push({acao:r.acao,min:r.min}); });
+  registros.forEach(r=>{ if(r.min==null) return; const dkey=r.data||r.dia||"hoje"; const k=r.nome+"|"+dkey;
+    (grupos[k]=grupos[k]||{nome:r.nome,tipo:r.tipo,dia:dkey,unidade:r.unidade,punches:[]}).punches.push({acao:r.acao,min:r.min}); });
   return Object.values(grupos).map(g=>{ const t=calcTrabalho(g.punches);
-    if(t==null) return {...g,trabalhado:null,extras:0,atraso:0,completo:false};
-    return {...g,trabalhado:t,...extrasDe(t,g.tipo),completo:true}; });
+    const folga = folgaDe ? !!folgaDe(g) : false;
+    if(t==null) return {...g,trabalhado:null,extras:0,extras100:0,atraso:0,folga,completo:false};
+    return {...g,trabalhado:t,folga,...extrasDe(t,g.tipo,folga),completo:true}; });
 }
 
 /* ===== Documentos: nome/conteúdo real + placeholder PDF válido ===== */
@@ -547,8 +552,30 @@ function StoreProvider({children}) {
   const addFeedback=(key,fb)=>setDossie(p=>({...p,[key]:{...getDossie(key),feedbacks:[{...fb,id:Math.random().toString(36).slice(2)},...getDossie(key).feedbacks]}}));
   const addAnexo=(key,ax)=>setDossie(p=>({...p,[key]:{...getDossie(key),anexos:[{...ax,id:Math.random().toString(36).slice(2)},...(getDossie(key).anexos||[])]}}));
 
-  const value={ unidades,salvarUnidade,excluirUnidade, clts,freelas,salvarClt,salvarFreela,excluirColab,cadastrarPublico, anexarDoc,
-    escala,setEscala, registros,addRegistro, pontoHist, freelancerEscaladoHoje,
+  // ---- Pagamentos de freela a partir das jornadas batidas no link (check-in/checkout) ----
+  const valorFreela=(f)=> Number(f.valor || (cargosFreela.find(c=>c.nome===f.cargo)||{}).valor || 0);
+  const _freelaConcluidas = apurarHoras(registros).filter(x=>x.tipo==="free" && x.completo);
+  const freelasComPagamentos = freelas.map(f=>{
+    const hist=f.jornadasHist||[]; const histDatas=new Set(hist.map(h=>h.data));
+    const novos=_freelaConcluidas.filter(x=>x.nome===f.nome && !histDatas.has(x.dia)).map(x=>({
+      data:x.dia, unidade:(unidades.find(u=>u.nome===x.unidade)||{}).id,
+      horas:Math.round((x.trabalhado/60)*100)/100, valor:valorFreela(f), _live:true }));
+    return {...f, jornadasHist:[...hist,...novos]};
+  });
+  // ---- Escala automática p/ CLT auto-cadastrado (o gestor logado é quem grava a escala) ----
+  useEffect(()=>{
+    try{
+      const auth=window.__WPAUTH; if(!auth||!auth.currentUser) return;
+      cadAuto.filter(c=>c.tipo==="clt").forEach(c=>{
+        const jaTem=Object.values(escala||{}).some(dias=>Object.values(dias||{}).some(arr=>(arr||[]).some(a=>a.pid===c.id)));
+        const uid=c.unidade||unidades[0]?.id;
+        if(!jaTem && uid) gerarEscalaFixa(c.id, c.escala||"6x1", uid);
+      });
+    }catch(e){}
+  },[cadAuto]); // eslint-disable-line
+
+  const value={ unidades,salvarUnidade,excluirUnidade, clts,freelas,freelasComPagamentos,salvarClt,salvarFreela,excluirColab,cadastrarPublico, anexarDoc,
+    escala,setEscala, registros,addRegistro, pontoHist, freelancerEscaladoHoje, valorFreela,
     cargosFreela,salvarCargoFreela,excluirCargoFreela,
     dossie,getDossie,addFalta,addFeedback,addAnexo, perfil,setPerfil, perms,setPerms, can };
   return <StoreCtx.Provider value={value}>{children}</StoreCtx.Provider>;
@@ -573,12 +600,15 @@ const PageHeader = ({title, sub, children}) =>
     <div className="flex gap-2 flex-wrap">{children}</div>
   </div>;
 
-const StatCard = ({icon, label, value, delta, tone="brand", chart}) => {
+const StatCard = ({icon, label, value, delta, tone="brand", chart, onClick}) => {
   const tones={brand:"grad-brand", free:"bg-free-500", green:"bg-emerald-500", amber:"bg-amber-500", blue:"bg-sky-500"};
-  return <Card className="p-5">
+  return <Card className={cx("p-5", onClick && "cursor-pointer hover:shadow-glow hover:-translate-y-0.5 transition active:translate-y-0")}
+      onClick={onClick} role={onClick?"button":undefined} tabIndex={onClick?0:undefined}
+      onKeyDown={onClick?(e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); onClick(); } }):undefined}>
     <div className="flex items-start justify-between">
       <div className={cx("w-11 h-11 rounded-xl grid place-items-center text-white", tones[tone])}><Icon d={icon}/></div>
-      {delta && <Badge tone={delta.startsWith("-")?"red":"green"}><Icon d={I.trend} className="w-3 h-3"/>{delta}</Badge>}
+      {delta ? <Badge tone={delta.startsWith("-")?"red":"green"}><Icon d={I.trend} className="w-3 h-3"/>{delta}</Badge>
+        : onClick ? <Icon d={I.arrow} className="w-4 h-4 text-slate-300"/> : null}
     </div>
     <div className="mt-4 text-3xl font-extrabold text-slate-900 tabular-nums">{value}</div>
     <div className="text-sm text-slate-500">{label}</div>
@@ -675,10 +705,10 @@ function Dashboard({go}) {
       <Btn icon={I.broadcast} onClick={()=>go("ponto")}>Ponto ao vivo</Btn>
     </PageHeader>
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-      <StatCard icon={I.user} label="Colaboradores CLT" value={cltAtivos} tone="brand"/>
-      <StatCard icon={I.coffee} label="Freelancers" value={freelas.length} tone="free"/>
-      <StatCard icon={I.pin} label="Unidades (casas)" value={unidades.length} tone="green"/>
-      <StatCard icon={I.broadcast} label="Registros hoje" value={registros.length} tone="amber"/>
+      <StatCard icon={I.user} label="Colaboradores CLT" value={cltAtivos} tone="brand" onClick={()=>go("clt")}/>
+      <StatCard icon={I.coffee} label="Freelancers" value={freelas.length} tone="free" onClick={()=>go("freelas")}/>
+      <StatCard icon={I.pin} label="Unidades (casas)" value={unidades.length} tone="green" onClick={()=>go("unidades")}/>
+      <StatCard icon={I.broadcast} label="Registros hoje" value={registros.length} tone="amber" onClick={()=>go("ponto")}/>
     </div>
     <div className="grid lg:grid-cols-3 gap-4 mt-4">
       <Card className="p-5 lg:col-span-2">
@@ -861,16 +891,20 @@ const STATUS = {
   encerrado:{l:"Encerrado",tone:"slate",c:"#94a3b8"},
   aguardando:{l:"Aguardando entrada",tone:"blue",c:"#0ea5e9"},
   faltou:{l:"Faltou",tone:"red",c:"#f43f5e"},
+  folga:{l:"Folga",tone:"slate",c:"#cbd5e1"},
 };
 function PontoLive() {
-  const { registros:registrosAll, clts, freelas, unidades, escala, pontoHist } = useStore();
+  const { registros:registrosAll, clts, freelas, unidades, escala, pontoHist, valorFreela } = useStore();
   // Só os registros de HOJE alimentam o status ao vivo (a coleção persiste entre os dias).
   const _hoje=hojeStr();
   const registros = registrosAll.filter(r=>!r.data || r.data===_hoje);
+  const [ambiente,setAmbiente]=useState("clt");   // 'clt' | 'free' — ambientes distintos
   const [linkModal,setLinkModal]=useState(null); // null | 'clt' | 'free'
+  const [detalhe,setDetalhe]=useState(null);     // modal de detalhe das abas (Trabalhando/Almoço/Faltas)
   const clock=useClock();
   const toast=useContext(ToastCtx);
   const nome=(pid,tipo)=>pessoaNome(pid,tipo,clts,freelas);
+  const ehFree=ambiente==="free";
   const hrefBase = (typeof window!=="undefined" ? window.location.href.split("#")[0] : "");
   const isLocalFile = hrefBase.startsWith("file:");
   // Endereço público do sistema (depois de publicado). Se estiver em arquivo local,
@@ -879,16 +913,18 @@ function PontoLive() {
   const base = (pubUrl.trim() ? pubUrl.trim().replace(/#.*$/,"").replace(/\/+$/,"")+"/" : hrefBase);
   const linkDe=(m)=> `${base}#ponto-${m}`;
 
-  // Escalados hoje (todas as casas), com o status derivado dos registros REAIS
+  // turno de HOJE de uma pessoa (para saber se é dia de FOLGA)
+  const turnoHojeDe=(pid,tipo)=>{ let t=null; Object.values(escala).forEach(dias=>{ (dias[HOJE_IDX]||[]).forEach(a=>{ if(a.pid===pid&&a.tipo===tipo) t=a.turno; }); }); return t; };
+
+  // Escalados hoje do AMBIENTE selecionado (folga aparece marcada, mas não conta como falta)
   const escalados=[];
   Object.entries(escala).forEach(([uid,dias])=>{
-    (dias[HOJE_IDX]||[]).forEach(a=>{ if(a.turno==="folga") return;
-      escalados.push({...a, unidadeId:Number(uid)}); });
+    (dias[HOJE_IDX]||[]).forEach(a=>{ if(a.tipo!==ambiente) return; escalados.push({...a, unidadeId:Number(uid)}); });
   });
   const statusDe=(a)=>{
     if(a.marca==="faltou") return "faltou";
     const regs=registros.filter(r=>r.nome===nome(a.pid,a.tipo)); // mais recente primeiro
-    if(!regs.length) return "aguardando";
+    if(!regs.length) return a.turno==="folga" ? "folga" : "aguardando";
     const last=regs[0].acao;
     return last==="Saída"?"encerrado" : last==="Início intervalo"?"pausa" : "trabalhando";
   };
@@ -900,33 +936,49 @@ function PontoLive() {
     if(!ent || ent.min==null) return null;
     let d=nowSec - ent.min*60; if(d<0) d+=86400; return d; // segundos
   };
-  const linhas=escalados.map(a=>({a, nm:nome(a.pid,a.tipo), st:statusDe(a), tempo:tempoDe(a)}));
+  const linhas=escalados.map(a=>({a, nm:nome(a.pid,a.tipo), st:statusDe(a), tempo:tempoDe(a), folgaTrab:a.turno==="folga"}));
   const cont=(s)=>linhas.filter(x=>x.st===s).length;
-  // Apuração de horas (histórico + registros reais de hoje)
-  const apuracao=apurarHoras([...pontoHist, ...registros]).filter(x=>x.completo);
+  // Resolve FOLGA por grupo de apuração: CLT que trabalhou no dia de folga do seu padrão fixo → 100%.
+  const folgaDe=(g)=>{ if(g.tipo!=="clt") return false; const p=clts.find(x=>x.nome===g.nome); if(!p) return false;
+    return folgaFixa(p.escala||"6x1", HOJE_IDX) || turnoHojeDe(p.id,"clt")==="folga"; };
+  // Apuração de horas (histórico + registros reais de hoje), filtrada pelo ambiente
+  const apuracao=apurarHoras([...pontoHist, ...registros], folgaDe).filter(x=>x.completo && x.tipo===ambiente);
+  const freelaValorDe=(x)=>{ const f=freelas.find(ff=>ff.nome===x.nome); return f?valorFreela(f):0; };
+  const totalValorFree=ehFree?apuracao.reduce((s,x)=>s+freelaValorDe(x),0):0;
+  // abre o modal de detalhe de uma aba (lista de quem está naquele status)
+  const abrirDetalhe=(st)=>{ const grupo=linhas.filter(x=>x.st===st); if(!grupo.length){ toast("Ninguém "+(STATUS[st]?.l||st).toLowerCase()+" agora"); return; }
+    setDetalhe({ titulo:STATUS[st]?.l||st, itens:grupo.map(x=>({nm:x.nm, sub:unidadeNome(x.a.unidadeId,unidades), badge:x.a.tipo==="clt"?"CLT":"Freela", tone:x.a.tipo==="clt"?"brand":"free", extra:(st==="trabalhando"&&x.tempo!=null)?fmtHMS(x.tempo):null})) }); };
 
   return <div className="fade-in">
-    <PageHeader title="Ponto ao vivo" sub="Status em tempo real · o colaborador registra pelo link enviado (WhatsApp)">
+    <PageHeader title="Ponto ao vivo" sub="Status em tempo real · ambientes separados CLT e Freela · o colaborador registra pelo link (WhatsApp)">
       <Btn variant="ghost" icon={I.link} onClick={()=>setLinkModal("clt")}>Gerar link CLT</Btn>
       <Btn variant="free" icon={I.link} onClick={()=>setLinkModal("free")}>Gerar link Freelancer</Btn>
     </PageHeader>
 
+    {/* Seletor de AMBIENTE: CLT | Freela (acompanhamento em tempo real separado) */}
+    <div className="inline-flex p-1 bg-slate-100 rounded-xl mb-4">
+      {[["clt","CLT","brand"],["free","Freela","free"]].map(([k,l,t])=>
+        <button key={k} onClick={()=>setAmbiente(k)}
+          className={cx("px-5 py-2 rounded-lg text-sm font-semibold transition", ambiente===k?(k==="clt"?"grad-brand text-white shadow-glow":"bg-free-500 text-white shadow"):"text-slate-500 hover:text-slate-700")}>
+          {l}</button>)}
+    </div>
+
     <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
       <Card className="p-4 flex items-center gap-3">
         <span className="relative w-3 h-3"><span className="absolute inset-0 rounded-full bg-emerald-500 live-dot"/></span>
-        <div><div className="text-sm font-bold text-slate-800">AO VIVO</div><div className="text-xs text-slate-400 tabular-nums">{clock.toLocaleTimeString("pt-BR")}</div></div>
+        <div><div className="text-sm font-bold text-slate-800">AO VIVO · {ehFree?"Freela":"CLT"}</div><div className="text-xs text-slate-400 tabular-nums">{clock.toLocaleTimeString("pt-BR")}</div></div>
       </Card>
-      <Card className="p-4"><div className="text-2xl font-extrabold text-emerald-600">{cont("trabalhando")}</div><div className="text-xs text-slate-500">Trabalhando</div></Card>
-      <Card className="p-4"><div className="text-2xl font-extrabold text-amber-600">{cont("pausa")}</div><div className="text-xs text-slate-500">Em almoço/pausa</div></Card>
-      <Card className="p-4"><div className="text-2xl font-extrabold text-rose-600">{cont("faltou")}</div><div className="text-xs text-slate-500">Faltas</div></Card>
+      <Card className="p-4 cursor-pointer hover:shadow-glow hover:-translate-y-0.5 transition" onClick={()=>abrirDetalhe("trabalhando")}><div className="text-2xl font-extrabold text-emerald-600">{cont("trabalhando")}</div><div className="text-xs text-slate-500 flex items-center gap-1">Trabalhando <Icon d={I.arrow} className="w-3 h-3 text-slate-300"/></div></Card>
+      <Card className="p-4 cursor-pointer hover:shadow-glow hover:-translate-y-0.5 transition" onClick={()=>abrirDetalhe("pausa")}><div className="text-2xl font-extrabold text-amber-600">{cont("pausa")}</div><div className="text-xs text-slate-500 flex items-center gap-1">Em almoço/pausa <Icon d={I.arrow} className="w-3 h-3 text-slate-300"/></div></Card>
+      <Card className="p-4 cursor-pointer hover:shadow-glow hover:-translate-y-0.5 transition" onClick={()=>abrirDetalhe("faltou")}><div className="text-2xl font-extrabold text-rose-600">{cont("faltou")}</div><div className="text-xs text-slate-500 flex items-center gap-1">Faltas <Icon d={I.arrow} className="w-3 h-3 text-slate-300"/></div></Card>
     </div>
 
     <div className="grid lg:grid-cols-5 gap-4">
       {/* Painel de status */}
       <Card className="lg:col-span-3 overflow-hidden">
-        <div className="px-5 py-3 border-b border-slate-100"><h3 className="font-bold text-slate-900 flex items-center gap-2"><Icon d={I.users} className="w-4 h-4 text-brand-500"/> Escalados de hoje — status ao vivo</h3></div>
+        <div className="px-5 py-3 border-b border-slate-100"><h3 className="font-bold text-slate-900 flex items-center gap-2"><Icon d={I.users} className="w-4 h-4 text-brand-500"/> Escalados de hoje — {ehFree?"Freelancers":"CLT"} · status ao vivo</h3></div>
         {linhas.length===0
-          ? <div className="p-10 text-center text-slate-400">Ninguém escalado para hoje.</div>
+          ? <div className="p-10 text-center text-slate-400">Nenhum {ehFree?"freelancer":"CLT"} escalado para hoje.</div>
           : <div className="divide-y divide-slate-50 max-h-[460px] overflow-auto">
               {linhas.map(({a,nm,st,tempo})=>{ const s=STATUS[st];
                 return <div key={a.id} className="flex items-center gap-3 py-3 px-5">
@@ -943,13 +995,13 @@ function PontoLive() {
             </div>}
       </Card>
 
-      {/* Feed de registros reais */}
+      {/* Feed de registros reais (do ambiente selecionado) */}
       <Card className="lg:col-span-2 overflow-hidden">
-        <div className="px-5 py-3 border-b border-slate-100"><h3 className="font-bold text-slate-900 flex items-center gap-2"><Icon d={I.broadcast} className="w-4 h-4 text-emerald-500"/> Registros reais</h3></div>
-        {registros.length===0
-          ? <div className="p-8 text-center text-slate-400 text-sm"><Icon d={I.broadcast} className="w-9 h-9 mx-auto mb-2 text-slate-300"/> Nenhum registro ainda. Abra um link de ponto e bata entrada/saída com selfie.</div>
+        <div className="px-5 py-3 border-b border-slate-100"><h3 className="font-bold text-slate-900 flex items-center gap-2"><Icon d={I.broadcast} className="w-4 h-4 text-emerald-500"/> Registros reais · {ehFree?"Freela":"CLT"}</h3></div>
+        {registros.filter(r=>r.tipo===ambiente).length===0
+          ? <div className="p-8 text-center text-slate-400 text-sm"><Icon d={I.broadcast} className="w-9 h-9 mx-auto mb-2 text-slate-300"/> Nenhum registro de {ehFree?"freela":"CLT"} ainda hoje. Abra o link e bata entrada/saída com selfie.</div>
           : <div className="divide-y divide-slate-50 max-h-[460px] overflow-auto">
-              {registros.map(r=>
+              {registros.filter(r=>r.tipo===ambiente).map(r=>
                 <div key={r.id} className="flex items-center gap-3 py-2.5 px-5 slide-in">
                   {r.foto ? <img src={r.foto} alt="selfie" className="w-8 h-8 rounded-lg object-cover ring-2 ring-emerald-200 shrink-0"/> : <Avatar name={r.nome} tone={r.tipo==="clt"?"brand":"free"} size="w-8 h-8"/>}
                   <div className="min-w-0"><div className="font-semibold text-slate-800 text-sm truncate">{r.nome}</div><div className="text-xs text-slate-500">{r.acao} · {r.unidade}</div></div>
@@ -960,26 +1012,39 @@ function PontoLive() {
       </Card>
     </div>
 
-    {/* Apuração de horas & extras (alimentada pelos registros de ponto/check-in) */}
+    {/* Apuração — CLT: horas/extras (100% na folga) · Freela: valor do serviço (não é hora extra) */}
     <Card className="overflow-hidden mt-4">
       <div className="px-5 py-3 border-b border-slate-100 flex items-center justify-between">
-        <h3 className="font-bold text-slate-900 flex items-center gap-2"><Icon d={I.clock} className="w-4 h-4 text-brand-500"/> Apuração de horas & extras</h3>
-        <span className="text-xs text-slate-400">CLT: base 8h · Freela: check-in/checkout</span>
+        <h3 className="font-bold text-slate-900 flex items-center gap-2"><Icon d={I.clock} className="w-4 h-4 text-brand-500"/> {ehFree?"Apuração de freelancers — valor do serviço":"Apuração de horas & extras — CLT"}</h3>
+        <span className="text-xs text-slate-400">{ehFree?"Freela: valor por jornada → Pagamentos/Financeiro":"CLT: base 8h · folga trabalhada = 100%"}</span>
       </div>
-      <div className="overflow-x-auto"><table className="w-full text-sm min-w-[620px]">
-        <thead><tr className="text-left text-slate-400 border-b border-slate-100">{["Colaborador","Vínculo","Dia","Horas trabalhadas","Extras","Atraso"].map(h=><th key={h} className="px-4 py-2.5 font-semibold">{h}</th>)}</tr></thead>
+      {ehFree ? <div className="overflow-x-auto"><table className="w-full text-sm min-w-[560px]">
+        <thead><tr className="text-left text-slate-400 border-b border-slate-100">{["Freelancer","Dia","Horas","Valor do serviço"].map(h=><th key={h} className="px-4 py-2.5 font-semibold">{h}</th>)}</tr></thead>
         <tbody className="divide-y divide-slate-50">
           {apuracao.map((x,i)=><tr key={i} className="hover:bg-slate-50/70">
-            <td className="px-4 py-2.5"><div className="flex items-center gap-2"><Avatar name={x.nome} tone={x.tipo==="clt"?"brand":"free"} size="w-7 h-7"/><span className="font-semibold text-slate-800">{x.nome}</span></div></td>
-            <td className="px-4 py-2.5"><Badge tone={x.tipo==="clt"?"brand":"free"}>{x.tipo==="clt"?"CLT":"Freela"}</Badge></td>
+            <td className="px-4 py-2.5"><div className="flex items-center gap-2"><Avatar name={x.nome} tone="free" size="w-7 h-7"/><span className="font-semibold text-slate-800">{x.nome}</span></div></td>
+            <td className="px-4 py-2.5 text-slate-500">{x.dia==="hoje"?"Hoje":new Date(x.dia).toLocaleDateString("pt-BR")}</td>
+            <td className="px-4 py-2.5 text-slate-700">{fmtHoras(x.trabalhado)}</td>
+            <td className="px-4 py-2.5"><Badge tone="free">R$ {freelaValorDe(x).toLocaleString("pt-BR")}</Badge></td>
+          </tr>)}
+          {apuracao.length===0 && <tr><td colSpan="4" className="px-4 py-6 text-center text-slate-400">Sem jornadas de freela concluídas. Os valores entram em Pagamentos ao encerrar (checkout).</td></tr>}
+          {apuracao.length>0 && <tr className="bg-free-50/40 font-bold"><td className="px-4 py-2.5" colSpan="3">Total a pagar (hoje)</td><td className="px-4 py-2.5 text-free-600">R$ {totalValorFree.toLocaleString("pt-BR")}</td></tr>}
+        </tbody>
+      </table></div>
+      : <div className="overflow-x-auto"><table className="w-full text-sm min-w-[640px]">
+        <thead><tr className="text-left text-slate-400 border-b border-slate-100">{["Colaborador","Dia","Horas trabalhadas","Extras","Extra 100% (folga)","Atraso"].map(h=><th key={h} className="px-4 py-2.5 font-semibold">{h}</th>)}</tr></thead>
+        <tbody className="divide-y divide-slate-50">
+          {apuracao.map((x,i)=><tr key={i} className="hover:bg-slate-50/70">
+            <td className="px-4 py-2.5"><div className="flex items-center gap-2"><Avatar name={x.nome} tone="brand" size="w-7 h-7"/><span className="font-semibold text-slate-800">{x.nome}</span>{x.folga&&<Badge tone="amber">Folga</Badge>}</div></td>
             <td className="px-4 py-2.5 text-slate-500">{x.dia==="hoje"?"Hoje":new Date(x.dia).toLocaleDateString("pt-BR")}</td>
             <td className="px-4 py-2.5 font-bold text-slate-900">{fmtHoras(x.trabalhado)}</td>
             <td className="px-4 py-2.5">{x.extras>0?<Badge tone="green">+{fmtHoras(x.extras)}</Badge>:<span className="text-slate-400">—</span>}</td>
+            <td className="px-4 py-2.5">{x.extras100>0?<Badge tone="amber">+{fmtHoras(x.extras100)} · 100%</Badge>:<span className="text-slate-400">—</span>}</td>
             <td className="px-4 py-2.5">{x.atraso>0?<Badge tone="red">-{fmtHoras(x.atraso)}</Badge>:<span className="text-slate-400">—</span>}</td>
           </tr>)}
-          {apuracao.length===0 && <tr><td colSpan="6" className="px-4 py-6 text-center text-slate-400">Sem jornadas concluídas para apurar. Registre entrada e saída pelo link.</td></tr>}
+          {apuracao.length===0 && <tr><td colSpan="6" className="px-4 py-6 text-center text-slate-400">Sem jornadas de CLT concluídas para apurar. Registre entrada e saída pelo link.</td></tr>}
         </tbody>
-      </table></div>
+      </table></div>}
     </Card>
 
     {/* Modal: gerar/copiar link para enviar por WhatsApp (NÃO abre relógio local) */}
@@ -1010,6 +1075,25 @@ function PontoLive() {
           <Btn variant="ghost" className="w-full mt-3" onClick={()=>setLinkModal(null)}>Cancelar</Btn>
         </div>; })()}
     </Modal>
+
+    {/* Modal de DETALHE das abas (Trabalhando / Almoço / Faltas) — clique nos cards */}
+    <Modal open={!!detalhe} onClose={()=>setDetalhe(null)}>
+      {detalhe && <div className="p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-bold text-slate-900">{detalhe.titulo} · {ehFree?"Freela":"CLT"} <span className="text-slate-400 font-semibold">({detalhe.itens.length})</span></h3>
+          <button onClick={()=>setDetalhe(null)} className="text-slate-400 hover:text-slate-600"><Icon d={I.x}/></button>
+        </div>
+        <div className="space-y-2 max-h-[55vh] overflow-y-auto">
+          {detalhe.itens.map((it,i)=>
+            <div key={i} className="flex items-center gap-3 p-3 rounded-xl border border-slate-100 bg-slate-50/60">
+              <Avatar name={it.nm} tone={it.tone}/>
+              <div className="min-w-0 flex-1"><div className="font-semibold text-slate-800 truncate">{it.nm}</div><div className="text-xs text-slate-500">{it.sub}</div></div>
+              {it.extra && <span className="text-xs font-bold text-emerald-600 tabular-nums">{it.extra}</span>}
+              <Badge tone={it.tone}>{it.badge}</Badge>
+            </div>)}
+        </div>
+      </div>}
+    </Modal>
   </div>;
 }
 
@@ -1023,7 +1107,19 @@ function PontoKiosk({ mode, onClose }) {
   const [cpf,setCpf]=useState("");
   const [cpfErr,setCpfErr]=useState("");
   const soDigitos=(s)=>(s||"").replace(/\D/g,"");
-  const escaladoHojePid=(p)=> !!p && Object.values(escala||{}).some(dias=>((dias&&dias[HOJE_IDX])||[]).some(a=>a.pid===p.id && a.tipo===mode && a.turno!=="folga"));
+  // Escalado hoje? Comparação ROBUSTA: casa por id (string) OU por CPF (resolve o escalado→pessoa),
+  // aceita qualquer casa e qualquer turno de trabalho (só bloqueia FOLGA). Assim, cadastrado + na escala = bate ponto.
+  const escaladoHojePid=(p)=>{
+    if(!p) return false;
+    const alvoId=String(p.id); const alvoCpf=soDigitos(p.cpf); const lista=mode==="clt"?clts:freelas;
+    return Object.values(escala||{}).some(dias=>((dias&&dias[HOJE_IDX])||[]).some(a=>{
+      if(a.turno==="folga") return false;
+      if(a.tipo && a.tipo!==mode) return false;
+      if(String(a.pid)===alvoId) return true;
+      const pes=lista.find(x=>String(x.id)===String(a.pid));      // fallback por CPF
+      return !!(pes && alvoCpf.length===11 && soDigitos(pes.cpf)===alvoCpf);
+    }));
+  };
   const buscarCpf=()=>{
     const d=soDigitos(cpf);
     if(d.length<11){ setCpfErr("Digite os 11 números do CPF."); return; }
@@ -1566,7 +1662,7 @@ function Relatorios() {
 
 /* ============================ PAGAMENTOS (FREELANCERS) ============================ */
 function Pagamentos() {
-  const { freelas, unidades } = useStore();
+  const { freelasComPagamentos:freelas, unidades } = useStore();
   const toast=useContext(ToastCtx);
   const [ini,setIni]=useState("2026-07-01");
   const [fim,setFim]=useState("2026-07-31");
@@ -1801,7 +1897,7 @@ function LinksQR() {
 
 /* ============================ RELATÓRIOS FINANCEIROS ============================ */
 function Financeiro() {
-  const { freelas, unidades } = useStore();
+  const { freelasComPagamentos:freelas, unidades } = useStore();
   const toast=useContext(ToastCtx);
   const [ini,setIni]=useState("2026-07-01");
   const [fim,setFim]=useState("2026-07-31");
