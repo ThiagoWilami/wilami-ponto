@@ -447,6 +447,26 @@ function useCadastros(){
 
 // Data de hoje (AAAA-MM-DD, fuso local) — usada para separar os registros do dia.
 function hojeStr(){ const d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+// Só os dígitos (para comparar CPF de forma robusta). Global — usado no painel e no quiosque.
+const soDigitos=(s)=>(s||"").replace(/\D/g,"");
+// Abre uma janela de impressão/salvar-PDF com o conteúdo (comprovantes e folha de ponto).
+function imprimirDoc(titulo, corpoHTML){
+  const w=window.open("","_blank");
+  if(!w){ alert("Permita pop-ups para gerar o documento (comprovante/folha)."); return false; }
+  w.document.write(`<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>${titulo}</title>
+    <style>body{font-family:system-ui,-apple-system,Arial,sans-serif;color:#0f172a;padding:32px;max-width:900px;margin:0 auto}
+    h1{font-size:20px;margin:0 0 2px} .sub{color:#64748b;font-size:12px;margin-bottom:18px}
+    table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px} th,td{border:1px solid #e2e8f0;padding:6px 9px;text-align:left}
+    th{background:#f1f5f9} tr:nth-child(even) td{background:#fafafa}
+    .sign{margin-top:56px;display:flex;gap:56px} .sign div{flex:1;border-top:1px solid #0f172a;padding-top:6px;font-size:12px;text-align:center;color:#475569}
+    .foot{margin-top:24px;color:#94a3b8;font-size:10px} @media print{.noprint{display:none}}
+    .btn{background:#6366f1;color:#fff;border:0;padding:10px 18px;border-radius:8px;cursor:pointer;font-weight:700;font-size:13px}</style></head>
+    <body>${corpoHTML}
+    <div class="foot">Wilami Ponto · documento gerado em ${new Date().toLocaleString("pt-BR")} · conforme Portaria 671/2021</div>
+    <div class="noprint" style="margin-top:20px"><button class="btn" onclick="window.print()">Imprimir / Salvar PDF</button></div>
+    </body></html>`);
+  w.document.close(); return true;
+}
 
 // Coleção PÚBLICA de registros de ponto (batidos pelo celular, SEM login).
 // Cada batida é um documento próprio → o celular só CRIA (não sobrescreve nada).
@@ -465,11 +485,28 @@ function useRegistrosPub(){
   const add=(obj)=>{ const db=window.__WPDB; if(!db) return Promise.reject(new Error("sem-banco")); return db.collection("registros").add(obj); };
   return [items,{add}];
 }
+// Coleção PÚBLICA de atestados enviados pelo colaborador (sem login) → vão para o dossiê em tempo real.
+function useAtestados(){
+  const [items,setItems]=useState([]);
+  useEffect(()=>{
+    const db=window.__WPDB; if(!db) return;
+    try{
+      return db.collection("atestados").orderBy("ts","desc").limit(500).onSnapshot(function(snap){
+        const arr=[]; snap.forEach(function(d){ const x=d.data()||{}; arr.push({...x, id:d.id, _docId:d.id}); });
+        setItems(arr);
+      }, function(){});
+    }catch(e){}
+  },[]);
+  const add=(obj)=>{ const db=window.__WPDB; if(!db) return Promise.reject(new Error("sem-banco")); return db.collection("atestados").add(obj); };
+  return [items,{add}];
+}
 function StoreProvider({children}) {
   const [unidades,setUnidades]=usePersist("unidades",INIT_UNIDADES);
   const [cltsBase,setClts]=usePersist("clts",INIT_CLTS);
   const [freelasBase,setFreelas]=usePersist("freelas",INIT_FREELAS);
   const [cadAuto,cadOps]=useCadastros();
+  const [atestados,atestadosOps]=useAtestados();
+  const enviarAtestado=(obj)=>{ if(window.__WPDB) return atestadosOps.add(obj); return Promise.resolve(); };
   // Listas expostas = base (admin) + auto-cadastros do celular (mesclados por vínculo)
   const clts=[...cltsBase, ...cadAuto.filter(c=>c.tipo==="clt")];
   const freelas=[...freelasBase, ...cadAuto.filter(c=>c.tipo==="free")];
@@ -576,7 +613,7 @@ function StoreProvider({children}) {
 
   const value={ unidades,salvarUnidade,excluirUnidade, clts,freelas,freelasComPagamentos,salvarClt,salvarFreela,excluirColab,cadastrarPublico, anexarDoc,
     escala,setEscala, registros,addRegistro, pontoHist, freelancerEscaladoHoje, valorFreela,
-    cargosFreela,salvarCargoFreela,excluirCargoFreela,
+    cargosFreela,salvarCargoFreela,excluirCargoFreela, atestados,enviarAtestado,
     dossie,getDossie,addFalta,addFeedback,addAnexo, perfil,setPerfil, perms,setPerms, can };
   return <StoreCtx.Provider value={value}>{children}</StoreCtx.Provider>;
 }
@@ -921,9 +958,13 @@ function PontoLive() {
   Object.entries(escala).forEach(([uid,dias])=>{
     (dias[HOJE_IDX]||[]).forEach(a=>{ if(a.tipo!==ambiente) return; escalados.push({...a, unidadeId:Number(uid)}); });
   });
+  // Casa os registros do dia com a pessoa escalada por pid → CPF → nome (robusto p/ status ao vivo)
+  const cpfDe=(pid,tipo)=>{ const p=(tipo==="clt"?clts:freelas).find(x=>x.id===pid); return p?soDigitos(p.cpf):""; };
+  const regsDe=(a)=>{ const nm=nome(a.pid,a.tipo); const idS=String(a.pid); const cpf=cpfDe(a.pid,a.tipo);
+    return registros.filter(r=> (r.pid!=null && String(r.pid)===idS) || (cpf && r.cpf && String(r.cpf)===cpf) || r.nome===nm ); };
   const statusDe=(a)=>{
     if(a.marca==="faltou") return "faltou";
-    const regs=registros.filter(r=>r.nome===nome(a.pid,a.tipo)); // mais recente primeiro
+    const regs=regsDe(a); // mais recente primeiro
     if(!regs.length) return a.turno==="folga" ? "folga" : "aguardando";
     const last=regs[0].acao;
     return last==="Saída"?"encerrado" : last==="Início intervalo"?"pausa" : "trabalhando";
@@ -931,7 +972,7 @@ function PontoLive() {
   // Tempo em jornada em TEMPO REAL (desde a Entrada, atualiza a cada segundo com o relógio)
   const nowSec = clock.getHours()*3600 + clock.getMinutes()*60 + clock.getSeconds();
   const tempoDe=(a)=>{
-    const regs=registros.filter(r=>r.nome===nome(a.pid,a.tipo));
+    const regs=regsDe(a);
     const ent=regs.find(r=>r.acao==="Entrada");
     if(!ent || ent.min==null) return null;
     let d=nowSec - ent.min*60; if(d<0) d+=86400; return d; // segundos
@@ -948,9 +989,30 @@ function PontoLive() {
   // abre o modal de detalhe de uma aba (lista de quem está naquele status)
   const abrirDetalhe=(st)=>{ const grupo=linhas.filter(x=>x.st===st); if(!grupo.length){ toast("Ninguém "+(STATUS[st]?.l||st).toLowerCase()+" agora"); return; }
     setDetalhe({ titulo:STATUS[st]?.l||st, itens:grupo.map(x=>({nm:x.nm, sub:unidadeNome(x.a.unidadeId,unidades), badge:x.a.tipo==="clt"?"CLT":"Freela", tone:x.a.tipo==="clt"?"brand":"free", extra:(st==="trabalhando"&&x.tempo!=null)?fmtHMS(x.tempo):null})) }); };
+  // Comprovante do dia (todas as batidas de hoje) — imprimir/salvar PDF para enviar
+  const comprovanteDoDia=()=>{
+    const rows=registros.slice().reverse().map(r=>`<tr><td>${r.hora||""}</td><td>${r.nome||""}</td><td>${r.tipo==="clt"?"CLT":"Freela"}</td><td>${r.acao||""}</td><td>${r.unidade||""}</td></tr>`).join("")
+      || `<tr><td colspan="5" style="text-align:center;color:#94a3b8">Nenhuma batida registrada hoje.</td></tr>`;
+    if(imprimirDoc("Comprovante do dia", `<h1>Comprovante de Registros de Ponto</h1><div class="sub">${new Date().toLocaleDateString("pt-BR")} · todas as batidas do dia</div>
+      <table><thead><tr><th>Hora</th><th>Colaborador</th><th>Vínculo</th><th>Registro</th><th>Unidade</th></tr></thead><tbody>${rows}</tbody></table>`)) toast("Comprovante do dia gerado");
+  };
+  // Folha de ponto mensal consolidada por colaborador (com campo de assinatura)
+  const folhaDoMes=()=>{
+    const mes=hojeStr().slice(0,7);
+    const apur=apurarHoras([...pontoHist, ...registrosAll], folgaDe).filter(x=>x.completo && String(x.dia||"").slice(0,7)===mes);
+    const porNome={};
+    apur.forEach(x=>{ const g=(porNome[x.nome]=porNome[x.nome]||{nome:x.nome,tipo:x.tipo,dias:0,min:0,extra:0,extra100:0}); g.dias++; g.min+=x.trabalhado||0; g.extra+=x.extras||0; g.extra100+=x.extras100||0; });
+    const rows=Object.values(porNome).map(g=>`<tr><td>${g.nome}</td><td>${g.tipo==="clt"?"CLT":"Freela"}</td><td>${g.dias}</td><td>${fmtHoras(g.min)}</td><td>${g.extra?fmtHoras(g.extra):"—"}</td><td>${g.extra100?fmtHoras(g.extra100):"—"}</td></tr>`).join("")
+      || `<tr><td colspan="6" style="text-align:center;color:#94a3b8">Sem jornadas concluídas neste mês.</td></tr>`;
+    if(imprimirDoc("Folha de ponto mensal", `<h1>Folha de Ponto — ${mes.split("-").reverse().join("/")}</h1><div class="sub">Consolidado mensal por colaborador · para conferência e assinatura</div>
+      <table><thead><tr><th>Colaborador</th><th>Vínculo</th><th>Dias</th><th>Horas trabalhadas</th><th>Extras</th><th>Extra 100%</th></tr></thead><tbody>${rows}</tbody></table>
+      <div class="sign"><div>Assinatura do colaborador</div><div>Assinatura do gestor / responsável</div></div>`)) toast("Folha mensal gerada");
+  };
 
   return <div className="fade-in">
     <PageHeader title="Ponto ao vivo" sub="Status em tempo real · ambientes separados CLT e Freela · o colaborador registra pelo link (WhatsApp)">
+      <Btn variant="ghost" icon={I.doc} onClick={comprovanteDoDia}>Comprovante do dia</Btn>
+      <Btn variant="ghost" icon={I.download} onClick={folhaDoMes}>Folha do mês</Btn>
       <Btn variant="ghost" icon={I.link} onClick={()=>setLinkModal("clt")}>Gerar link CLT</Btn>
       <Btn variant="free" icon={I.link} onClick={()=>setLinkModal("free")}>Gerar link Freelancer</Btn>
     </PageHeader>
@@ -1099,7 +1161,7 @@ function PontoLive() {
 
 /* ============================ QUIOSQUE DE PONTO ============================ */
 function PontoKiosk({ mode, onClose }) {
-  const { unidades, clts, freelas, escala, registros, freelancerEscaladoHoje, addRegistro, salvarClt, salvarFreela, cadastrarPublico } = useStore();
+  const { unidades, clts, freelas, escala, registros, freelancerEscaladoHoje, addRegistro, salvarClt, salvarFreela, cadastrarPublico, enviarAtestado } = useStore();
   const ativos = mode==="clt" ? clts : freelas.filter(f=>f.status==="ativo");
   const [fluxo,setFluxo]=useState("escolha"); // escolha | registro | cadastro
   const [unidadeId,setUnidadeId]=useState(unidades[0]?.id);
@@ -1149,6 +1211,20 @@ function PontoKiosk({ mode, onClose }) {
   const [saiuTotal,setSaiuTotal]=useState(null); // segundos trabalhados no checkout
   const [cadEnviando,setCadEnviando]=useState(false);
   const [cadErro,setCadErro]=useState("");
+  // Envio de atestado pelo colaborador
+  const [at,setAt]=useState({cpf:"",data:hojeStr(),horas:8,obs:"",arquivo:null,nomeArq:""});
+  const [atStatus,setAtStatus]=useState(""); // "" | enviando | ok | erro
+  const upAtestado=(file)=>{ if(!file) return; const rd=new FileReader(); rd.onload=async()=>{ const dados=file.type&&file.type.indexOf("image")===0?await compressImg(rd.result):rd.result; setAt(p=>({...p,arquivo:dados,nomeArq:file.name})); }; rd.readAsDataURL(file); };
+  const enviarAtestadoColab=()=>{
+    const d=(at.cpf||"").replace(/\D/g,"");
+    const pessoa=(mode==="clt"?clts:freelas).find(x=>(x.cpf||"").replace(/\D/g,"")===d);
+    if(d.length<11){ setAtStatus("cpf"); return; }
+    if(!pessoa){ setAtStatus("naoencontrado"); return; }
+    if(!at.arquivo){ setAtStatus("semarquivo"); return; }
+    setAtStatus("enviando");
+    Promise.resolve(enviarAtestado({ pid:String(pessoa.id), cpf:d, nome:pessoa.nome, tipo:"atestado", data:at.data, horas:Number(at.horas)||8, obs:at.obs, anexo:{nome:at.nomeArq,dados:at.arquivo}, ts:new Date().getTime() }))
+      .then(()=>setAtStatus("ok")).catch(()=>setAtStatus("erro"));
+  };
   const videoRef=useRef(null); const streamRef=useRef(null);
   const clock=useClock();
   const accent = mode==="clt"?"brand":"free";
@@ -1176,14 +1252,14 @@ function PontoKiosk({ mode, onClose }) {
   const registrar=()=>{
     const now=new Date(); const nowMin=now.getHours()*60+now.getMinutes();
     const hora=now.toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit",second:"2-digit"});
-    addRegistro({ nome: pSel?.nome || "Colaborador", tipo:mode, acao, unidade:unidade.nome, hora, geo:true, selfie:true, foto });
+    addRegistro({ nome: pSel?.nome || "Colaborador", pid: pSel?.id!=null?String(pSel.id):null, cpf: soDigitos(pSel?.cpf), tipo:mode, acao, unidade:unidade.nome, hora, geo:true, selfie:true, foto });
     if(acao==="Saída"){ setDone(true); setTimeout(onClose,2600); }
     else { setWorking({entradaMin:nowMin, entradaHora:hora}); }  // Entrada/intervalo → tela de tempo + checkout
   };
   const registrarSaida=()=>{
     const now=new Date();
     const hora=now.toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit",second:"2-digit"});
-    addRegistro({ nome: pSel?.nome || "Colaborador", tipo:mode, acao:"Saída", unidade:unidade.nome, hora, geo:true, selfie:true, foto });
+    addRegistro({ nome: pSel?.nome || "Colaborador", pid: pSel?.id!=null?String(pSel.id):null, cpf: soDigitos(pSel?.cpf), tipo:mode, acao:"Saída", unidade:unidade.nome, hora, geo:true, selfie:true, foto });
     let d = (now.getHours()*3600+now.getMinutes()*60+now.getSeconds()) - (working?working.entradaMin*60:0); if(d<0) d+=86400;
     setSaiuTotal(d); setWorking(null); setDone(true); setTimeout(onClose,3600);
   };
@@ -1247,9 +1323,46 @@ function PontoKiosk({ mode, onClose }) {
               <button onClick={()=>setFluxo("cadastro")} className="w-full p-4 rounded-2xl border border-slate-200 hover:border-brand-400 hover:bg-brand-50/40 flex items-center gap-4 text-left transition">
                 <div className="w-11 h-11 rounded-xl bg-slate-800 grid place-items-center text-white"><Icon d={I.plus}/></div>
                 <div className="flex-1"><div className="font-bold text-slate-900">Fazer cadastro (1º acesso)</div><div className="text-sm text-slate-500">Preencher dados e enviar documentos</div></div><Icon d={I.arrow} className="w-4 h-4 text-slate-400"/></button>
+              <button onClick={()=>{setFluxo("atestado");setAtStatus("");}} className="w-full p-4 rounded-2xl border border-slate-200 hover:border-sky-400 hover:bg-sky-50/40 flex items-center gap-4 text-left transition">
+                <div className="w-11 h-11 rounded-xl bg-sky-500 grid place-items-center text-white"><Icon d={I.doc}/></div>
+                <div className="flex-1"><div className="font-bold text-slate-900">Enviar atestado</div><div className="text-sm text-slate-500">Anexar atestado médico — vai direto ao seu dossiê</div></div><Icon d={I.arrow} className="w-4 h-4 text-slate-400"/></button>
             </div>
             <Btn variant="ghost" className="w-full mt-4" onClick={onClose}>Cancelar</Btn>
           </div>
+        : fluxo==="atestado" ? (atStatus==="ok" ? <div className="fade-in text-center py-10">
+            <div className="w-20 h-20 mx-auto rounded-full bg-emerald-500 grid place-items-center text-white mb-4 shadow-glow"><Icon d={I.check} className="w-10 h-10" stroke={3}/></div>
+            <h3 className="text-2xl font-extrabold text-slate-900">Atestado enviado!</h3>
+            <p className="text-slate-500 mt-1">Seu atestado foi enviado ao gestor e o dia será abonado. Ele já aparece no seu dossiê.</p>
+            <Btn variant="ghost" className="w-full mt-4" onClick={onClose}>Fechar</Btn>
+          </div>
+          : <div className="fade-in">
+            <div className="text-center mb-4">
+              <div className="w-14 h-14 mx-auto rounded-2xl bg-sky-500 grid place-items-center text-white mb-2"><Icon d={I.doc} className="w-7 h-7"/></div>
+              <h3 className="text-lg font-bold text-slate-900">Enviar atestado</h3>
+              <p className="text-sm text-slate-500">Identifique-se pelo CPF e anexe o atestado. O dia será abonado automaticamente.</p>
+            </div>
+            <Field label="Seu CPF"><Input value={at.cpf} inputMode="numeric" placeholder="000.000.000-00" onChange={e=>{setAt({...at,cpf:e.target.value}); setAtStatus("");}}/></Field>
+            <div className="grid grid-cols-2 gap-2 mt-2">
+              <Field label="Data do atestado"><Input type="date" value={at.data} onChange={e=>setAt({...at,data:e.target.value})}/></Field>
+              <Field label="Horas/dia"><Input type="number" value={at.horas} onChange={e=>setAt({...at,horas:Number(e.target.value)})}/></Field>
+            </div>
+            <div className="mt-2">
+              <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Documento (foto ou PDF)</label>
+              <label className="mt-1 flex items-center gap-2 cursor-pointer p-3 rounded-xl border border-dashed border-slate-300 hover:border-sky-400">
+                <Icon d={I.upload} className="w-5 h-5 text-slate-400"/>
+                <span className="text-sm text-slate-600">{at.nomeArq||"Toque para anexar o atestado"}</span>
+                <input type="file" accept="image/*,application/pdf" className="hidden" onChange={e=>upAtestado(e.target.files&&e.target.files[0])}/>
+              </label>
+            </div>
+            {atStatus==="cpf" && <div className="mt-3 p-3 rounded-xl bg-rose-50 text-rose-700 text-sm">Digite os 11 números do CPF.</div>}
+            {atStatus==="naoencontrado" && <div className="mt-3 p-3 rounded-xl bg-rose-50 text-rose-700 text-sm">CPF não encontrado. Faça o cadastro (1º acesso) primeiro.</div>}
+            {atStatus==="semarquivo" && <div className="mt-3 p-3 rounded-xl bg-rose-50 text-rose-700 text-sm">Anexe o documento do atestado.</div>}
+            {atStatus==="erro" && <div className="mt-3 p-3 rounded-xl bg-rose-50 text-rose-700 text-sm">Não foi possível enviar agora. Verifique a internet e tente de novo.</div>}
+            <div className="flex gap-2 mt-4">
+              <Btn variant="ghost" onClick={()=>setFluxo("escolha")}>Voltar</Btn>
+              <Btn className="flex-1" icon={atStatus==="enviando"?null:I.check} disabled={atStatus==="enviando"} onClick={enviarAtestadoColab}>{atStatus==="enviando"?"Enviando…":"Enviar atestado"}</Btn>
+            </div>
+          </div>)
         : fluxo==="cadastro" ? <div className="fade-in -m-6"><ColabForm tipo={mode} onClose={()=>setFluxo("escolha")} onSalvar={registrarCadastro}/></div>
         : <>
           <div className="text-center mb-5">
@@ -1984,7 +2097,8 @@ function Financeiro() {
 
 /* ============================ DOSSIÊ DO COLABORADOR ============================ */
 function Dossie() {
-  const { clts, freelas, unidades, dossie, getDossie, addFalta, addFeedback, addAnexo, anexarDoc, can } = useStore();
+  const { clts, freelas, unidades, dossie, getDossie, addFalta, addFeedback, addAnexo, anexarDoc, can, atestados } = useStore();
+  const soD=(s)=>(s||"").replace(/\D/g,"");
   const toast=useContext(ToastCtx);
   const [sel,setSel]=useState(null); // {tipo,pessoa}
   const [tab,setTab]=useState("docs");
@@ -1996,6 +2110,9 @@ function Dossie() {
   // colaborador ATUAL do store (para refletir uploads em tempo real)
   const pAtual = sel ? ((sel.tipo==="clt"?clts:freelas).find(x=>x.id===sel.p.id) || sel.p) : null;
   const docsAtual = pAtual?.docs || {};
+  // Atestados enviados pelo COLABORADOR (link) → entram no dossiê em tempo real (abonados)
+  const atestadosColab = (sel && atestados) ? atestados.filter(a=> String(a.pid)===String(sel.p.id) || (soD(a.cpf) && pAtual && soD(a.cpf)===soD(pAtual.cpf)))
+    .map(a=>({ id:"at_"+(a._docId||a.id), data:a.data||hojeStr(), tipo:"atestado", horas:a.horas||8, obs:a.obs||"Atestado enviado pelo colaborador", anexo:a.anexo, descontar:false, _fromColab:true })) : [];
 
   const [nf,setNf]=useState({data:"2026-07-20",tipo:"falta",horas:8,descontar:true,obs:""});
   const [nb,setNb]=useState({data:"2026-07-20",tipo:"elogio",autor:"Gestor",texto:""});
@@ -2008,8 +2125,9 @@ function Dossie() {
     rd.onload=async()=>{ const arquivo=file.type&&file.type.indexOf("image")===0?await compressImg(rd.result):rd.result; addAnexo(key,{categoria,nome:file.name,data:"2026-07-20",arquivo}); toast("Documento adicional anexado"); };
     rd.readAsDataURL(file); };
 
+  const faltasView = [...atestadosColab, ...dos.faltas];
   const historico = sel ? [
-    ...dos.faltas.map(f=>({t:"Falta/Atestado",data:f.data,desc:`${f.tipo==="atestado"?"Atestado":"Falta"} · ${f.horas}h${f.descontar?" · desconto":""}${f.obs?` — ${f.obs}`:""}`,tone:"amber"})),
+    ...faltasView.map(f=>({t:"Falta/Atestado",data:f.data,desc:`${f.tipo==="atestado"?"Atestado":f.tipo==="atraso"?"Atraso":"Falta"} · ${f.horas}h${f.tipo==="atestado"?" · abonado":f.descontar?" · desconto":""}${f._fromColab?" · via app":""}${f.obs?` — ${f.obs}`:""}`,tone:"amber"})),
     ...dos.feedbacks.map(f=>({t:"Feedback",data:f.data,desc:`${f.tipo} (${f.autor}): ${f.texto}`,tone:"brand"})),
     ...(dos.anexos||[]).map(a=>({t:"Anexo",data:a.data,desc:`${a.categoria}: ${a.nome}`,tone:"brand"})),
   ].sort((a,b)=>b.data.localeCompare(a.data)) : [];
@@ -2134,23 +2252,27 @@ function Dossie() {
           </div>}
 
           {tab==="faltas" && <div>
+            <div className="mb-3 p-3 rounded-xl bg-slate-50 text-xs text-slate-500 flex items-center gap-2"><Icon d={I.shield} className="w-4 h-4 text-brand-500 shrink-0"/><span><b>Regras:</b> Falta desconta automaticamente · Atraso não desconta (marque para descontar) · Atestado abona o dia (sem desconto).</span></div>
             {editavel && <Card className="p-4 mb-4 bg-slate-50/60">
               <div className="grid sm:grid-cols-4 gap-2 items-end">
                 <Field label="Data"><Input type="date" value={nf.data} onChange={e=>setNf({...nf,data:e.target.value})}/></Field>
-                <Field label="Tipo"><Select value={nf.tipo} onChange={e=>setNf({...nf,tipo:e.target.value})}><option value="falta">Falta</option><option value="atestado">Atestado</option></Select></Field>
+                <Field label="Tipo"><Select value={nf.tipo} onChange={e=>{ const t=e.target.value; setNf({...nf,tipo:t,descontar: t==="falta"}); }}><option value="falta">Falta</option><option value="atraso">Atraso</option><option value="atestado">Atestado (abona)</option></Select></Field>
                 <Field label="Horas"><Input type="number" value={nf.horas} onChange={e=>setNf({...nf,horas:Number(e.target.value)})}/></Field>
-                <label className="flex items-center gap-2 text-sm pb-2.5"><input type="checkbox" checked={nf.descontar} onChange={e=>setNf({...nf,descontar:e.target.checked})}/> Descontar</label>
+                {nf.tipo==="atestado"
+                  ? <div className="flex items-center gap-2 text-sm pb-2.5 text-emerald-600 font-semibold"><Icon d={I.check} className="w-4 h-4"/> Abonado</div>
+                  : <label className="flex items-center gap-2 text-sm pb-2.5"><input type="checkbox" checked={nf.descontar} onChange={e=>setNf({...nf,descontar:e.target.checked})}/> Descontar {nf.tipo==="atraso"&&<span className="text-slate-400 text-xs">(opcional)</span>}</label>}
               </div>
               <div className="flex gap-2 mt-2"><Input value={nf.obs} onChange={e=>setNf({...nf,obs:e.target.value})} placeholder="Observação (opcional)"/><Btn icon={I.plus} onClick={salvarFalta}>Registrar</Btn></div>
             </Card>}
             <div className="space-y-2">
-              {dos.faltas.length===0 && <p className="text-sm text-slate-400 text-center py-4">Nenhuma falta ou atestado registrado.</p>}
-              {dos.faltas.map(f=>
-                <div key={f.id} className="flex items-center gap-3 p-3 rounded-xl border border-slate-200">
-                  <Badge tone={f.tipo==="atestado"?"blue":"amber"}>{f.tipo==="atestado"?"Atestado":"Falta"}</Badge>
-                  <div className="flex-1"><div className="text-sm font-semibold text-slate-800">{new Date(f.data).toLocaleDateString("pt-BR")} · {f.horas}h {f.obs&&`— ${f.obs}`}</div></div>
-                  {f.descontar?<Badge tone="red">Desconto ~R$ {(f.horas*12).toFixed(0)}</Badge>:<Badge tone="green">Sem desconto</Badge>}
-                </div>)}
+              {faltasView.length===0 && <p className="text-sm text-slate-400 text-center py-4">Nenhuma falta, atraso ou atestado registrado.</p>}
+              {faltasView.map(f=>{ const lbl=f.tipo==="atestado"?"Atestado":f.tipo==="atraso"?"Atraso":"Falta"; const abona=f.tipo==="atestado";
+                return <div key={f.id} className="flex items-center gap-3 p-3 rounded-xl border border-slate-200">
+                  <Badge tone={abona?"blue":f.tipo==="atraso"?"slate":"amber"}>{lbl}</Badge>
+                  <div className="flex-1"><div className="text-sm font-semibold text-slate-800">{new Date(f.data).toLocaleDateString("pt-BR")} · {f.horas}h {f.obs&&`— ${f.obs}`} {f._fromColab&&<Badge tone="brand">via app</Badge>}</div>
+                    {f.anexo&&<a href={f.anexo.dados} download={f.anexo.nome} className="text-xs text-brand-600 hover:underline flex items-center gap-1 mt-0.5"><Icon d={I.doc} className="w-3 h-3"/>{f.anexo.nome||"documento"}</a>}</div>
+                  {abona?<Badge tone="blue">Abonado</Badge>:f.descontar?<Badge tone="red">Desconto ~R$ {(f.horas*12).toFixed(0)}</Badge>:<Badge tone="green">Sem desconto</Badge>}
+                </div>;})}
             </div>
           </div>}
 
