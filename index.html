@@ -420,10 +420,33 @@ const PERMS_INIT = {
 const CAPS = [["escala","Editar escala"],["colaboradores","Gerir colaboradores"],["financeiro","Relatórios financeiros"],["documentos","Documentos e dossiê"],["unidades","Gerir unidades"],["equipe","Gerir equipe"]];
 const PAPEIS = { proprietario:"Proprietário", gerente:"Gerente", rh_financeiro:"RH / Financeiro" };
 
+// Coleção PÚBLICA de auto-cadastros (feitos pelo celular, sem login).
+// Cada cadastro é um documento próprio → o celular só CRIA (não sobrescreve a base).
+// O painel admin mescla esses cadastros automaticamente.
+function useCadastros(){
+  const [items,setItems]=useState([]);
+  useEffect(()=>{
+    const db=window.__WPDB; if(!db) return;
+    try{
+      return db.collection("cadastros").onSnapshot(function(snap){
+        const arr=[]; snap.forEach(function(d){ const x=d.data()||{}; arr.push({...x, id:"auto_"+d.id, _docId:d.id, _auto:true}); });
+        setItems(arr);
+      }, function(){ /* sem permissão/erro */ });
+    }catch(e){}
+  },[]);
+  const add=(obj)=>{ const db=window.__WPDB; if(!db) return Promise.reject(new Error("sem-banco")); return db.collection("cadastros").add(obj); };
+  const update=(docId,patch)=>{ const db=window.__WPDB; if(db){ try{ db.collection("cadastros").doc(docId).set(patch,{merge:true}); }catch(e){} } };
+  const remove=(docId)=>{ const db=window.__WPDB; if(db){ try{ db.collection("cadastros").doc(docId).delete(); }catch(e){} } };
+  return [items,{add,update,remove}];
+}
 function StoreProvider({children}) {
   const [unidades,setUnidades]=usePersist("unidades",INIT_UNIDADES);
-  const [clts,setClts]=usePersist("clts",INIT_CLTS);
-  const [freelas,setFreelas]=usePersist("freelas",INIT_FREELAS);
+  const [cltsBase,setClts]=usePersist("clts",INIT_CLTS);
+  const [freelasBase,setFreelas]=usePersist("freelas",INIT_FREELAS);
+  const [cadAuto,cadOps]=useCadastros();
+  // Listas expostas = base (admin) + auto-cadastros do celular (mesclados por vínculo)
+  const clts=[...cltsBase, ...cadAuto.filter(c=>c.tipo==="clt")];
+  const freelas=[...freelasBase, ...cadAuto.filter(c=>c.tipo==="free")];
   const [escala,setEscala]=usePersist("escala",escalaInicial());        // por unidade
   const [registros,setRegistros]=usePersist("registros",[]);           // feed ao vivo (só reais)
   const [pontoHist,setPontoHist]=usePersist("pontoHist",INIT_PONTOHIST);// histórico p/ apuração
@@ -449,17 +472,29 @@ function StoreProvider({children}) {
     });
   };
 
+  const ehAuto=(id)=> typeof id==="string" && id.indexOf("auto_")===0;
+  const docIdDe=(id)=> String(id).replace(/^auto_/,"");
   const salvarClt=(c)=>{
+    if(ehAuto(c.id)){ cadOps.update(c._docId||docIdDe(c.id), c); return; }
     if(c.id){ setClts(prev=>prev.map(x=>x.id===c.id?{...x,...c}:x)); }
-    else { const novo={...c,id:nextId(clts.length?clts:[{id:0}]),banco:"+00h00",extras:"0h00",atrasos:"0h00",docs:c.docs||{contrato:false,exames:false,ctps:false,rg:false},status:"ativo"};
+    else { const novo={...c,id:nextId(cltsBase.length?cltsBase:[{id:0}]),banco:"+00h00",extras:"0h00",atrasos:"0h00",docs:c.docs||{contrato:false,exames:false,ctps:false,rg:false},status:"ativo"};
       setClts(prev=>[...prev,novo]); gerarEscalaFixa(novo.id, c.escala||"6x1", c.unidade); }
   };
   const salvarFreela=(f)=>{
+    if(ehAuto(f.id)){ cadOps.update(f._docId||docIdDe(f.id), f); return; }
     if(f.id){ setFreelas(prev=>prev.map(x=>x.id===f.id?{...x,...f}:x)); }
     else { setFreelas(prev=>[...prev,{...f,id:(prev.reduce((m,x)=>Math.max(m,x.id),100))+1,status:"ativo",jornadasHist:[]}]); }
   };
+  // Cadastro PÚBLICO (celular, sem login) → grava na coleção "cadastros" (retorna Promise p/ validar sincronização)
+  const cadastrarPublico=(dados)=>{
+    if(window.__WPDB) return cadOps.add(dados);
+    // fallback local (sem banco): entra na base local
+    if(dados.tipo==="clt") salvarClt(dados); else salvarFreela(dados);
+    return Promise.resolve();
+  };
   const excluirColab=(id,tipo)=>{
-    if(tipo==="clt") setClts(prev=>prev.filter(x=>x.id!==id));
+    if(ehAuto(id)){ cadOps.remove(docIdDe(id)); }
+    else if(tipo==="clt") setClts(prev=>prev.filter(x=>x.id!==id));
     else setFreelas(prev=>prev.filter(x=>x.id!==id));
     setEscala(prev=>{ const n={}; Object.keys(prev).forEach(uid=>{ n[uid]={}; Object.keys(prev[uid]).forEach(d=>{ n[uid][d]=prev[uid][d].filter(a=>a.pid!==id); }); }); return n; });
   };
@@ -474,6 +509,7 @@ function StoreProvider({children}) {
 
   // Anexa/atualiza um documento de um colaborador (aceita string legado ou {nome,dados})
   const anexarDoc=(tipo,id,key,doc)=>{
+    if(ehAuto(id)){ const atual=(tipo==="clt"?clts:freelas).find(x=>x.id===id); cadOps.update(docIdDe(id), {docs:{...((atual&&atual.docs)||{}),[key]:doc}}); return; }
     const upd=(prev)=>prev.map(x=>x.id===id?{...x,docs:{...(x.docs||{}),[key]:doc}}:x);
     if(tipo==="clt") setClts(upd); else setFreelas(upd);
   };
@@ -484,7 +520,7 @@ function StoreProvider({children}) {
   const addFeedback=(key,fb)=>setDossie(p=>({...p,[key]:{...getDossie(key),feedbacks:[{...fb,id:Math.random().toString(36).slice(2)},...getDossie(key).feedbacks]}}));
   const addAnexo=(key,ax)=>setDossie(p=>({...p,[key]:{...getDossie(key),anexos:[{...ax,id:Math.random().toString(36).slice(2)},...(getDossie(key).anexos||[])]}}));
 
-  const value={ unidades,salvarUnidade,excluirUnidade, clts,freelas,salvarClt,salvarFreela,excluirColab, anexarDoc,
+  const value={ unidades,salvarUnidade,excluirUnidade, clts,freelas,salvarClt,salvarFreela,excluirColab,cadastrarPublico, anexarDoc,
     escala,setEscala, registros,addRegistro, pontoHist, freelancerEscaladoHoje,
     cargosFreela,salvarCargoFreela,excluirCargoFreela,
     dossie,getDossie,addFalta,addFeedback,addAnexo, perfil,setPerfil, perms,setPerms, can };
@@ -670,7 +706,7 @@ function EscalaVisual() {
   const setTurnoTo=(dia,id,turno)=>setEscala(prev=>{ const u={...prev[uSel]}; u[dia]=u[dia].map(a=>a.id===id?{...a,turno,marca:turno==="folga"?null:a.marca}:a); return {...prev,[uSel]:u}; });
   const setHorario=(dia,id,h)=>setEscala(prev=>{ const u={...prev[uSel]}; u[dia]=u[dia].map(a=>a.id===id?{...a,h}:a); return {...prev,[uSel]:u}; });
   const [editH,setEditH]=useState(null); // {di,id,hi,hf}
-  const addFreela=(dia,pid)=>{ setEscala(prev=>{ const u={...(prev[uSel]||escalaVaziaUnidade())}; u[dia]=[...(u[dia]||[]),{id:"f"+Date.now(),pid,tipo:"free",turno:"noite"}]; return {...prev,[uSel]:u}; }); setAdd(null); toast("Freelancer inserido na escala desta casa"); };
+  const addColab=(dia,pid,tipo)=>{ setEscala(prev=>{ const u={...(prev[uSel]||escalaVaziaUnidade())}; u[dia]=[...(u[dia]||[]),{id:(tipo==="clt"?"c":"f")+Date.now(),pid,tipo,turno:tipo==="clt"?turnoPorDia(dia):"noite"}]; return {...prev,[uSel]:u}; }); setAdd(null); toast("Colaborador inserido na escala desta casa"); };
 
   const tot=Object.values(escU).flat();
   const nClt=tot.filter(a=>a.tipo==="clt"&&a.turno!=="folga").length;
@@ -680,7 +716,7 @@ function EscalaVisual() {
 
   return <div className="fade-in">
     <PageHeader title="Escala por unidade" sub="Uma aba por casa · filtro por setor · layout compacto · menu (⋯) para turno, faltou, atrasou, folga">
-      {editavel && <Btn icon={I.plus} onClick={()=>setAdd(HOJE_IDX)}>Incluir freelancer</Btn>}
+      {editavel && <Btn icon={I.plus} onClick={()=>setAdd(HOJE_IDX)}>Incluir colaborador</Btn>}
     </PageHeader>
 
     {/* Abas das casas */}
@@ -774,16 +810,16 @@ function EscalaVisual() {
     <Modal open={add!==null} onClose={()=>setAdd(null)}>
       <div className="p-6">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-bold text-slate-900">Incluir freelancer em {uAtual?.nome} {add!==null&&`— ${DIAS[add]}`}</h3>
+          <h3 className="text-lg font-bold text-slate-900">Incluir colaborador em {uAtual?.nome} {add!==null&&`— ${DIAS[add]}`}</h3>
           <button onClick={()=>setAdd(null)} className="text-slate-400 hover:text-slate-600"><Icon d={I.x}/></button>
         </div>
-        <p className="text-sm text-slate-500 mb-4">Freelancers entram manualmente, quando há necessidade de cobertura. Só quem está escalado consegue registrar ponto.</p>
-        <div className="space-y-2">
-          {freelas.filter(f=>f.status==="ativo").map(f=>
-            <button key={f.id} onClick={()=>addFreela(add,f.id)} className="w-full flex items-center gap-3 p-3 rounded-xl border border-slate-200 hover:border-free-400 hover:bg-free-50/40 transition">
-              <Avatar name={f.nome} tone="free"/>
-              <div className="text-left flex-1"><div className="font-semibold text-slate-800">{f.nome}</div><div className="text-xs text-slate-500">{f.cargo} · casa base: {unidadeNome(f.unidade,unidades)}</div></div>
-              <Icon d={I.plus} className="w-4 h-4 text-free-500"/>
+        <p className="text-sm text-slate-500 mb-4">Inclua um freelancer (cobertura) ou um CLT auto-cadastrado. Só quem está escalado consegue registrar ponto.</p>
+        <div className="space-y-2 max-h-[50vh] overflow-y-auto">
+          {[...freelas.filter(f=>f.status==="ativo").map(f=>({...f,_t:"free"})), ...clts.filter(c=>c._auto).map(c=>({...c,_t:"clt"}))].map(f=>
+            <button key={f._t+f.id} onClick={()=>addColab(add,f.id,f._t)} className={cx("w-full flex items-center gap-3 p-3 rounded-xl border border-slate-200 transition", f._t==="clt"?"hover:border-brand-400 hover:bg-brand-50/40":"hover:border-free-400 hover:bg-free-50/40")}>
+              <Avatar name={f.nome} src={f.foto} tone={f._t==="clt"?"brand":"free"}/>
+              <div className="text-left flex-1"><div className="font-semibold text-slate-800 flex items-center gap-2">{f.nome} <Badge tone={f._t==="clt"?"brand":"free"}>{f._t==="clt"?"CLT":"Freela"}</Badge></div><div className="text-xs text-slate-500">{f.cargo} · casa base: {unidadeNome(f.unidade,unidades)}</div></div>
+              <Icon d={I.plus} className={cx("w-4 h-4", f._t==="clt"?"text-brand-500":"text-free-500")}/>
             </button>)}
         </div>
       </div>
@@ -949,7 +985,7 @@ function PontoLive() {
 
 /* ============================ QUIOSQUE DE PONTO ============================ */
 function PontoKiosk({ mode, onClose }) {
-  const { unidades, clts, freelas, escala, registros, freelancerEscaladoHoje, addRegistro, salvarClt, salvarFreela } = useStore();
+  const { unidades, clts, freelas, escala, registros, freelancerEscaladoHoje, addRegistro, salvarClt, salvarFreela, cadastrarPublico } = useStore();
   const ativos = mode==="clt" ? clts : freelas.filter(f=>f.status==="ativo");
   const [fluxo,setFluxo]=useState("escolha"); // escolha | registro | cadastro
   const [unidadeId,setUnidadeId]=useState(unidades[0]?.id);
@@ -984,6 +1020,8 @@ function PontoKiosk({ mode, onClose }) {
   const [cadOk,setCadOk]=useState(false);
   const [working,setWorking]=useState(null);   // {entradaMin, entradaHora} — jornada aberta
   const [saiuTotal,setSaiuTotal]=useState(null); // segundos trabalhados no checkout
+  const [cadEnviando,setCadEnviando]=useState(false);
+  const [cadErro,setCadErro]=useState("");
   const videoRef=useRef(null); const streamRef=useRef(null);
   const clock=useClock();
   const accent = mode==="clt"?"brand":"free";
@@ -1022,7 +1060,13 @@ function PontoKiosk({ mode, onClose }) {
     let d = (now.getHours()*3600+now.getMinutes()*60+now.getSeconds()) - (working?working.entradaMin*60:0); if(d<0) d+=86400;
     setSaiuTotal(d); setWorking(null); setDone(true); setTimeout(onClose,3600);
   };
-  const registrarCadastro=(dados)=>{ if(mode==="clt") salvarClt(dados); else salvarFreela(dados); setCadOk(true); };
+  const registrarCadastro=(dados)=>{
+    // Grava no BANCO CENTRAL e só libera após confirmar a sincronização
+    setCadEnviando(true); setCadErro("");
+    Promise.resolve(cadastrarPublico({...dados, tipo:mode, status:"ativo"}))
+      .then(()=>{ setCadEnviando(false); setCadOk(true); })
+      .catch(()=>{ setCadEnviando(false); setCadErro("Não foi possível salvar seu cadastro no servidor. Verifique sua internet e tente novamente."); });
+  };
 
   return <div className="fixed inset-0 z-50 grad-ink grad-hero flex items-center justify-center p-4">
     <button onClick={onClose} className="absolute top-4 right-4 w-10 h-10 rounded-xl bg-white/10 text-white grid place-items-center hover:bg-white/20"><Icon d={I.x}/></button>
@@ -1050,10 +1094,21 @@ function PontoKiosk({ mode, onClose }) {
             <Btn className="w-full" size="lg" variant="danger" icon={I.check} onClick={registrarSaida}>Fazer checkout (Saída)</Btn>
             <Btn variant="ghost" className="w-full mt-2" onClick={onClose}>Fechar (continuo trabalhando)</Btn>
           </div>
+        : cadEnviando ? <div className="py-12 text-center fade-in">
+            <div className="w-12 h-12 mx-auto rounded-full border-4 border-slate-200 border-t-brand-500 animate-spin mb-4"/>
+            <h3 className="text-lg font-bold text-slate-900">Salvando seu cadastro…</h3>
+            <p className="text-slate-500 text-sm mt-1">Gravando no sistema com segurança.</p>
+          </div>
+        : cadErro ? <div className="py-10 text-center fade-in">
+            <div className="w-16 h-16 mx-auto rounded-full bg-rose-100 text-rose-500 grid place-items-center mb-3"><Icon d={I.x} className="w-8 h-8"/></div>
+            <h3 className="text-lg font-bold text-slate-900">Não deu para salvar</h3>
+            <p className="text-slate-500 text-sm mt-1 mb-4">{cadErro}</p>
+            <Btn className="w-full" variant={accent==="clt"?"primary":"free"} onClick={()=>{setCadErro("");setFluxo("cadastro");}}>Tentar novamente</Btn>
+          </div>
         : cadOk ? <div className="py-10 text-center fade-in">
             <div className="w-20 h-20 mx-auto rounded-full bg-emerald-500 grid place-items-center text-white mb-4 shadow-glow"><Icon d={I.check} className="w-10 h-10" stroke={3}/></div>
             <h3 className="text-2xl font-extrabold text-slate-900">Cadastro concluído!</h3>
-            <p className="text-slate-500 mt-1">Agora você já pode registrar seu ponto.</p>
+            <p className="text-slate-500 mt-1">Seu cadastro foi salvo no sistema. Peça ao gestor para te incluir na escala.</p>
             <Btn className="mt-4" icon={I.clock} variant={accent==="clt"?"primary":"free"} onClick={()=>{setCadOk(false);setFluxo("registro");setStep(0);}}>Registrar ponto agora</Btn>
           </div>
         : fluxo==="escolha" ? <div className="fade-in text-center py-4">
