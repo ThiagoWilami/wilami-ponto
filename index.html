@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- build: login independente por cliente (dono/gerente vinculado) 2026-07-31 -->
+<!-- build: financeiro folha CLT + freelas + valor horas extras 2026-07-31 -->
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8" />
@@ -331,6 +331,8 @@ const INIT_PONTOHIST = [];
 /* ===== Cálculo de jornada (horas trabalhadas + extras) ===== */
 const horaMin = (str)=>{ const [h,m]=(str||"0:0").split(":"); return (+h)*60+(+m); };
 const fmtHoras = (min)=>`${Math.floor(Math.abs(min)/60)}h${String(Math.abs(min)%60).padStart(2,"0")}`;
+// Valor em reais (2 casas) — usado nas folhas de pagamento (CLT e freelancers).
+const fmtBRL = (v)=> "R$ "+Number(v||0).toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2});
 function calcTrabalho(punches){ // punches: [{acao,min}]
   const g=a=>{ const p=punches.find(x=>x.acao===a); return p?p.min:null; };
   const ent=g("Entrada"), sai=g("Saída");
@@ -2281,60 +2283,105 @@ function LinksQR() {
 
 /* ============================ RELATÓRIOS FINANCEIROS ============================ */
 function Financeiro() {
-  const { freelasComPagamentos:freelas, unidades } = useStore();
+  const { freelasComPagamentos:freelas, clts, unidades, registros, pontoHist, getDossie } = useStore();
   const toast=useContext(ToastCtx);
+  const [aba,setAba]=useState("clt");                 // "clt" (folha) | "freela" (pagamentos)
   const [ini,setIni]=useState("2026-07-01");
   const [fim,setFim]=useState("2026-07-31");
   const [uni,setUni]=useState(unidades[0]?.id ?? "todas");
-
-  const dentro=(j)=> (!ini||j.data>=ini) && (!fim||j.data<=fim) && (uni==="todas"||j.unidade===Number(uni));
+  const uNome = uni==="todas"?"Todas as casas":unidadeNome(Number(uni),unidades);
+  const naData=(d)=> (!ini||d>=ini) && (!fim||d<=fim);
   const fmtD=(ds)=>ds.map(d=>d.slice(8,10)+"/"+d.slice(5,7)).join(", ");
-  const linhas = freelas.map(fr=>{ const js=(fr.jornadasHist||[]).filter(dentro);
+
+  /* ===================== FOLHA CLT (fechamento e pagamento) ===================== */
+  // Apuração REAL das batidas no período (extras normais, extras 100% em folga e adicional noturno).
+  const apurCLT = apurarHoras([...pontoHist, ...registros]).filter(x=>x.tipo==="clt" && x.completo && naData(x.dia));
+  const linhasCLT = clts.filter(c=>uni==="todas"||c.unidade===Number(uni)).map(c=>{
+    const meus=apurCLT.filter(x=>x.nome===c.nome);
+    const extrasMin=meus.reduce((s,x)=>s+(x.extras||0),0);
+    const extras100Min=meus.reduce((s,x)=>s+(x.extras100||0),0);
+    const notMin=meus.reduce((s,x)=>s+minutosNoturnos(x.punches||[]),0);
+    const salario=Number(c.salario||0);
+    const vHora=salario? salario/220 : 0;              // hora normal (44h/sem → 220h/mês)
+    const vDia =salario? salario/30  : 0;
+    // Horas extras: 50% em dia útil, 100% em folga trabalhada (Art. 59 CLT)
+    const extrasVal=(extrasMin/60)*vHora*1.5 + (extras100Min/60)*vHora*2;
+    const notVal=(notMin/60)*vHora*0.2;                // adicional noturno 20% (Art. 73 CLT)
+    // Descontos lançados no dossiê dentro do período
+    const dos=getDossie("clt-"+c.id);
+    const faltas=(dos.faltas||[]).filter(x=>x.tipo==="falta" && x.descontar && naData(x.data));
+    const atrasosD=(dos.faltas||[]).filter(x=>x.tipo==="atraso" && x.descontar && naData(x.data));
+    const descFaltas=faltas.length*vDia;
+    const descAtrasos=atrasosD.reduce((s,x)=>s+vHora*(Number(x.horas)||0),0);
+    const descontos=descFaltas+descAtrasos;
+    const proventos=salario+extrasVal+notVal;
+    const liquido=proventos-descontos;
+    return { id:c.id, nome:c.nome, foto:c.foto, pix:c.pix, escala:c.escala, salario, vHora,
+      extrasMin, extras100Min, extrasHoras:extrasMin+extras100Min, extrasVal, notMin, notVal,
+      descontos, faltasQtd:faltas.length, atrasosQtd:atrasosD.length, liquido, semSalario:!salario };
+  });
+  const cltFolha=linhasCLT.reduce((s,l)=>s+l.liquido,0);
+  const cltExtras=linhasCLT.reduce((s,l)=>s+l.extrasVal,0);
+  const cltSalarios=linhasCLT.reduce((s,l)=>s+l.salario,0);
+
+  /* ===================== PAGAMENTO FREELANCERS ===================== */
+  const dentroFree=(j)=> naData(j.data) && (uni==="todas"||j.unidade===Number(uni));
+  const linhasFree = freelas.map(fr=>{ const js=(fr.jornadasHist||[]).filter(dentroFree);
     return { id:fr.id, nome:fr.nome, pix:fr.pix, dias:js.length, total:js.reduce((s,j)=>s+j.valor,0), datas:js.map(j=>j.data).sort() };
   }).filter(l=>l.dias>0);
-  const somaTotal=linhas.reduce((s,l)=>s+l.total,0);
-  const somaDias=linhas.reduce((s,l)=>s+l.dias,0);
-  const uNome = uni==="todas"?"Todas as casas":unidadeNome(Number(uni),unidades);
+  const freeTotal=linhasFree.reduce((s,l)=>s+l.total,0);
+  const freeDias=linhasFree.reduce((s,l)=>s+l.dias,0);
 
-  const textoWhats=(l)=>`*${l.nome}*\nValor acumulado: R$ ${l.total.toLocaleString("pt-BR")}\nDias trabalhados: ${l.dias}\nDatas: ${fmtD(l.datas)}\nPix: ${l.pix}`;
-  const copiarUm=(l)=>{ copyText(textoWhats(l)); toast("Copiado para enviar no WhatsApp"); };
-  const copiarTodos=()=>{ const txt=`💰 *Fechamento — ${uNome}*\n_${ini} a ${fim}_\n\n`+linhas.map(textoWhats).join("\n\n")+`\n\n*Total: R$ ${somaTotal.toLocaleString("pt-BR")}* (${somaDias} dias)`;
-    copyText(txt); toast(`${linhas.length} colaboradores copiados p/ WhatsApp`); };
-
-  // Gera um PNG de gráfico de barras para embutir no Excel
-  const chartPNG=()=>{
-    const W=460,H=260,pad=40, c=document.createElement("canvas"); c.width=W;c.height=H;
-    const g=c.getContext("2d"); g.fillStyle="#ffffff"; g.fillRect(0,0,W,H);
-    g.fillStyle="#0f172a"; g.font="bold 14px Arial"; g.fillText("Valor acumulado por freelancer",pad,24);
-    const max=Math.max(...linhas.map(l=>l.total),1); const bw=(W-pad*2)/Math.max(linhas.length,1);
-    linhas.forEach((l,i)=>{ const h=(l.total/max)*(H-pad-50); const x=pad+i*bw+bw*0.15, y=H-30-h;
-      g.fillStyle="#6366f1"; g.fillRect(x,y,bw*0.7,h);
-      g.fillStyle="#475569"; g.font="9px Arial"; g.save(); g.translate(x+bw*0.35,H-26); g.rotate(-0.5); g.fillText(l.nome.split(" ")[0],0,0); g.restore();
-      g.fillStyle="#0f172a"; g.font="bold 9px Arial"; g.fillText("R$"+l.total,x,y-3); });
-    return c.toDataURL("image/png");
+  /* ===================== WhatsApp ===================== */
+  const whatsCLT=(l)=>`*${l.nome}* (CLT)\nSalário base: ${fmtBRL(l.salario)}\nHoras extras: ${fmtHoras(l.extrasHoras)} = ${fmtBRL(l.extrasVal)}${l.notVal?`\nAdic. noturno: ${fmtBRL(l.notVal)}`:""}${l.descontos?`\nDescontos: -${fmtBRL(l.descontos)}`:""}\n*Líquido a pagar: ${fmtBRL(l.liquido)}*\nPix: ${l.pix||"—"}`;
+  const whatsFree=(l)=>`*${l.nome}*\nValor acumulado: ${fmtBRL(l.total)}\nDias trabalhados: ${l.dias}\nDatas: ${fmtD(l.datas)}\nPix: ${l.pix||"—"}`;
+  const copiarUm=(txt)=>{ copyText(txt); toast("Copiado para enviar no WhatsApp"); };
+  const copiarTodos=()=>{
+    if(aba==="clt"){ const txt=`💼 *Folha CLT — ${uNome}*\n_${fmtDataBR(ini)} a ${fmtDataBR(fim)}_\n\n`+linhasCLT.map(whatsCLT).join("\n\n")+`\n\n*Total líquido: ${fmtBRL(cltFolha)}*`;
+      copyText(txt); toast(`${linhasCLT.length} colaboradores CLT copiados`); }
+    else { const txt=`💰 *Pagamento freelancers — ${uNome}*\n_${fmtDataBR(ini)} a ${fmtDataBR(fim)}_\n\n`+linhasFree.map(whatsFree).join("\n\n")+`\n\n*Total: ${fmtBRL(freeTotal)}* (${freeDias} dias)`;
+      copyText(txt); toast(`${linhasFree.length} freelancers copiados`); }
   };
 
+  /* ===================== Excel ===================== */
   const exportarExcel=async()=>{
     if(!window.ExcelJS){ toast("Biblioteca Excel não carregada — verifique a conexão"); return; }
-    const wb=new ExcelJS.Workbook(); const ws=wb.addWorksheet("Financeiro");
-    ws.columns=[{width:32},{width:14},{width:20},{width:26},{width:36}];
-    ws.mergeCells("A1:E1"); const t=ws.getCell("A1"); t.value=`Relatório Financeiro — ${uNome}`; t.font={bold:true,size:16,color:{argb:"FF1E1B4B"}};
-    ws.mergeCells("A2:E2"); ws.getCell("A2").value=`Período: ${ini} a ${fim}`; ws.getCell("A2").font={italic:true,color:{argb:"FF64748B"}};
-    const head=ws.addRow(["Colaborador","Dias trabalhados","Valor acumulado (R$)","Pix","Datas trabalhadas"]);
-    head.eachCell(cell=>{ cell.font={bold:true,color:{argb:"FFFFFFFF"}}; cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FF6366F1"}}; cell.alignment={horizontal:"center"}; });
-    linhas.forEach(l=>{ const r=ws.addRow([l.nome,l.dias,l.total,l.pix,fmtD(l.datas)]); r.getCell(3).numFmt='"R$" #,##0.00'; r.getCell(3).font={bold:true}; });
-    const tot=ws.addRow(["TOTAL",somaDias,somaTotal,"",""]); tot.eachCell(cell=>{ cell.font={bold:true}; cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFEEF2FF"}}; }); tot.getCell(3).numFmt='"R$" #,##0.00';
-    try{ const imgId=wb.addImage({base64:chartPNG(),extension:"png"}); ws.addImage(imgId,{tl:{col:6,row:1},ext:{width:460,height:260}}); }catch(e){}
+    const wb=new ExcelJS.Workbook();
+    const azul="FF6366F1", cinza="FFEEF2FF";
+    // --- Aba 1: Folha CLT ---
+    const wc=wb.addWorksheet("Folha CLT");
+    wc.columns=[{width:30},{width:16},{width:14},{width:18},{width:16},{width:16},{width:18},{width:22}];
+    wc.mergeCells("A1:H1"); const tc=wc.getCell("A1"); tc.value=`Folha de fechamento CLT — ${uNome}`; tc.font={bold:true,size:15,color:{argb:"FF1E1B4B"}};
+    wc.mergeCells("A2:H2"); wc.getCell("A2").value=`Período: ${fmtDataBR(ini)} a ${fmtDataBR(fim)}`; wc.getCell("A2").font={italic:true,color:{argb:"FF64748B"}};
+    const hc=wc.addRow(["Colaborador","Salário base","Horas extras","Valor extras","Adic. noturno","Descontos","Líquido a pagar","Pix"]);
+    hc.eachCell(cell=>{ cell.font={bold:true,color:{argb:"FFFFFFFF"}}; cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:azul}}; cell.alignment={horizontal:"center"}; });
+    linhasCLT.forEach(l=>{ const r=wc.addRow([l.nome,l.salario,fmtHoras(l.extrasHoras),l.extrasVal,l.notVal,-l.descontos,l.liquido,l.pix||""]);
+      [2,4,5,6,7].forEach(i=>r.getCell(i).numFmt='"R$" #,##0.00'); r.getCell(7).font={bold:true}; });
+    const tcTot=wc.addRow(["TOTAL",cltSalarios,"",cltExtras,"","",cltFolha,""]); tcTot.eachCell(cell=>{ cell.font={bold:true}; cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:cinza}}; });
+    [2,4,7].forEach(i=>tcTot.getCell(i).numFmt='"R$" #,##0.00');
+    // --- Aba 2: Pagamento freelancers ---
+    const wf=wb.addWorksheet("Freelancers");
+    wf.columns=[{width:30},{width:16},{width:20},{width:22},{width:36}];
+    wf.mergeCells("A1:E1"); const tf=wf.getCell("A1"); tf.value=`Pagamento freelancers — ${uNome}`; tf.font={bold:true,size:15,color:{argb:"FF1E1B4B"}};
+    wf.mergeCells("A2:E2"); wf.getCell("A2").value=`Período: ${fmtDataBR(ini)} a ${fmtDataBR(fim)}`; wf.getCell("A2").font={italic:true,color:{argb:"FF64748B"}};
+    const hf=wf.addRow(["Colaborador","Dias trabalhados","Valor a pagar","Pix","Datas trabalhadas"]);
+    hf.eachCell(cell=>{ cell.font={bold:true,color:{argb:"FFFFFFFF"}}; cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFEA580C"}}; cell.alignment={horizontal:"center"}; });
+    linhasFree.forEach(l=>{ const r=wf.addRow([l.nome,l.dias,l.total,l.pix||"",fmtD(l.datas)]); r.getCell(3).numFmt='"R$" #,##0.00'; r.getCell(3).font={bold:true}; });
+    const tfTot=wf.addRow(["TOTAL",freeDias,freeTotal,"",""]); tfTot.eachCell(cell=>{ cell.font={bold:true}; cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFFFF1E8"}}; }); tfTot.getCell(3).numFmt='"R$" #,##0.00';
     const buf=await wb.xlsx.writeBuffer(); const blob=new Blob([buf],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
-    const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`financeiro_${uNome.replace(/\s+/g,"-")}_${ini}.xlsx`; a.click(); URL.revokeObjectURL(url);
-    toast("Excel gerado com tabela e gráfico");
+    const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`folha_${uNome.replace(/\s+/g,"-")}_${ini}.xlsx`; a.click(); URL.revokeObjectURL(url);
+    toast("Excel gerado: Folha CLT + Freelancers");
   };
 
+  const abas=[["clt","Folha CLT"],["freela","Pagamento freelancers"]];
   return <div className="fade-in">
-    <PageHeader title="Relatórios financeiros" sub="Filtro obrigatório por período e casa · Excel com gráfico · copiar para WhatsApp">
+    <PageHeader title="Relatórios financeiros" sub="Folha CLT (salário + extras) e pagamento de freelancers · filtro por período e casa · Excel · WhatsApp">
       <Btn variant="ghost" icon={I.copy} onClick={copiarTodos}>Copiar p/ WhatsApp</Btn>
       <Btn icon={I.download} onClick={exportarExcel}>Exportar Excel</Btn>
     </PageHeader>
+    <div className="flex flex-wrap gap-2 mb-3">
+      {abas.map(([k,l])=><button key={k} onClick={()=>setAba(k)} className={cx("px-4 py-2 rounded-xl text-sm font-semibold border transition", aba===k?"grad-brand text-white border-transparent shadow-glow":"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>{l}</button>)}
+    </div>
     <Card className="p-4 mb-4"><div className="flex flex-wrap items-end gap-3">
       <div className="flex items-center gap-2 text-slate-400"><Icon d={I.filter} className="w-4 h-4"/><span className="text-xs font-bold uppercase">Filtros (obrigatórios)</span></div>
       <Field label="De"><Input type="date" value={ini} onChange={e=>setIni(e.target.value)}/></Field>
@@ -2343,26 +2390,56 @@ function Financeiro() {
         <option value="todas">Todas as casas</option>{unidades.map(u=><option key={u.id} value={u.id}>{u.nome}</option>)}
       </Select></Field>
     </div></Card>
-    <div className="grid sm:grid-cols-3 gap-3 mb-4">
-      <StatCard icon={I.wallet} label="Valor acumulado" value={"R$ "+somaTotal.toLocaleString("pt-BR")} tone="free"/>
-      <StatCard icon={I.calendar} label="Dias trabalhados" value={somaDias} tone="brand"/>
-      <StatCard icon={I.coffee} label="Colaboradores" value={linhas.length} tone="green"/>
-    </div>
-    <Card className="overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm min-w-[640px]">
-      <thead><tr className="text-left text-slate-400 border-b border-slate-100">{["Colaborador","Dias trab.","Valor acumulado","Datas trabalhadas","Pix","WhatsApp"].map(h=><th key={h} className="px-4 py-3 font-semibold">{h}</th>)}</tr></thead>
-      <tbody className="divide-y divide-slate-50">
-        {linhas.map(l=><tr key={l.id} className="hover:bg-slate-50/70">
-          <td className="px-4 py-3"><div className="flex items-center gap-2"><Avatar name={l.nome} tone="free" size="w-7 h-7"/><span className="font-semibold text-slate-800">{l.nome}</span></div></td>
-          <td className="px-4 py-3">{l.dias}</td>
-          <td className="px-4 py-3 font-bold text-slate-900">R$ {l.total.toLocaleString("pt-BR")}</td>
-          <td className="px-4 py-3 text-xs text-slate-500 max-w-[220px]">{fmtD(l.datas)}</td>
-          <td className="px-4 py-3 font-mono text-xs text-slate-500">{l.pix}</td>
-          <td className="px-4 py-3"><Btn size="sm" variant="soft" icon={I.copy} onClick={()=>copiarUm(l)}>Copiar</Btn></td>
-        </tr>)}
-        {linhas.length===0 && <tr><td colSpan="6" className="px-4 py-8 text-center text-slate-400">Sem lançamentos no filtro selecionado.</td></tr>}
-      </tbody>
-      {linhas.length>0 && <tfoot><tr className="border-t-2 border-slate-100 bg-slate-50/60"><td className="px-4 py-3 font-bold">Total</td><td className="px-4 py-3 font-bold">{somaDias}</td><td className="px-4 py-3 font-extrabold text-free-700">R$ {somaTotal.toLocaleString("pt-BR")}</td><td colSpan="3"/></tr></tfoot>}
-    </table></div></Card>
+
+    {aba==="clt" ? <>
+      <div className="grid sm:grid-cols-3 gap-3 mb-4">
+        <StatCard icon={I.wallet} label="Folha líquida CLT" value={fmtBRL(cltFolha)} tone="brand"/>
+        <StatCard icon={I.chart} label="Valor em horas extras" value={fmtBRL(cltExtras)} tone="amber"/>
+        <StatCard icon={I.user} label="Colaboradores CLT" value={linhasCLT.length} tone="green"/>
+      </div>
+      <Card className="overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm min-w-[860px]">
+        <thead><tr className="text-left text-slate-400 border-b border-slate-100">{["Colaborador","Salário base","Horas extras","Adic. noturno","Descontos","Líquido a pagar","Pix","WhatsApp"].map(h=><th key={h} className="px-4 py-3 font-semibold">{h}</th>)}</tr></thead>
+        <tbody className="divide-y divide-slate-50">
+          {linhasCLT.map(l=><tr key={l.id} className="hover:bg-slate-50/70">
+            <td className="px-4 py-3"><div className="flex items-center gap-2"><Avatar name={l.nome} src={l.foto} tone="brand" size="w-7 h-7"/><div><div className="font-semibold text-slate-800">{l.nome}</div>{l.semSalario && <div className="text-[11px] text-amber-600">defina o salário no cadastro</div>}</div></div></td>
+            <td className="px-4 py-3 tabular-nums text-slate-700">{fmtBRL(l.salario)}</td>
+            <td className="px-4 py-3 tabular-nums"><span className="font-semibold text-slate-800">{fmtHoras(l.extrasHoras)}</span>{l.extrasVal>0 && <span className="text-emerald-600 font-semibold"> · {fmtBRL(l.extrasVal)}</span>}</td>
+            <td className="px-4 py-3 tabular-nums text-slate-600">{l.notVal>0?fmtBRL(l.notVal):"—"}</td>
+            <td className={cx("px-4 py-3 tabular-nums",l.descontos>0?"text-rose-600 font-semibold":"text-slate-400")}>{l.descontos>0?"-"+fmtBRL(l.descontos):"—"}</td>
+            <td className="px-4 py-3 font-extrabold text-slate-900 tabular-nums">{fmtBRL(l.liquido)}</td>
+            <td className="px-4 py-3 font-mono text-xs text-slate-500">{l.pix||"—"}</td>
+            <td className="px-4 py-3"><Btn size="sm" variant="soft" icon={I.copy} onClick={()=>copiarUm(whatsCLT(l))}>Copiar</Btn></td>
+          </tr>)}
+          {linhasCLT.length===0 && <tr><td colSpan="8" className="px-4 py-8 text-center text-slate-400">Nenhum colaborador CLT nesta casa.</td></tr>}
+        </tbody>
+        {linhasCLT.length>0 && <tfoot><tr className="border-t-2 border-slate-100 bg-slate-50/60">
+          <td className="px-4 py-3 font-bold">Total</td><td className="px-4 py-3 font-bold tabular-nums">{fmtBRL(cltSalarios)}</td>
+          <td className="px-4 py-3 font-bold text-emerald-700 tabular-nums">{fmtBRL(cltExtras)}</td><td/>
+          <td/><td className="px-4 py-3 font-extrabold text-brand-700 tabular-nums">{fmtBRL(cltFolha)}</td><td colSpan="2"/></tr></tfoot>}
+      </table></div></Card>
+      <p className="text-xs text-slate-400 mt-3">Extras: 50% em dia útil e 100% em folga trabalhada (Art. 59) · adicional noturno 20% entre 22h e 5h (Art. 73) · base da hora = salário ÷ 220. Se um CLT (ex.: Thiago) não aparecer aqui, confira em Colaboradores CLT se o vínculo dele está como CLT e se a casa é a selecionada.</p>
+    </> : <>
+      <div className="grid sm:grid-cols-3 gap-3 mb-4">
+        <StatCard icon={I.wallet} label="Total a pagar (freelas)" value={fmtBRL(freeTotal)} tone="free"/>
+        <StatCard icon={I.calendar} label="Dias trabalhados" value={freeDias} tone="brand"/>
+        <StatCard icon={I.coffee} label="Freelancers" value={linhasFree.length} tone="green"/>
+      </div>
+      <Card className="overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm min-w-[640px]">
+        <thead><tr className="text-left text-slate-400 border-b border-slate-100">{["Colaborador","Dias trab.","Valor a pagar","Datas trabalhadas","Pix","WhatsApp"].map(h=><th key={h} className="px-4 py-3 font-semibold">{h}</th>)}</tr></thead>
+        <tbody className="divide-y divide-slate-50">
+          {linhasFree.map(l=><tr key={l.id} className="hover:bg-slate-50/70">
+            <td className="px-4 py-3"><div className="flex items-center gap-2"><Avatar name={l.nome} tone="free" size="w-7 h-7"/><span className="font-semibold text-slate-800">{l.nome}</span></div></td>
+            <td className="px-4 py-3">{l.dias}</td>
+            <td className="px-4 py-3 font-bold text-slate-900 tabular-nums">{fmtBRL(l.total)}</td>
+            <td className="px-4 py-3 text-xs text-slate-500 max-w-[220px]">{fmtD(l.datas)}</td>
+            <td className="px-4 py-3 font-mono text-xs text-slate-500">{l.pix||"—"}</td>
+            <td className="px-4 py-3"><Btn size="sm" variant="soft" icon={I.copy} onClick={()=>copiarUm(whatsFree(l))}>Copiar</Btn></td>
+          </tr>)}
+          {linhasFree.length===0 && <tr><td colSpan="6" className="px-4 py-8 text-center text-slate-400">Sem lançamentos no filtro selecionado.</td></tr>}
+        </tbody>
+        {linhasFree.length>0 && <tfoot><tr className="border-t-2 border-slate-100 bg-slate-50/60"><td className="px-4 py-3 font-bold">Total</td><td className="px-4 py-3 font-bold">{freeDias}</td><td className="px-4 py-3 font-extrabold text-free-700 tabular-nums">{fmtBRL(freeTotal)}</td><td colSpan="3"/></tr></tfoot>}
+      </table></div></Card>
+    </>}
   </div>;
 }
 
