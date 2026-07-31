@@ -1189,26 +1189,18 @@ function PontoKiosk({ mode, onClose }) {
     if(!p){ setCpfErr("CPF não encontrado. Use “Fazer cadastro (1º acesso)”."); return; }
     if(!escaladoHojePid(p)){ setCpfErr(p.nome.split(" ")[0]+", você não está na escala de hoje — não é possível registrar ponto."); return; }
     setPid(p.id); setUnidadeId(p.unidade||unidades[0]?.id); setCpfErr("");
-    // Já tem jornada ABERTA hoje? (último registro não é Saída) → vai direto p/ tela de tempo + checkout
-    const _hoje=hojeStr();
-    const meus=(registros||[]).filter(r=>r.nome===p.nome && (!r.data || r.data===_hoje));
-    const ultimo=meus[0];
-    if(ultimo && ultimo.acao!=="Saída"){
-      const ent=meus.find(r=>r.acao==="Entrada");
-      if(ent && ent.min!=null){ setWorking({entradaMin:ent.min, entradaHora:ent.hora}); return; }
-    }
-    setStep(1);
+    setPainel(true); // vai para o PAINEL DE STATUS do colaborador (mostra estado + ações certas do tipo)
   };
-  const [step,setStep]=useState(0); // 0 CPF · 1 selfie · 2 gps · 3 confirmar
+  const [step,setStep]=useState(0); // 0 CPF · 1 selfie · 2 gps
   const [foto,setFoto]=useState(null);
   const [camErr,setCamErr]=useState(null);
   const [geo,setGeo]=useState(null);
   const [geoErr,setGeoErr]=useState(null);
-  const [acao,setAcao]=useState("Entrada");
-  const [done,setDone]=useState(false);
+  const [acao,setAcao]=useState("Entrada");     // ação canônica escolhida
+  const [acaoLabel,setAcaoLabel]=useState("");  // rótulo amigável (ex.: "Saída para almoço")
+  const [painel,setPainel]=useState(false);     // painel de status do colaborador
+  const [comprovante,setComprovante]=useState(null); // comprovante digital da marcação
   const [cadOk,setCadOk]=useState(false);
-  const [working,setWorking]=useState(null);   // {entradaMin, entradaHora} — jornada aberta
-  const [saiuTotal,setSaiuTotal]=useState(null); // segundos trabalhados no checkout
   const [cadEnviando,setCadEnviando]=useState(false);
   const [cadErro,setCadErro]=useState("");
   // Envio de atestado pelo colaborador
@@ -1249,19 +1241,34 @@ function PontoKiosk({ mode, onClose }) {
       pos=>{ const {latitude,longitude}=pos.coords; const dist=haversine(latitude,longitude,unidade.lat,unidade.lng); setGeo({dist,ok:dist<=unidade.raio}); },
       ()=>{ setGeoErr("Permissão de GPS negada. Simulando posição dentro da cerca."); setGeo({dist:38,ok:true}); }, {enableHighAccuracy:true,timeout:8000}); };
   const simGeo=()=>setGeo({dist:42,ok:true});
-  const registrar=()=>{
-    const now=new Date(); const nowMin=now.getHours()*60+now.getMinutes();
-    const hora=now.toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit",second:"2-digit"});
-    addRegistro({ nome: pSel?.nome || "Colaborador", pid: pSel?.id!=null?String(pSel.id):null, cpf: soDigitos(pSel?.cpf), tipo:mode, acao, unidade:unidade.nome, hora, geo:true, selfie:true, foto });
-    if(acao==="Saída"){ setDone(true); setTimeout(onClose,2600); }
-    else { setWorking({entradaMin:nowMin, entradaHora:hora}); }  // Entrada/intervalo → tela de tempo + checkout
-  };
-  const registrarSaida=()=>{
+
+  // ===== Estado do colaborador hoje (deriva das batidas reais) — casa por pid/CPF/nome =====
+  const _hojeK=hojeStr();
+  const meusRegs=(registros||[]).filter(r=> (r.pid&&pSel&&String(r.pid)===String(pSel.id)) || (r.cpf&&pSel&&soDigitos(r.cpf)===soDigitos(pSel.cpf)) || (pSel&&r.nome===pSel.nome))
+    .filter(r=>!r.data||r.data===_hojeK); // mais recente primeiro
+  const ultimaAcao=meusRegs[0]?.acao;
+  const estado = !ultimaAcao ? "aguardando" : (ultimaAcao==="Saída"?"encerrado" : ultimaAcao==="Início intervalo"?"pausa" : "trabalhando");
+  const segStartMin = meusRegs[0]?.min; // início do estado atual (para cronômetro)
+  const entradaHoje = meusRegs.slice().reverse().find(r=>r.acao==="Entrada");
+  // rótulos amigáveis por tipo
+  const rotuloAcao=(a)=> mode==="free"
+    ? (a==="Entrada"?"Check-in":a==="Saída"?"Checkout":a)
+    : ({ "Entrada":"Entrada","Início intervalo":"Saída para almoço","Fim intervalo":"Retorno do almoço","Saída":"Saída final" }[a]||a);
+  // ações disponíveis conforme TIPO + estado
+  const acoesDisponiveis = mode==="free"
+    ? (estado==="aguardando"?["Entrada"] : estado==="trabalhando"?["Saída"] : [])
+    : (estado==="aguardando"?["Entrada"] : estado==="trabalhando"?["Início intervalo","Saída"] : estado==="pausa"?["Fim intervalo"] : []);
+
+  // inicia uma marcação (selfie+GPS) para a ação escolhida no painel
+  const iniciarAcao=(canon)=>{ setAcao(canon); setAcaoLabel(rotuloAcao(canon)); setFoto(null); setGeo(null); setGeoErr(null); setPainel(false); setStep(1); };
+  // registra a ação escolhida e gera COMPROVANTE digital
+  const registrarAcao=()=>{
     const now=new Date();
     const hora=now.toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit",second:"2-digit"});
-    addRegistro({ nome: pSel?.nome || "Colaborador", pid: pSel?.id!=null?String(pSel.id):null, cpf: soDigitos(pSel?.cpf), tipo:mode, acao:"Saída", unidade:unidade.nome, hora, geo:true, selfie:true, foto });
-    let d = (now.getHours()*3600+now.getMinutes()*60+now.getSeconds()) - (working?working.entradaMin*60:0); if(d<0) d+=86400;
-    setSaiuTotal(d); setWorking(null); setDone(true); setTimeout(onClose,3600);
+    const protocolo=(soDigitos(pSel?.cpf).slice(-4)||"0000")+"-"+now.getTime().toString(36).slice(-5).toUpperCase();
+    addRegistro({ nome: pSel?.nome || "Colaborador", pid: pSel?.id!=null?String(pSel.id):null, cpf: soDigitos(pSel?.cpf), tipo:mode, acao, unidade:unidade.nome, hora, geo:true, selfie:true, foto, protocolo });
+    setComprovante({ acao, label:acaoLabel||rotuloAcao(acao), hora, unidade:unidade.nome, nome:pSel?.nome, protocolo, encerrou:acao==="Saída" });
+    setStep(0);
   };
   const registrarCadastro=(dados)=>{
     // Grava no BANCO CENTRAL e só libera após confirmar a sincronização
@@ -1279,23 +1286,48 @@ function PontoKiosk({ mode, onClose }) {
         <Badge tone={mode==="clt"?"brand":"free"}>{mode==="clt"?"Link CLT":"Link Freelancer"} · cadastro e registro</Badge>
       </div>
       <Card className="p-6 relative overflow-hidden">
-        {done ? <div className="py-10 text-center fade-in">
+        {comprovante ? <div className="py-8 text-center fade-in">
             <div className="w-20 h-20 mx-auto rounded-full bg-emerald-500 grid place-items-center text-white mb-4 shadow-glow"><Icon d={I.check} className="w-10 h-10" stroke={3}/></div>
-            <h3 className="text-2xl font-extrabold text-slate-900">{saiuTotal!=null?"Checkout realizado!":"Ponto registrado!"}</h3>
-            {saiuTotal!=null
-              ? <p className="text-slate-500 mt-1">Você trabalhou <b className="text-emerald-600">{fmtHMS(saiuTotal)}</b> hoje · {unidade.nome}</p>
-              : <p className="text-slate-500 mt-1">{acao} às <b>{clock.toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"})}</b> · {unidade.nome}</p>}
-          </div>
-        : working ? <div className="py-8 text-center fade-in">
-            <div className="w-16 h-16 mx-auto rounded-full bg-emerald-100 grid place-items-center mb-3"><span className="relative w-3.5 h-3.5"><span className="absolute inset-0 rounded-full bg-emerald-500 live-dot"/></span></div>
-            <h3 className="text-xl font-extrabold text-slate-900">{(pSel?.nome||"Você").split(" ")[0]}, você está trabalhando</h3>
-            <p className="text-slate-500 text-sm mt-1">Entrada às <b>{(working.entradaHora||"").slice(0,5)}</b> · {unidade?.nome}</p>
-            <div className="my-6">
-              <div className="text-5xl font-extrabold text-emerald-600 tabular-nums">{fmtHMS((()=>{let d=(clock.getHours()*3600+clock.getMinutes()*60+clock.getSeconds())-working.entradaMin*60;if(d<0)d+=86400;return d;})())}</div>
-              <div className="text-xs text-slate-400 mt-1 uppercase tracking-wide">tempo em jornada · ao vivo</div>
+            <h3 className="text-2xl font-extrabold text-slate-900">Marcação registrada!</h3>
+            <p className="text-slate-500 mt-1">Comprovante digital do seu ponto</p>
+            <div className="mt-4 mx-auto max-w-xs text-left rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm">
+              <div className="flex justify-between py-1"><span className="text-slate-500">Colaborador</span><b className="text-slate-800">{comprovante.nome}</b></div>
+              <div className="flex justify-between py-1"><span className="text-slate-500">Registro</span><b className="text-slate-800">{comprovante.label}</b></div>
+              <div className="flex justify-between py-1"><span className="text-slate-500">Horário</span><b className="text-slate-800 tabular-nums">{comprovante.hora}</b></div>
+              <div className="flex justify-between py-1"><span className="text-slate-500">Unidade</span><b className="text-slate-800">{comprovante.unidade}</b></div>
+              <div className="flex justify-between py-1 border-t border-slate-200 mt-1 pt-2"><span className="text-slate-500">Protocolo</span><b className="text-slate-800 font-mono">{comprovante.protocolo}</b></div>
+              <div className="flex items-center gap-1 justify-center mt-2 text-emerald-600 text-xs"><Icon d={I.check} className="w-3.5 h-3.5"/> Facial e GPS confirmados</div>
             </div>
-            <Btn className="w-full" size="lg" variant="danger" icon={I.check} onClick={registrarSaida}>Fazer checkout (Saída)</Btn>
-            <Btn variant="ghost" className="w-full mt-2" onClick={onClose}>Fechar (continuo trabalhando)</Btn>
+            {comprovante.encerrou
+              ? <Btn className="w-full mt-4" variant={accent==="clt"?"primary":"free"} onClick={onClose}>Concluir</Btn>
+              : <Btn className="w-full mt-4" icon={I.arrow} variant={accent==="clt"?"primary":"free"} onClick={()=>{setComprovante(null);setPainel(true);}}>Ver meu status</Btn>}
+            <Btn variant="ghost" className="w-full mt-2" onClick={onClose}>Fechar</Btn>
+          </div>
+        : painel ? <div className="fade-in">
+            <div className="text-center mb-4">
+              <div className="text-3xl font-extrabold tracking-tight text-slate-900 tabular-nums">{clock.toLocaleTimeString("pt-BR")}</div>
+              <div className="text-slate-500 text-sm mt-1">{(pSel?.nome||"").split(" ").slice(0,2).join(" ")} · {mode==="clt"?"CLT":"Freelancer"} · {unidade?.nome}</div>
+            </div>
+            <div className={cx("rounded-2xl p-5 text-center mb-4", estado==="trabalhando"?"bg-emerald-50":estado==="pausa"?"bg-amber-50":estado==="encerrado"?"bg-slate-100":"bg-sky-50")}>
+              <div className="text-xs font-bold uppercase tracking-wide mb-1" style={{color: estado==="trabalhando"?"#059669":estado==="pausa"?"#d97706":estado==="encerrado"?"#64748b":"#0284c7"}}>
+                {estado==="trabalhando"?"Em período de trabalho":estado==="pausa"?"Em pausa / almoço":estado==="encerrado"?"Jornada encerrada":"Aguardando entrada"}</div>
+              {(estado==="trabalhando"||estado==="pausa") && segStartMin!=null &&
+                <div className="text-4xl font-extrabold tabular-nums" style={{color:estado==="trabalhando"?"#059669":"#d97706"}}>{fmtHMS((()=>{let d=(clock.getHours()*3600+clock.getMinutes()*60+clock.getSeconds())-segStartMin*60;if(d<0)d+=86400;return d;})())}</div>}
+              <div className="text-xs text-slate-500 mt-1">{estado==="trabalhando"?"trabalhando agora · comprovação de jornada":estado==="pausa"?"em pausa agora":estado==="encerrado"?"até a próxima!":"bata sua entrada para começar"}</div>
+            </div>
+            <div className="space-y-2">
+              {acoesDisponiveis.map(a=>{ const isSaida=a==="Saída"; const isPausa=a==="Início intervalo";
+                return <Btn key={a} className="w-full" size="lg" variant={isSaida?"danger":isPausa?"ghost":(accent==="clt"?"primary":"free")} icon={isPausa?I.coffee:I.clock} onClick={()=>iniciarAcao(a)}>{rotuloAcao(a)}</Btn>; })}
+              {acoesDisponiveis.length===0 && <p className="text-center text-slate-400 text-sm py-2">Sua jornada de hoje já foi encerrada. 👍</p>}
+            </div>
+            {meusRegs.length>0 && <div className="mt-4 rounded-xl border border-slate-100 p-3">
+              <div className="text-xs font-semibold text-slate-500 mb-2">Suas marcações de hoje</div>
+              <div className="space-y-1">
+                {meusRegs.slice().reverse().map((r,i)=>
+                  <div key={i} className="flex items-center justify-between text-sm"><span className="text-slate-600 flex items-center gap-1.5"><Icon d={I.check} className="w-3 h-3 text-emerald-500"/>{rotuloAcao(r.acao)}</span><b className="tabular-nums text-slate-800">{(r.hora||"").slice(0,5)}</b></div>)}
+              </div>
+            </div>}
+            <Btn variant="ghost" className="w-full mt-3" onClick={onClose}>Fechar</Btn>
           </div>
         : cadEnviando ? <div className="py-12 text-center fade-in">
             <div className="w-12 h-12 mx-auto rounded-full border-4 border-slate-200 border-t-brand-500 animate-spin mb-4"/>
@@ -1420,28 +1452,11 @@ function PontoKiosk({ mode, onClose }) {
               </div>
             </div>
             {geoErr && <p className="text-xs text-amber-600 mt-2">{geoErr}</p>}
-            <div className="mt-4 flex gap-2">
+            <div className="mb-3 mt-3 p-3 rounded-xl bg-slate-50 text-sm text-center">Você vai registrar: <b className="text-slate-900">{acaoLabel||rotuloAcao(acao)}</b></div>
+            <div className="mt-2 flex gap-2">
               {!geo && <Btn variant="ghost" onClick={simGeo}>Simular GPS</Btn>}
               <Btn variant="ghost" onClick={()=>setStep(1)}>Voltar</Btn>
-              <Btn className="flex-1" disabled={!geo||!geo.ok} icon={I.arrow} onClick={()=>setStep(3)} variant={accent==="clt"?"primary":"free"}>Continuar</Btn>
-            </div>
-          </div>}
-
-          {step===3 && <div className="fade-in">
-            <div className="flex items-center gap-3 p-3 rounded-2xl bg-slate-50 mb-4">
-              <img src={foto} className="w-14 h-14 rounded-xl object-cover"/>
-              <div className="text-sm"><div className="font-bold text-slate-900">{pSel?.nome}</div>
-                <div className="text-slate-500">{mode==="clt"?"CLT":"Freelancer"} · {unidade.nome}</div>
-                <div className="flex gap-1 mt-1"><Badge tone="green">Facial ✓</Badge><Badge tone="green">GPS ✓</Badge></div></div>
-            </div>
-            <p className="text-sm font-semibold text-slate-600 mb-2">Qual registro?</p>
-            <div className="grid grid-cols-2 gap-2">
-              {["Entrada","Início intervalo","Fim intervalo","Saída"].map(a=>
-                <button key={a} onClick={()=>setAcao(a)} className={cx("py-3 rounded-xl text-sm font-semibold border transition", acao===a?(accent==="clt"?"grad-brand text-white border-transparent":"bg-free-500 text-white border-transparent"):"border-slate-200 text-slate-600 hover:bg-slate-50")}>{a}</button>)}
-            </div>
-            <div className="mt-4 flex gap-2">
-              <Btn variant="ghost" onClick={()=>setStep(2)}>Voltar</Btn>
-              <Btn className="flex-1" size="lg" icon={I.check} onClick={registrar} variant={accent==="clt"?"primary":"free"}>Bater ponto — {acao}</Btn>
+              <Btn className="flex-1" size="lg" disabled={!geo||!geo.ok} icon={I.check} onClick={registrarAcao} variant={accent==="clt"?"primary":"free"}>Bater ponto — {acaoLabel||rotuloAcao(acao)}</Btn>
             </div>
           </div>}
         </>}
