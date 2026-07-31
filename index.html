@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- build: ajuste-de-ponto (solicitar + aprovar) -->
+<!-- build: perfil-gerente (inclui/ajusta, nao apaga) -->
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8" />
@@ -427,10 +427,11 @@ const nextId = (arr) => (arr.reduce((m,x)=>Math.max(m,x.id),0)||0)+1;
 
 // Permissões por papel (proprietário tem tudo). gerente edita escala mas NÃO documentos.
 const PERMS_INIT = {
-  gerente:       { escala:true,  colaboradores:true,  financeiro:true,  documentos:false, equipe:false, unidades:true },
-  rh_financeiro: { escala:false, colaboradores:true,  financeiro:true,  documentos:true,  equipe:false, unidades:false },
+  // Gerente: pode INCLUIR e AJUSTAR (escala, colaboradores, unidades, ajustes de ponto), mas NÃO pode apagar (excluir:false).
+  gerente:       { escala:true,  colaboradores:true,  financeiro:true,  documentos:true,  equipe:false, unidades:true,  ajustes:true,  excluir:false },
+  rh_financeiro: { escala:false, colaboradores:true,  financeiro:true,  documentos:true,  equipe:false, unidades:false, ajustes:false, excluir:false },
 };
-const CAPS = [["escala","Editar escala"],["colaboradores","Gerir colaboradores"],["financeiro","Relatórios financeiros"],["documentos","Documentos e dossiê"],["unidades","Gerir unidades"],["equipe","Gerir equipe"]];
+const CAPS = [["escala","Editar escala"],["colaboradores","Gerir colaboradores"],["financeiro","Relatórios financeiros"],["documentos","Documentos e dossiê"],["unidades","Gerir unidades"],["ajustes","Aprovar ajustes de ponto"],["equipe","Gerir equipe"],["excluir","Excluir/apagar dados"]];
 const PAPEIS = { proprietario:"Proprietário", gerente:"Gerente", rh_financeiro:"RH / Financeiro" };
 
 // Coleção PÚBLICA de auto-cadastros (feitos pelo celular, sem login).
@@ -940,7 +941,7 @@ function EscalaVisual() {
                     <button onClick={()=>{setMarca(di,a.id,"faltou");setMenu(null);}} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-rose-50 text-rose-600">Faltou</button>
                     <button onClick={()=>{setMarca(di,a.id,"atrasou");setMenu(null);}} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-amber-50 text-amber-600">Atrasou</button>
                     <button onClick={()=>{setMarca(di,a.id,null);setMenu(null);}} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 text-slate-500">Limpar marca</button>
-                    <button onClick={()=>{remover(di,a.id);setMenu(null);}} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-rose-50 text-rose-600 border-t border-slate-100 mt-1">Remover</button>
+                    {can("excluir") && <button onClick={()=>{remover(di,a.id);setMenu(null);}} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-rose-50 text-rose-600 border-t border-slate-100 mt-1">Remover</button>}
                   </div>}
                 </div>;})}
             </div>
@@ -1703,7 +1704,7 @@ function ColabForm({ tipo, inicial, onSalvar, onClose }) {
 
 /* ============================ COLABORADORES CLT ============================ */
 function ColaboradoresCLT() {
-  const { clts, salvarClt, excluirColab, unidades, registros, pontoHist } = useStore();
+  const { clts, salvarClt, excluirColab, unidades, registros, pontoHist, can } = useStore();
   const toast=useContext(ToastCtx);
   const bancoDe=(c)=>{ const meus=apurarHoras([...pontoHist, ...(registros||[])]).filter(x=>x.tipo==="clt"&&x.completo&&x.nome===c.nome);
     const extras=meus.reduce((s,x)=>s+(x.extras||0)+(x.extras100||0),0), atraso=meus.reduce((s,x)=>s+(x.atraso||0),0), not=meus.reduce((s,x)=>s+minutosNoturnos(x.punches||[]),0);
@@ -1741,7 +1742,7 @@ function ColaboradoresCLT() {
               <td className="px-4 py-3"><Badge tone={docsOk===docsTot?"green":"amber"}>{docsOk}/{docsTot}</Badge></td>
               <td className="px-4 py-3"><div className="flex gap-1 justify-end">
                 <button onClick={()=>setForm({inicial:c})} className="w-8 h-8 rounded-lg hover:bg-slate-100 grid place-items-center text-slate-500"><Icon d={I.edit} className="w-4 h-4"/></button>
-                <button onClick={()=>setConfirmar(c)} className="w-8 h-8 rounded-lg hover:bg-rose-50 grid place-items-center text-slate-400 hover:text-rose-500"><Icon d={I.trash} className="w-4 h-4"/></button>
+                {can("excluir") && <button onClick={()=>setConfirmar(c)} className="w-8 h-8 rounded-lg hover:bg-rose-50 grid place-items-center text-slate-400 hover:text-rose-500"><Icon d={I.trash} className="w-4 h-4"/></button>}
               </div></td>
             </tr>;})}
           {list.length===0 && <tr><td colSpan="7" className="px-4 py-8 text-center text-slate-400">Nenhum colaborador. Clique em “Contratar CLT”.</td></tr>}
@@ -1811,7 +1812,7 @@ function ColaboradoresCLT() {
 
 /* ============================ FREELANCERS ============================ */
 function Freelancers() {
-  const { freelas, salvarFreela, excluirColab, unidades, escala, cargosFreela, salvarCargoFreela, excluirCargoFreela } = useStore();
+  const { freelas, salvarFreela, excluirColab, unidades, escala, cargosFreela, salvarCargoFreela, excluirCargoFreela, can } = useStore();
   const toast=useContext(ToastCtx);
   const [form,setForm]=useState(null);
   const [confirmar,setConfirmar]=useState(null);
@@ -1840,7 +1841,7 @@ function Freelancers() {
               <td className="px-4 py-3 text-slate-500">{f.tel}</td>
               <td className="px-4 py-3"><div className="flex gap-1 justify-end">
                 <button onClick={()=>setForm({inicial:f})} className="w-8 h-8 rounded-lg hover:bg-slate-100 grid place-items-center text-slate-500"><Icon d={I.edit} className="w-4 h-4"/></button>
-                <button onClick={()=>setConfirmar(f)} className="w-8 h-8 rounded-lg hover:bg-rose-50 grid place-items-center text-slate-400 hover:text-rose-500"><Icon d={I.trash} className="w-4 h-4"/></button>
+                {can("excluir") && <button onClick={()=>setConfirmar(f)} className="w-8 h-8 rounded-lg hover:bg-rose-50 grid place-items-center text-slate-400 hover:text-rose-500"><Icon d={I.trash} className="w-4 h-4"/></button>}
               </div></td>
             </tr>)}
           {freelas.length===0 && <tr><td colSpan="7" className="px-4 py-8 text-center text-slate-400">Nenhum freelancer. Clique em “Novo freelancer”.</td></tr>}
@@ -1893,7 +1894,7 @@ function Freelancers() {
               <div className="flex items-center gap-1 text-sm"><span className="text-slate-400">R$</span>
                 <input type="number" value={c.valor} onChange={e=>salvarCargoFreela({...c,valor:Number(e.target.value)})} className="w-20 px-2 py-1 rounded-lg border border-slate-200 text-right font-semibold outline-none focus:ring-2 focus:ring-free-400"/>
                 <span className="text-slate-400 text-xs">/jornada</span></div>
-              <button onClick={()=>excluirCargoFreela(c.id)} className="w-8 h-8 rounded-lg hover:bg-rose-50 grid place-items-center text-slate-400 hover:text-rose-500"><Icon d={I.trash} className="w-4 h-4"/></button>
+              {can("excluir") && <button onClick={()=>excluirCargoFreela(c.id)} className="w-8 h-8 rounded-lg hover:bg-rose-50 grid place-items-center text-slate-400 hover:text-rose-500"><Icon d={I.trash} className="w-4 h-4"/></button>}
             </div>)}
         </div>
       </div>
@@ -2096,7 +2097,7 @@ function UnidadeForm({ inicial, onSalvar, onClose }) {
   </div>;
 }
 function Unidades() {
-  const { unidades, salvarUnidade, excluirUnidade, clts, freelas } = useStore();
+  const { unidades, salvarUnidade, excluirUnidade, clts, freelas, can } = useStore();
   const toast=useContext(ToastCtx);
   const [form,setForm]=useState(null);
   const [confirmar,setConfirmar]=useState(null);
@@ -2127,7 +2128,7 @@ function Unidades() {
             </div>
             <div className="mt-3 flex gap-2">
               <Btn size="sm" variant="ghost" icon={I.edit} className="flex-1" onClick={()=>setForm({inicial:u})}>Editar</Btn>
-              <Btn size="sm" variant="ghost" icon={I.trash} className="text-rose-500" onClick={()=>setConfirmar(u)}>Excluir</Btn>
+              {can("excluir") && <Btn size="sm" variant="ghost" icon={I.trash} className="text-rose-500" onClick={()=>setConfirmar(u)}>Excluir</Btn>}
             </div>
           </div>
         </Card>)}
@@ -2559,8 +2560,8 @@ function Equipe() {
   const toggleCap=(papel,cap)=>setPerms(prev=>({...prev,[papel]:{...prev[papel],[cap]:!prev[papel][cap]}}));
 
   return <div className="fade-in">
-    <PageHeader title="Equipe & permissões" sub="Editar membros · restringir acessos por papel">
-      <Field label="Ver como (simular perfil)"><Select value={perfil} onChange={e=>setPerfil(e.target.value)}>{Object.entries(PAPEIS).map(([k,v])=><option key={k} value={k}>{v}</option>)}</Select></Field>
+    <PageHeader title="Equipe & permissões" sub="Editar membros · restringir acessos por papel · Gerente inclui e ajusta, mas não apaga">
+      <Field label="Perfil ativo (aplica as permissões)"><Select value={perfil} onChange={e=>setPerfil(e.target.value)}>{Object.entries(PAPEIS).map(([k,v])=><option key={k} value={k}>{v}</option>)}</Select></Field>
       {podeGerir && <Btn icon={I.plus} onClick={()=>setForm({inicial:null})} className="self-end">Convidar</Btn>}
     </PageHeader>
 
@@ -2573,7 +2574,7 @@ function Equipe() {
             <Badge tone={m.papel==="proprietario"?"brand":"slate"}>{PAPEIS[m.papel]}</Badge>
             {podeGerir && m.papel!=="proprietario" && <div className="flex gap-1">
               <button onClick={()=>setForm({inicial:m})} className="w-8 h-8 rounded-lg hover:bg-slate-100 grid place-items-center text-slate-500"><Icon d={I.edit} className="w-4 h-4"/></button>
-              <button onClick={()=>excluir(m.id)} className="w-8 h-8 rounded-lg hover:bg-rose-50 grid place-items-center text-slate-400 hover:text-rose-500"><Icon d={I.trash} className="w-4 h-4"/></button>
+              {can("excluir") && <button onClick={()=>excluir(m.id)} className="w-8 h-8 rounded-lg hover:bg-rose-50 grid place-items-center text-slate-400 hover:text-rose-500"><Icon d={I.trash} className="w-4 h-4"/></button>}
             </div>}
           </Card>)}
       </div>
