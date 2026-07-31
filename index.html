@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- build: perfil-gerente (inclui/ajusta, nao apaga) -->
+<!-- build: multiempresa (novo cliente, dados isolados) 2026-07-31 16:05 -->
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8" />
@@ -221,13 +221,29 @@ const useClock = () => {
 // Banco central em TEMPO REAL (Firestore) com fallback para localStorage.
 // Cada "fatia" do estado (clts, freelas, escala, registros...) vira um documento
 // em "wilami/{key}". onSnapshot mantém todos os aparelhos sincronizados ao vivo.
+// ===== MULTI-CLIENTE (multiempresa): cada cliente tem dados ISOLADOS =====
+// Cliente ativo: vem do parâmetro ?t= (links de ponto) ou do localStorage (painel).
+// "" (vazio) = Cliente principal → usa os caminhos ATUAIS (nenhum dado é migrado).
+const WP_TENANT = (function(){ try{ const u=new URLSearchParams(location.search); const t=(u.get("t")||"").trim(); if(t) return t; return (localStorage.getItem("wp_tenant")||"").trim(); }catch(e){ return ""; } })();
+try{ window.__WPTENANT = WP_TENANT; }catch(e){}
+// caminhos com namespace do cliente (cliente principal usa os caminhos legados)
+function tDoc(key){ const db=window.__WPDB; return WP_TENANT ? db.collection("tenants").doc(WP_TENANT).collection("wilami").doc(key) : db.collection("wilami").doc(key); }
+function tCol(name){ const db=window.__WPDB; return WP_TENANT ? db.collection("tenants").doc(WP_TENANT).collection(name) : db.collection(name); }
+// Monta um link de ponto público carregando o cliente atual (?t=...) para o celular do colaborador.
+function comTenantUrl(baseNoHash, hashPart){
+  let u=String(baseNoHash||"");
+  if(WP_TENANT){ u += (u.indexOf("?")>=0?"&":"?") + "t=" + encodeURIComponent(WP_TENANT); }
+  return u + (hashPart?("#"+hashPart):"");
+}
+const tKey=(key)=> "wp_"+(WP_TENANT?WP_TENANT+"_":"")+key;
+
 function usePersist(key, initial){
-  const [v,setV]=useState(()=>{ try{ const s=localStorage.getItem("wp_"+key); return s!=null?JSON.parse(s):initial; }catch{ return initial; } });
+  const [v,setV]=useState(()=>{ try{ const s=localStorage.getItem(tKey(key)); return s!=null?JSON.parse(s):initial; }catch{ return initial; } });
   const remoto=useRef(false);
   useEffect(()=>{
     const db=window.__WPDB; if(!db) return;
     try{
-      return db.collection("wilami").doc(key).onSnapshot(function(snap){
+      return tDoc(key).onSnapshot(function(snap){
         if(snap && snap.metadata && snap.metadata.hasPendingWrites) return; // ignora eco da própria escrita
         const d=snap && snap.exists ? snap.data() : null;
         if(d && Object.prototype.hasOwnProperty.call(d,"v")){ remoto.current=true; setV(d.v); }
@@ -237,14 +253,23 @@ function usePersist(key, initial){
   const setBoth=(upd)=>{
     setV(prev=>{
       const nv = typeof upd==="function" ? upd(prev) : upd;
-      try{ localStorage.setItem("wp_"+key, JSON.stringify(nv)); }catch{}
+      try{ localStorage.setItem(tKey(key), JSON.stringify(nv)); }catch{}
       const db=window.__WPDB;
-      if(db && !remoto.current){ try{ db.collection("wilami").doc(key).set({v:nv}); }catch(e){} }
+      if(db && !remoto.current){ try{ tDoc(key).set({v:nv}); }catch(e){} }
       remoto.current=false;
       return nv;
     });
   };
   return [v,setBoth];
+}
+// Lista de CLIENTES (empresas) — sempre na raiz (não é isolada por cliente).
+function useTenants(){
+  const [items,setItems]=useState([]);
+  useEffect(()=>{ const db=window.__WPDB; if(!db) return;
+    try{ return db.collection("tenants").onSnapshot(function(snap){ const arr=[]; snap.forEach(function(d){ const x=d.data()||{}; arr.push({id:d.id, nome:x.nome||"Cliente", cor:x.cor||"#6366f1"}); }); setItems(arr); }, function(){}); }catch(e){}
+  },[]);
+  const add=(obj)=>{ const db=window.__WPDB; if(!db) return Promise.reject(new Error("sem-banco")); return db.collection("tenants").add(obj); };
+  return [items,{add}];
 }
 function haversine(la1,lo1,la2,lo2){
   const R=6371000, r=Math.PI/180, dLa=(la2-la1)*r, dLo=(lo2-lo1)*r;
@@ -442,15 +467,15 @@ function useCadastros(){
   useEffect(()=>{
     const db=window.__WPDB; if(!db) return;
     try{
-      return db.collection("cadastros").onSnapshot(function(snap){
+      return tCol("cadastros").onSnapshot(function(snap){
         const arr=[]; snap.forEach(function(d){ const x=d.data()||{}; arr.push({...x, id:"auto_"+d.id, _docId:d.id, _auto:true}); });
         setItems(arr);
       }, function(){ /* sem permissão/erro */ });
     }catch(e){}
   },[]);
-  const add=(obj)=>{ const db=window.__WPDB; if(!db) return Promise.reject(new Error("sem-banco")); return db.collection("cadastros").add(obj); };
-  const update=(docId,patch)=>{ const db=window.__WPDB; if(db){ try{ db.collection("cadastros").doc(docId).set(patch,{merge:true}); }catch(e){} } };
-  const remove=(docId)=>{ const db=window.__WPDB; if(db){ try{ db.collection("cadastros").doc(docId).delete(); }catch(e){} } };
+  const add=(obj)=>{ const db=window.__WPDB; if(!db) return Promise.reject(new Error("sem-banco")); return tCol("cadastros").add(obj); };
+  const update=(docId,patch)=>{ const db=window.__WPDB; if(db){ try{ tCol("cadastros").doc(docId).set(patch,{merge:true}); }catch(e){} } };
+  const remove=(docId)=>{ const db=window.__WPDB; if(db){ try{ tCol("cadastros").doc(docId).delete(); }catch(e){} } };
   return [items,{add,update,remove}];
 }
 
@@ -487,13 +512,13 @@ function useRegistrosPub(){
   useEffect(()=>{
     const db=window.__WPDB; if(!db) return;
     try{
-      return db.collection("registros").orderBy("ts","desc").limit(300).onSnapshot(function(snap){
+      return tCol("registros").orderBy("ts","desc").limit(300).onSnapshot(function(snap){
         const arr=[]; snap.forEach(function(d){ const x=d.data()||{}; arr.push({...x, id:d.id, _docId:d.id}); });
         setItems(arr);
       }, function(){ /* sem permissão/erro */ });
     }catch(e){}
   },[]);
-  const add=(obj)=>{ const db=window.__WPDB; if(!db) return Promise.reject(new Error("sem-banco")); return db.collection("registros").add(obj); };
+  const add=(obj)=>{ const db=window.__WPDB; if(!db) return Promise.reject(new Error("sem-banco")); return tCol("registros").add(obj); };
   return [items,{add}];
 }
 // Coleção PÚBLICA de atestados enviados pelo colaborador (sem login) → vão para o dossiê em tempo real.
@@ -502,13 +527,13 @@ function useAtestados(){
   useEffect(()=>{
     const db=window.__WPDB; if(!db) return;
     try{
-      return db.collection("atestados").orderBy("ts","desc").limit(500).onSnapshot(function(snap){
+      return tCol("atestados").orderBy("ts","desc").limit(500).onSnapshot(function(snap){
         const arr=[]; snap.forEach(function(d){ const x=d.data()||{}; arr.push({...x, id:d.id, _docId:d.id}); });
         setItems(arr);
       }, function(){});
     }catch(e){}
   },[]);
-  const add=(obj)=>{ const db=window.__WPDB; if(!db) return Promise.reject(new Error("sem-banco")); return db.collection("atestados").add(obj); };
+  const add=(obj)=>{ const db=window.__WPDB; if(!db) return Promise.reject(new Error("sem-banco")); return tCol("atestados").add(obj); };
   return [items,{add}];
 }
 // Coleção PÚBLICA de solicitações de AJUSTE de ponto (colaborador pede sem login; gestor aprova/recusa).
@@ -517,30 +542,49 @@ function useAjustes(){
   useEffect(()=>{
     const db=window.__WPDB; if(!db) return;
     try{
-      return db.collection("ajustes").orderBy("ts","desc").limit(500).onSnapshot(function(snap){
+      return tCol("ajustes").orderBy("ts","desc").limit(500).onSnapshot(function(snap){
         const arr=[]; snap.forEach(function(d){ const x=d.data()||{}; arr.push({...x, id:d.id, _docId:d.id}); });
         setItems(arr);
       }, function(){});
     }catch(e){}
   },[]);
-  const add=(obj)=>{ const db=window.__WPDB; if(!db) return Promise.reject(new Error("sem-banco")); return db.collection("ajustes").add(obj); };
-  const update=(docId,patch)=>{ const db=window.__WPDB; if(db){ try{ return db.collection("ajustes").doc(docId).set(patch,{merge:true}); }catch(e){} } };
+  const add=(obj)=>{ const db=window.__WPDB; if(!db) return Promise.reject(new Error("sem-banco")); return tCol("ajustes").add(obj); };
+  const update=(docId,patch)=>{ const db=window.__WPDB; if(db){ try{ return tCol("ajustes").doc(docId).set(patch,{merge:true}); }catch(e){} } };
   return [items,{add,update}];
 }
+// Semente inicial por espaço: o "Cliente principal" (legado) mantém os dados de demonstração;
+// um cliente NOVO começa limpo (uma casa inicial, sem colaboradores), com dados 100% isolados.
+const NOVO_TENANT = !!WP_TENANT;
+const SEED_UNIDADES = NOVO_TENANT ? [{ id:1, nome:"Minha primeira casa", end:"Endereço da unidade", lat:null, lng:null, raio:120, cor:"#6366f1" }] : INIT_UNIDADES;
+const SEED_CLTS = NOVO_TENANT ? [] : INIT_CLTS;
+const SEED_FREELAS = NOVO_TENANT ? [] : INIT_FREELAS;
+const SEED_ESCALA = NOVO_TENANT ? {1:escalaVaziaUnidade()} : escalaInicial();
 function StoreProvider({children}) {
-  const [unidades,setUnidades]=usePersist("unidades",INIT_UNIDADES);
-  const [cltsBase,setClts]=usePersist("clts",INIT_CLTS);
-  const [freelasBase,setFreelas]=usePersist("freelas",INIT_FREELAS);
+  const [unidades,setUnidades]=usePersist("unidades",SEED_UNIDADES);
+  const [cltsBase,setClts]=usePersist("clts",SEED_CLTS);
+  const [freelasBase,setFreelas]=usePersist("freelas",SEED_FREELAS);
   const [cadAuto,cadOps]=useCadastros();
   const [atestados,atestadosOps]=useAtestados();
   const enviarAtestado=(obj)=>{ if(window.__WPDB) return atestadosOps.add(obj); return Promise.resolve(); };
   const [ajustes,ajustesOps]=useAjustes();
   const enviarAjuste=(obj)=>{ if(window.__WPDB) return ajustesOps.add(obj); return Promise.resolve(); };
   const resolverAjuste=(docId,patch)=>ajustesOps.update(docId,patch);
+  // ---- Multiempresa (vários grupos de restaurantes, dados isolados) ----
+  const [tenantsRemotos,tenantsOps]=useTenants();
+  const tenantAtual=WP_TENANT;
+  // "Cliente principal" = espaço legado (id ""), sempre presente; os demais vêm do banco.
+  const clientes=[{id:"",nome:"Cliente principal",cor:"#6366f1"}, ...tenantsRemotos];
+  const clienteAtivo=clientes.find(c=>c.id===tenantAtual)||clientes[0];
+  const trocarCliente=(tid)=>{ try{ localStorage.setItem("wp_tenant",tid||""); }catch(e){} const u=new URL(location.href); if(tid) u.searchParams.set("t",tid); else u.searchParams.delete("t"); location.href=u.toString(); };
+  const criarCliente=(nome,cor)=>{
+    const nm=(nome||"").trim(); if(!nm) return Promise.reject(new Error("nome"));
+    if(!window.__WPDB) return Promise.reject(new Error("sem-banco"));
+    return tenantsOps.add({nome:nm, cor:cor||"#6366f1", criadoEm:Date.now()}).then(function(ref){ trocarCliente(ref.id); return ref.id; });
+  };
   // Listas expostas = base (admin) + auto-cadastros do celular (mesclados por vínculo)
   const clts=[...cltsBase, ...cadAuto.filter(c=>c.tipo==="clt")];
   const freelas=[...freelasBase, ...cadAuto.filter(c=>c.tipo==="free")];
-  const [escala,setEscala]=usePersist("escala",escalaInicial());        // por unidade
+  const [escala,setEscala]=usePersist("escala",SEED_ESCALA);            // por unidade
   const [registrosLocal,setRegistrosLocal]=usePersist("registros",[]);  // fallback sem banco
   const [regPub,regPubOps]=useRegistrosPub();                           // feed ao vivo (coleção pública)
   const registros = window.__WPDB ? regPub : registrosLocal;            // banco central quando disponível
@@ -645,7 +689,8 @@ function StoreProvider({children}) {
   const value={ unidades,salvarUnidade,excluirUnidade, clts,freelas,freelasComPagamentos,salvarClt,salvarFreela,excluirColab,cadastrarPublico, anexarDoc,
     escala,setEscala, registros,addRegistro, pontoHist, freelancerEscaladoHoje, valorFreela,
     cargosFreela,salvarCargoFreela,excluirCargoFreela, atestados,enviarAtestado, ajustes,enviarAjuste,resolverAjuste,
-    dossie,getDossie,addFalta,addFeedback,addAnexo, perfil,setPerfil, perms,setPerms, can };
+    dossie,getDossie,addFalta,addFeedback,addAnexo, perfil,setPerfil, perms,setPerms, can,
+    clientes,clienteAtivo,tenantAtual,criarCliente,trocarCliente };
   return <StoreCtx.Provider value={value}>{children}</StoreCtx.Provider>;
 }
 const pessoaNome = (pid,tipo,clts,freelas)=> (tipo==="clt"?clts:freelas).find(p=>p.id===pid)?.nome || "—";
@@ -1016,7 +1061,7 @@ function PontoLive() {
   // o gestor informa a URL pública para que o link funcione no celular do colaborador.
   const [pubUrl,setPubUrl]=useState("");
   const base = (pubUrl.trim() ? pubUrl.trim().replace(/#.*$/,"").replace(/\/+$/,"")+"/" : hrefBase);
-  const linkDe=(m)=> `${base}#ponto-${m}`;
+  const linkDe=(m)=> comTenantUrl(base.replace(/#.*$/,""), "ponto-"+m);
 
   // turno de HOJE de uma pessoa (para saber se é dia de FOLGA)
   const turnoHojeDe=(pid,tipo)=>{ let t=null; Object.values(escala).forEach(dias=>{ (dias[HOJE_IDX]||[]).forEach(a=>{ if(a.pid===pid&&a.tipo===tipo) t=a.turno; }); }); return t; };
@@ -2156,8 +2201,8 @@ function LinksQR() {
   const toast=useContext(ToastCtx);
   // Link REAL para o próprio app (roteamento por hash): abre o quiosque de fato.
   const base = (typeof window!=="undefined" ? window.location.href.split("#")[0] : "");
-  const cltUrl=`${base}#ponto-clt`;
-  const freeUrl=`${base}#ponto-free`;
+  const cltUrl=comTenantUrl(base,"ponto-clt");
+  const freeUrl=comTenantUrl(base,"ponto-free");
   useEffect(()=>{
     const mk=(el,url,color)=>{ if(el){ el.innerHTML=""; try{ new QRCode(el,{text:url,width:150,height:150,colorDark:color,colorLight:"#ffffff",correctLevel:QRCode.CorrectLevel.M}); }catch(e){} } };
     mk(cltRef.current,cltUrl,"#4f46e5"); mk(freeRef.current,freeUrl,"#ea580c");
@@ -2756,6 +2801,63 @@ const NAV = [
 ];
 const TITULOS={dashboard:"Painel",escala:"Escala por unidade",ponto:"Ponto ao vivo",ajustes:"Ajustes de ponto",clt:"Colaboradores CLT",freelas:"Freelancers",dossie:"Dossiê do colaborador",equipe:"Equipe & permissões",relatorios:"Relatórios",financeiro:"Financeiro",pagamentos:"Pagamentos",unidades:"Unidades",links:"Links & QR",config:"Configurações",ajuda:"Ajuda"};
 
+// Seletor de cliente (multiempresa) — troca entre grupos de restaurantes e cria novo cliente.
+function ClienteSwitcher(){
+  const { clientes, clienteAtivo, criarCliente, trocarCliente, perfil } = useStore();
+  const toast=useContext(ToastCtx);
+  const [openList,setOpenList]=useState(false);
+  const [novo,setNovo]=useState(false);
+  const [nome,setNome]=useState("");
+  const [cor,setCor]=useState("#6366f1");
+  const [salvando,setSalvando]=useState(false);
+  const cores=["#6366f1","#f97316","#10b981","#0ea5e9","#e11d48","#a855f7","#f59e0b"];
+  const criar=()=>{
+    if(!nome.trim()){ toast("Dê um nome ao cliente (grupo de restaurantes)."); return; }
+    if(!window.__WPDB){ toast("Cadastro de clientes exige conexão com o banco (online)."); return; }
+    setSalvando(true);
+    criarCliente(nome.trim(),cor).then(()=>{ /* recarrega no novo espaço */ })
+      .catch(()=>{ setSalvando(false); toast("Não foi possível criar o cliente agora."); });
+  };
+  return <div className="mb-2">
+    <button onClick={()=>setOpenList(v=>!v)} className="w-full flex items-center gap-2 px-2 py-2 rounded-xl text-white/80 hover:bg-white/10 transition">
+      <span className="w-6 h-6 rounded-lg shrink-0" style={{background:clienteAtivo?.cor||"#6366f1"}}/>
+      <div className="flex-1 min-w-0 text-left"><div className="text-[10px] uppercase tracking-wider text-white/40 font-bold">Cliente</div>
+        <div className="text-sm font-semibold truncate">{clienteAtivo?.nome||"Cliente principal"}</div></div>
+      <Icon d={I.chevron||I.arrow} className="w-4 h-4 text-white/50"/>
+    </button>
+    {openList && <div className="mt-1 bg-white/5 rounded-xl p-1.5 border border-white/10">
+      {clientes.map(c=>
+        <button key={c.id||"principal"} onClick={()=>{ if(c.id!==clienteAtivo?.id) trocarCliente(c.id); }}
+          className={cx("w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm transition",
+            c.id===clienteAtivo?.id?"bg-white/15 text-white":"text-white/70 hover:bg-white/10")}>
+          <span className="w-4 h-4 rounded shrink-0" style={{background:c.cor}}/>
+          <span className="truncate flex-1 text-left">{c.nome}</span>
+          {c.id===clienteAtivo?.id && <span className="w-1.5 h-1.5 rounded-full bg-brand-400"/>}
+        </button>)}
+      {perfil==="proprietario" && <button onClick={()=>{setNovo(true);setOpenList(false);}}
+        className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm text-brand-300 hover:bg-white/10 mt-0.5">
+        <Icon d={I.plus} className="w-4 h-4"/>Novo cliente</button>}
+    </div>}
+    <Modal open={novo} onClose={()=>!salvando&&setNovo(false)}>
+      <div className="p-6">
+        <h3 className="text-lg font-bold text-ink-900">Novo cliente</h3>
+        <p className="text-sm text-slate-500 mt-1">Cadastre outro grupo de restaurantes. Os dados (unidades, colaboradores, ponto, relatórios) ficam totalmente separados dos demais clientes.</p>
+        <div className="mt-4 space-y-3">
+          <Field label="Nome do cliente / grupo"><Input value={nome} onChange={e=>setNome(e.target.value)} placeholder="Ex.: Grupo Sabor & Cia" autoFocus/></Field>
+          <Field label="Cor de identificação">
+            <div className="flex gap-2 flex-wrap">{cores.map(c=>
+              <button key={c} onClick={()=>setCor(c)} className={cx("w-8 h-8 rounded-lg border-2",cor===c?"border-ink-900":"border-transparent")} style={{background:c}}/>)}</div>
+          </Field>
+        </div>
+        <div className="mt-6 flex gap-2 justify-end">
+          <button onClick={()=>setNovo(false)} disabled={salvando} className="px-4 py-2.5 rounded-xl text-sm font-semibold text-slate-600 hover:bg-slate-100">Cancelar</button>
+          <button onClick={criar} disabled={salvando} className="px-4 py-2.5 rounded-xl text-sm font-bold text-white bg-brand-500 hover:bg-brand-600 disabled:opacity-60">{salvando?"Criando…":"Criar e abrir"}</button>
+        </div>
+      </div>
+    </Modal>
+  </div>;
+}
+
 function Sidebar({view,setView,open,setOpen,onLogout}) {
   return <>
     {open && <div className="fixed inset-0 bg-black/30 z-30 lg:hidden" onClick={()=>setOpen(false)}/>}
@@ -2775,6 +2877,7 @@ function Sidebar({view,setView,open,setOpen,onLogout}) {
           </div>)}
       </div>
       <div className="p-3 border-t border-white/10">
+        <ClienteSwitcher/>
         <div className="flex items-center gap-3 px-2 py-2"><Avatar name="Wilami Gestor" tone="brand"/>
           <div className="flex-1 min-w-0"><div className="text-sm font-semibold truncate">Wilami Gestor</div><div className="text-xs text-white/50 truncate">Proprietário</div></div>
           {onLogout && <button onClick={onLogout} title="Sair" className="w-8 h-8 rounded-lg text-white/60 hover:text-white hover:bg-white/10 grid place-items-center"><Icon d={I.logout||I.arrow} className="w-4 h-4"/></button>}</div>
