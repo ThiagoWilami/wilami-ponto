@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- build: relatorios-reais + dossie voltar/foto -->
+<!-- build: ajuste-de-ponto (solicitar + aprovar) -->
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8" />
@@ -510,6 +510,22 @@ function useAtestados(){
   const add=(obj)=>{ const db=window.__WPDB; if(!db) return Promise.reject(new Error("sem-banco")); return db.collection("atestados").add(obj); };
   return [items,{add}];
 }
+// Coleção PÚBLICA de solicitações de AJUSTE de ponto (colaborador pede sem login; gestor aprova/recusa).
+function useAjustes(){
+  const [items,setItems]=useState([]);
+  useEffect(()=>{
+    const db=window.__WPDB; if(!db) return;
+    try{
+      return db.collection("ajustes").orderBy("ts","desc").limit(500).onSnapshot(function(snap){
+        const arr=[]; snap.forEach(function(d){ const x=d.data()||{}; arr.push({...x, id:d.id, _docId:d.id}); });
+        setItems(arr);
+      }, function(){});
+    }catch(e){}
+  },[]);
+  const add=(obj)=>{ const db=window.__WPDB; if(!db) return Promise.reject(new Error("sem-banco")); return db.collection("ajustes").add(obj); };
+  const update=(docId,patch)=>{ const db=window.__WPDB; if(db){ try{ return db.collection("ajustes").doc(docId).set(patch,{merge:true}); }catch(e){} } };
+  return [items,{add,update}];
+}
 function StoreProvider({children}) {
   const [unidades,setUnidades]=usePersist("unidades",INIT_UNIDADES);
   const [cltsBase,setClts]=usePersist("clts",INIT_CLTS);
@@ -517,6 +533,9 @@ function StoreProvider({children}) {
   const [cadAuto,cadOps]=useCadastros();
   const [atestados,atestadosOps]=useAtestados();
   const enviarAtestado=(obj)=>{ if(window.__WPDB) return atestadosOps.add(obj); return Promise.resolve(); };
+  const [ajustes,ajustesOps]=useAjustes();
+  const enviarAjuste=(obj)=>{ if(window.__WPDB) return ajustesOps.add(obj); return Promise.resolve(); };
+  const resolverAjuste=(docId,patch)=>ajustesOps.update(docId,patch);
   // Listas expostas = base (admin) + auto-cadastros do celular (mesclados por vínculo)
   const clts=[...cltsBase, ...cadAuto.filter(c=>c.tipo==="clt")];
   const freelas=[...freelasBase, ...cadAuto.filter(c=>c.tipo==="free")];
@@ -577,7 +596,8 @@ function StoreProvider({children}) {
   const addRegistro=(r)=>{
     const now=new Date();
     const min = r.min!=null ? r.min : now.getHours()*60+now.getMinutes();
-    const rec={...r, min, dia:"hoje", data:hojeStr(), ts:now.getTime()};
+    // respeita data/dia/hora informados (ex.: ponto aprovado num AJUSTE lançado no dia certo)
+    const rec={...r, min, dia:r.dia||"hoje", data:r.data||hojeStr(), ts:r.ts||now.getTime()};
     // Com banco: grava na coleção pública "registros" (funciona SEM login, no celular do colaborador).
     // Sem banco: cai no armazenamento local (modo demonstração/offline).
     if(window.__WPDB){ regPubOps.add(rec).catch(function(){ setRegistrosLocal(prev=>[{...rec, id:Math.random().toString(36).slice(2)}, ...prev].slice(0,60)); }); }
@@ -623,7 +643,7 @@ function StoreProvider({children}) {
 
   const value={ unidades,salvarUnidade,excluirUnidade, clts,freelas,freelasComPagamentos,salvarClt,salvarFreela,excluirColab,cadastrarPublico, anexarDoc,
     escala,setEscala, registros,addRegistro, pontoHist, freelancerEscaladoHoje, valorFreela,
-    cargosFreela,salvarCargoFreela,excluirCargoFreela, atestados,enviarAtestado,
+    cargosFreela,salvarCargoFreela,excluirCargoFreela, atestados,enviarAtestado, ajustes,enviarAjuste,resolverAjuste,
     dossie,getDossie,addFalta,addFeedback,addAnexo, perfil,setPerfil, perms,setPerms, can };
   return <StoreCtx.Provider value={value}>{children}</StoreCtx.Provider>;
 }
@@ -1212,7 +1232,7 @@ function PontoLive() {
 
 /* ============================ QUIOSQUE DE PONTO ============================ */
 function PontoKiosk({ mode, onClose }) {
-  const { unidades, clts, freelas, escala, registros, freelancerEscaladoHoje, addRegistro, salvarClt, salvarFreela, cadastrarPublico, enviarAtestado } = useStore();
+  const { unidades, clts, freelas, escala, registros, freelancerEscaladoHoje, addRegistro, salvarClt, salvarFreela, cadastrarPublico, enviarAtestado, enviarAjuste } = useStore();
   const ativos = mode==="clt" ? clts : freelas.filter(f=>f.status==="ativo");
   const [fluxo,setFluxo]=useState("escolha"); // escolha | registro | cadastro
   const [unidadeId,setUnidadeId]=useState(unidades[0]?.id);
@@ -1267,6 +1287,25 @@ function PontoKiosk({ mode, onClose }) {
     setAtStatus("enviando");
     Promise.resolve(enviarAtestado({ pid:String(pessoa.id), cpf:d, nome:pessoa.nome, tipo:"atestado", data:at.data, horas:Number(at.horas)||8, obs:at.obs, anexo:{nome:at.nomeArq,dados:at.arquivo}, ts:new Date().getTime() }))
       .then(()=>setAtStatus("ok")).catch(()=>setAtStatus("erro"));
+  };
+  // ---- Solicitação de AJUSTE de ponto pelo colaborador ----
+  const acoesAjuste = mode==="free" ? [["Entrada","Check-in"],["Saída","Checkout"]]
+    : [["Entrada","Entrada"],["Início intervalo","Saída para almoço"],["Fim intervalo","Retorno do almoço"],["Saída","Saída final"]];
+  const [aj,setAj]=useState({cpf:"",data:hojeStr(),acao:"Entrada",hora:"08:00",motivo:""});
+  const [ajStatus,setAjStatus]=useState(""); // "" | cpf | naoencontrado | semmotivo | enviando | ok | erro
+  const enviarAjusteColab=()=>{
+    const d=(aj.cpf||"").replace(/\D/g,"");
+    const pessoa=(mode==="clt"?clts:freelas).find(x=>(x.cpf||"").replace(/\D/g,"")===d);
+    if(d.length<11){ setAjStatus("cpf"); return; }
+    if(!pessoa){ setAjStatus("naoencontrado"); return; }
+    if(!(aj.motivo||"").trim()){ setAjStatus("semmotivo"); return; }
+    const [hh,mm]=(aj.hora||"08:00").split(":").map(Number); const min=(hh||0)*60+(mm||0);
+    const uni=(unidades.find(u=>u.id===pessoa.unidade)||unidades[0]||{}).nome||"";
+    const rot=(acoesAjuste.find(a=>a[0]===aj.acao)||[])[1]||aj.acao;
+    setAjStatus("enviando");
+    Promise.resolve(enviarAjuste({ pid:String(pessoa.id), cpf:d, nome:pessoa.nome, tipo:mode, unidade:uni,
+      acao:aj.acao, acaoLabel:rot, data:aj.data, hora:aj.hora, min, motivo:aj.motivo.trim(), status:"pendente", ts:new Date().getTime() }))
+      .then(()=>setAjStatus("ok")).catch(()=>setAjStatus("erro"));
   };
   const videoRef=useRef(null); const streamRef=useRef(null);
   const clock=useClock();
@@ -1409,9 +1448,40 @@ function PontoKiosk({ mode, onClose }) {
               <button onClick={()=>{setFluxo("atestado");setAtStatus("");}} className="w-full p-4 rounded-2xl border border-slate-200 hover:border-sky-400 hover:bg-sky-50/40 flex items-center gap-4 text-left transition">
                 <div className="w-11 h-11 rounded-xl bg-sky-500 grid place-items-center text-white"><Icon d={I.doc}/></div>
                 <div className="flex-1"><div className="font-bold text-slate-900">Enviar atestado</div><div className="text-sm text-slate-500">Anexar atestado médico — vai direto ao seu dossiê</div></div><Icon d={I.arrow} className="w-4 h-4 text-slate-400"/></button>
+              <button onClick={()=>{setFluxo("ajuste");setAjStatus("");}} className="w-full p-4 rounded-2xl border border-slate-200 hover:border-amber-400 hover:bg-amber-50/40 flex items-center gap-4 text-left transition">
+                <div className="w-11 h-11 rounded-xl bg-amber-500 grid place-items-center text-white"><Icon d={I.edit}/></div>
+                <div className="flex-1"><div className="font-bold text-slate-900">Solicitar ajuste de ponto</div><div className="text-sm text-slate-500">Esqueceu de bater? Peça a correção ao gestor</div></div><Icon d={I.arrow} className="w-4 h-4 text-slate-400"/></button>
             </div>
             <Btn variant="ghost" className="w-full mt-4" onClick={onClose}>Cancelar</Btn>
           </div>
+        : fluxo==="ajuste" ? (ajStatus==="ok" ? <div className="fade-in text-center py-10">
+            <div className="w-20 h-20 mx-auto rounded-full bg-emerald-500 grid place-items-center text-white mb-4 shadow-glow"><Icon d={I.check} className="w-10 h-10" stroke={3}/></div>
+            <h3 className="text-2xl font-extrabold text-slate-900">Solicitação enviada!</h3>
+            <p className="text-slate-500 mt-1">Seu pedido de ajuste foi enviado ao gestor. Você será avisado quando for aprovado.</p>
+            <Btn variant="ghost" className="w-full mt-4" onClick={onClose}>Fechar</Btn>
+          </div>
+          : <div className="fade-in">
+            <div className="text-center mb-4">
+              <div className="w-14 h-14 mx-auto rounded-2xl bg-amber-500 grid place-items-center text-white mb-2"><Icon d={I.edit} className="w-7 h-7"/></div>
+              <h3 className="text-lg font-bold text-slate-900">Solicitar ajuste de ponto</h3>
+              <p className="text-sm text-slate-500">Identifique-se e informe a marcação que precisa ser corrigida. O gestor aprova.</p>
+            </div>
+            <Field label="Seu CPF"><Input value={aj.cpf} inputMode="numeric" placeholder="000.000.000-00" onChange={e=>{setAj({...aj,cpf:e.target.value}); setAjStatus("");}}/></Field>
+            <div className="grid grid-cols-2 gap-2 mt-2">
+              <Field label="Data"><Input type="date" value={aj.data} onChange={e=>setAj({...aj,data:e.target.value})}/></Field>
+              <Field label="Horário correto"><Input type="time" value={aj.hora} onChange={e=>setAj({...aj,hora:e.target.value})}/></Field>
+            </div>
+            <Field label="Qual marcação?"><Select value={aj.acao} onChange={e=>setAj({...aj,acao:e.target.value})}>{acoesAjuste.map(([v,l])=><option key={v} value={v}>{l}</option>)}</Select></Field>
+            <Field label="Motivo"><Input value={aj.motivo} onChange={e=>setAj({...aj,motivo:e.target.value})} placeholder="Ex.: esqueci de bater a saída"/></Field>
+            {ajStatus==="cpf" && <div className="mt-3 p-3 rounded-xl bg-rose-50 text-rose-700 text-sm">Digite os 11 números do CPF.</div>}
+            {ajStatus==="naoencontrado" && <div className="mt-3 p-3 rounded-xl bg-rose-50 text-rose-700 text-sm">CPF não encontrado. Faça o cadastro (1º acesso) primeiro.</div>}
+            {ajStatus==="semmotivo" && <div className="mt-3 p-3 rounded-xl bg-rose-50 text-rose-700 text-sm">Descreva o motivo do ajuste.</div>}
+            {ajStatus==="erro" && <div className="mt-3 p-3 rounded-xl bg-rose-50 text-rose-700 text-sm">Não foi possível enviar agora. Tente novamente.</div>}
+            <div className="flex gap-2 mt-4">
+              <Btn variant="ghost" onClick={()=>setFluxo("escolha")}>Voltar</Btn>
+              <Btn className="flex-1" icon={ajStatus==="enviando"?null:I.check} disabled={ajStatus==="enviando"} onClick={enviarAjusteColab}>{ajStatus==="enviando"?"Enviando…":"Enviar solicitação"}</Btn>
+            </div>
+          </div>)
         : fluxo==="atestado" ? (atStatus==="ok" ? <div className="fade-in text-center py-10">
             <div className="w-20 h-20 mx-auto rounded-full bg-emerald-500 grid place-items-center text-white mb-4 shadow-glow"><Icon d={I.check} className="w-10 h-10" stroke={3}/></div>
             <h3 className="text-2xl font-extrabold text-slate-900">Atestado enviado!</h3>
@@ -2610,11 +2680,60 @@ function Ajuda() {
 }
 
 /* ============================ APP SHELL ============================ */
+/* ============================ AJUSTES DE PONTO (aprovação do gestor) ============================ */
+function AjustesPonto(){
+  const { ajustes, resolverAjuste, addRegistro } = useStore();
+  const toast=useContext(ToastCtx);
+  const [aba,setAba]=useState("pendente"); // pendente | resolvidos
+  const [editHora,setEditHora]=useState({}); // {docId: "HH:MM"}
+  const pend=(ajustes||[]).filter(a=>a.status==="pendente"||!a.status);
+  const lista=(ajustes||[]).filter(a=> aba==="pendente" ? (a.status==="pendente"||!a.status) : a.status!=="pendente");
+  const aprovar=(a, horaOverride)=>{
+    const hora = horaOverride || a.hora || "08:00";
+    const [hh,mm]=hora.split(":").map(Number); const min=(hh||0)*60+(mm||0);
+    addRegistro({ nome:a.nome, pid:a.pid, cpf:a.cpf, tipo:a.tipo, acao:a.acao, unidade:a.unidade, hora:hora+":00", min, data:a.data, dia:a.data, geo:true, selfie:false, foto:null, ajuste:true });
+    resolverAjuste(a._docId||a.id, {status:"aprovado", horaFinal:hora, resolvidoTs:new Date().getTime()});
+    toast("Ajuste aprovado e lançado no ponto");
+  };
+  const recusar=(a)=>{ resolverAjuste(a._docId||a.id, {status:"recusado", resolvidoTs:new Date().getTime()}); toast("Solicitação recusada"); };
+  return <div className="fade-in">
+    <PageHeader title="Ajustes de ponto" sub="Solicitações de correção enviadas pelos colaboradores · aprovar, ajustar o horário ou recusar"/>
+    <div className="inline-flex p-1 bg-slate-100 rounded-xl mb-4">
+      {[["pendente","Pendentes ("+pend.length+")"],["resolvidos","Resolvidos"]].map(([k,l])=>
+        <button key={k} onClick={()=>setAba(k)} className={cx("px-5 py-2 rounded-lg text-sm font-semibold transition", aba===k?"grad-brand text-white shadow-glow":"text-slate-500 hover:text-slate-700")}>{l}</button>)}
+    </div>
+    <div className="space-y-3">
+      {lista.length===0 && <Card className="p-8 text-center text-slate-400 text-sm">{aba==="pendente"?"Nenhuma solicitação pendente. 👍":"Nenhum ajuste resolvido ainda."}</Card>}
+      {lista.map(a=>{ const editing=editHora[a._docId]!==undefined; const pendente=a.status==="pendente"||!a.status;
+        return <Card key={a._docId} className="p-4">
+          <div className="flex items-start gap-3 flex-wrap">
+            <Avatar name={a.nome} tone={a.tipo==="clt"?"brand":"free"}/>
+            <div className="flex-1 min-w-[180px]">
+              <div className="font-bold text-slate-900 flex items-center gap-2">{a.nome} <Badge tone={a.tipo==="clt"?"brand":"free"}>{a.tipo==="clt"?"CLT":"Freela"}</Badge></div>
+              <div className="text-sm text-slate-600 mt-0.5"><b>{a.acaoLabel||a.acao}</b> · {fmtDataBR(a.data)} · <b className="tabular-nums">{a.hora}</b>{a.unidade?` · ${a.unidade}`:""}</div>
+              <div className="text-xs text-slate-500 mt-1">Motivo: {a.motivo||"—"}</div>
+            </div>
+            {pendente
+              ? (editing
+                ? <div className="flex items-center gap-1"><input type="time" value={editHora[a._docId]} onChange={e=>setEditHora(h=>({...h,[a._docId]:e.target.value}))} className="px-2 py-1.5 rounded-lg border border-slate-300 text-sm"/><Btn size="sm" icon={I.check} onClick={()=>{aprovar(a, editHora[a._docId]); setEditHora(h=>{const n={...h};delete n[a._docId];return n;});}}>Salvar</Btn></div>
+                : <div className="flex gap-2 flex-wrap">
+                    <Btn size="sm" variant="primary" icon={I.check} onClick={()=>aprovar(a)}>Aprovar</Btn>
+                    <Btn size="sm" variant="ghost" icon={I.edit} onClick={()=>setEditHora(h=>({...h,[a._docId]:a.hora}))}>Ajustar hora</Btn>
+                    <Btn size="sm" variant="ghost" className="text-rose-500" icon={I.x} onClick={()=>recusar(a)}>Recusar</Btn>
+                  </div>)
+              : <Badge tone={a.status==="aprovado"?"green":"red"}>{a.status==="aprovado"?("Aprovado"+(a.horaFinal?" · "+a.horaFinal:"")):"Recusado"}</Badge>}
+          </div>
+        </Card>; })}
+    </div>
+  </div>;
+}
+
 const NAV = [
   {sec:"Operação", items:[
     {k:"dashboard",l:"Painel",d:I.grid},
     {k:"escala",l:"Escala por unidade",d:I.calendar},
     {k:"ponto",l:"Ponto ao vivo",d:I.broadcast},
+    {k:"ajustes",l:"Ajustes de ponto",d:I.edit},
   ]},
   {sec:"Pessoas", items:[
     {k:"clt",l:"Colaboradores CLT",d:I.user},
@@ -2634,7 +2753,7 @@ const NAV = [
     {k:"ajuda",l:"Ajuda",d:I.help},
   ]},
 ];
-const TITULOS={dashboard:"Painel",escala:"Escala por unidade",ponto:"Ponto ao vivo",clt:"Colaboradores CLT",freelas:"Freelancers",dossie:"Dossiê do colaborador",equipe:"Equipe & permissões",relatorios:"Relatórios",financeiro:"Financeiro",pagamentos:"Pagamentos",unidades:"Unidades",links:"Links & QR",config:"Configurações",ajuda:"Ajuda"};
+const TITULOS={dashboard:"Painel",escala:"Escala por unidade",ponto:"Ponto ao vivo",ajustes:"Ajustes de ponto",clt:"Colaboradores CLT",freelas:"Freelancers",dossie:"Dossiê do colaborador",equipe:"Equipe & permissões",relatorios:"Relatórios",financeiro:"Financeiro",pagamentos:"Pagamentos",unidades:"Unidades",links:"Links & QR",config:"Configurações",ajuda:"Ajuda"};
 
 function Sidebar({view,setView,open,setOpen,onLogout}) {
   return <>
@@ -2668,7 +2787,7 @@ function Shell({ onLogout }) {
   const [sbOpen,setSbOpen]=useState(false);
   const [toasts,setToasts]=useState([]);
   const pushToast=(msg)=>{ const id=Math.random(); setToasts(t=>[...t,{id,msg}]); setTimeout(()=>setToasts(t=>t.filter(x=>x.id!==id)),2600); };
-  const views={ dashboard:<Dashboard go={setView}/>, escala:<EscalaVisual/>, ponto:<PontoLive/>, clt:<ColaboradoresCLT/>, freelas:<Freelancers/>,
+  const views={ dashboard:<Dashboard go={setView}/>, escala:<EscalaVisual/>, ponto:<PontoLive/>, ajustes:<AjustesPonto/>, clt:<ColaboradoresCLT/>, freelas:<Freelancers/>,
     dossie:<Dossie/>, equipe:<Equipe/>, relatorios:<Relatorios/>, financeiro:<Financeiro/>, pagamentos:<Pagamentos/>, unidades:<Unidades/>, links:<LinksQR/>, config:<Configuracoes/>, ajuda:<Ajuda/> };
   return <ToastCtx.Provider value={pushToast}>
     <div className="flex min-h-screen">
