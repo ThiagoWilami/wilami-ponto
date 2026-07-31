@@ -382,7 +382,7 @@ function copyText(t){
   try{ const ta=document.createElement("textarea"); ta.value=t; ta.setAttribute("readonly",""); ta.style.position="fixed"; ta.style.top="-1000px"; ta.style.opacity="0"; document.body.appendChild(ta); ta.focus(); ta.select(); ta.setSelectionRange(0,t.length); const okc=document.execCommand("copy"); document.body.removeChild(ta); return okc; }catch{ return false; }
 }
 
-const DIAS = ["Seg 21","Ter 22","Qua 23","Qui 24","Sex 25","Sáb 26","Dom 27"];
+const DIAS = ["Seg","Ter","Qua","Qui","Sex","Sáb","Dom"]; // nomes dos dias (a data real é calculada na Escala)
 const TURNOS = { manha:{l:"Manhã",h:"08:00–16:00",c:"amber"}, tarde:{l:"Tarde",h:"12:00–20:00",c:"blue"}, noite:{l:"Noite",h:"18:00–02:00",c:"brand"}, folga:{l:"Folga",h:"—",c:"slate"} };
 // Documentos do colaborador (upload no cadastro e na pasta)
 const DOC_TIPOS = [
@@ -395,7 +395,13 @@ const DOC_TIPOS = [
   ["historico_escolar","Histórico Escolar"],
   ["diploma","Diploma"],
 ];
-const HOJE_IDX = 4; // "hoje" na simulação = Sexta (índice 4)
+// "hoje" DINÂMICO = dia da semana REAL (0=Seg … 6=Dom). Usado no ponto, no painel ao vivo e na escala.
+const HOJE_IDX = (new Date().getDay()+6)%7;
+// Helpers de data para o passador de datas da escala
+const segDaSemana=(base)=>{ const d=new Date(base); d.setHours(0,0,0,0); const wd=(d.getDay()+6)%7; d.setDate(d.getDate()-wd); return d; };
+const addDias=(base,n)=>{ const d=new Date(base); d.setDate(d.getDate()+n); return d; };
+const ymd=(d)=>{ const x=new Date(d); return x.getFullYear()+"-"+String(x.getMonth()+1).padStart(2,"0")+"-"+String(x.getDate()).padStart(2,"0"); };
+const MESES_CURTO=["jan","fev","mar","abr","mai","jun","jul","ago","set","out","nov","dez"];
 const turnoPorDia = (d)=> d%3===0?"manha":d%3===1?"tarde":"noite";
 const folgaFixa = (t,d)=> t==="6x1"? d===6 : (t==="5x2"||t==="6x2")? d>=5 : false;
 // Escala POR UNIDADE: { [unidadeId]: { 0..6: [alocações] } }
@@ -808,6 +814,15 @@ function EscalaVisual() {
   const nFolga=tot.filter(a=>a.turno==="folga").length;
   const uAtual=unidades.find(u=>u.id===uSel);
 
+  // ===== Passador de datas: semana visível, "hoje" real e busca de data específica =====
+  const [semanaBase,setSemanaBase]=useState(()=>segDaSemana(new Date())); // segunda-feira da semana exibida
+  const datasSemana=[0,1,2,3,4,5,6].map(i=>addDias(semanaBase,i));
+  const ehHoje=(di)=> ymd(datasSemana[di])===hojeStr();
+  const labelDiaFull=(di)=>{ const d=datasSemana[di]; return `${DIAS[di]} ${d.getDate()}/${String(d.getMonth()+1).padStart(2,"0")}`; };
+  const semanaLabel=`${datasSemana[0].getDate()} ${MESES_CURTO[datasSemana[0].getMonth()]} – ${datasSemana[6].getDate()} ${MESES_CURTO[datasSemana[6].getMonth()]}`;
+  const semanaAtual = ymd(semanaBase)===ymd(segDaSemana(new Date()));
+  const irParaData=(v)=>{ if(!v) return; const [y,m,dd]=v.split("-").map(Number); setSemanaBase(segDaSemana(new Date(y,m-1,dd))); };
+
   return <div className="fade-in">
     <PageHeader title="Escala por unidade" sub="Uma aba por casa · filtro por setor · layout compacto · menu (⋯) para turno, faltou, atrasou, folga">
       {editavel && <Btn icon={I.plus} onClick={()=>setAdd(HOJE_IDX)}>Incluir colaborador</Btn>}
@@ -839,14 +854,28 @@ function EscalaVisual() {
       {SETORES.map(([k,l,c])=><button key={k} onClick={()=>setSetorF(k)} className={cx("px-3 py-1.5 rounded-lg text-xs font-semibold border transition flex items-center gap-1.5", setorF===k?"text-white border-transparent":"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")} style={setorF===k?{background:c}:{}}><span className="w-2 h-2 rounded-full" style={{background:setorF===k?"#fff":c}}/>{l}</button>)}
     </div>
 
+    {/* Passador de datas — navegar semanas, ir para uma data e ver o dia atual marcado */}
+    <div className="flex flex-wrap items-center gap-2 mb-3">
+      <div className="flex items-center gap-1 bg-white border border-slate-200 rounded-xl p-1">
+        <button onClick={()=>setSemanaBase(s=>addDias(s,-7))} className="w-8 h-8 rounded-lg grid place-items-center text-slate-500 hover:bg-slate-50" title="Semana anterior"><Icon d={I.arrow} className="w-4 h-4 rotate-180"/></button>
+        <span className="px-2 text-sm font-semibold text-slate-700 tabular-nums whitespace-nowrap">{semanaLabel}</span>
+        <button onClick={()=>setSemanaBase(s=>addDias(s,7))} className="w-8 h-8 rounded-lg grid place-items-center text-slate-500 hover:bg-slate-50" title="Próxima semana"><Icon d={I.arrow} className="w-4 h-4"/></button>
+      </div>
+      <Btn variant={semanaAtual?"soft":"ghost"} icon={I.calendar} onClick={()=>setSemanaBase(segDaSemana(new Date()))}>Semana de hoje</Btn>
+      <label className="flex items-center gap-2 bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-sm text-slate-600">
+        <Icon d={I.search} className="w-4 h-4 text-slate-400"/><span className="hidden sm:inline">Ir para data</span>
+        <input type="date" value={ymd(semanaBase)} onChange={e=>irParaData(e.target.value)} className="outline-none bg-transparent text-slate-800"/>
+      </label>
+    </div>
+
     <Card className="p-3 overflow-x-auto">
-      <div className="px-1 pb-2 text-sm font-semibold text-slate-500 flex items-center gap-2"><Icon d={I.pin} className="w-4 h-4" style={{color:uAtual?.cor}}/> Escala de <b className="text-slate-800">{uAtual?.nome}</b></div>
+      <div className="px-1 pb-2 text-sm font-semibold text-slate-500 flex items-center gap-2"><Icon d={I.pin} className="w-4 h-4" style={{color:uAtual?.cor}}/> Escala de <b className="text-slate-800">{uAtual?.nome}</b> · <span className="text-slate-400">{semanaLabel}</span></div>
       <div className="grid grid-cols-7 gap-3 min-w-[980px]">
         {DIAS.map((dia,di)=>
           <div key={di} onDragOver={e=>{e.preventDefault();setOver(di);}} onDragLeave={()=>setOver(o=>o===di?null:o)} onDrop={()=>onDrop(di)}
-            className={cx("rounded-2xl p-2 min-h-[260px] bg-slate-50/70 transition", over===di&&"drag-over", di===HOJE_IDX&&"ring-2 ring-brand-300 bg-brand-50/40")}>
+            className={cx("rounded-2xl p-2 min-h-[260px] bg-slate-50/70 transition", over===di&&"drag-over", ehHoje(di)&&"ring-2 ring-brand-300 bg-brand-50/40")}>
             <div className="flex items-center justify-between px-1 mb-2">
-              <span className="text-sm font-bold text-slate-700">{dia}{di===HOJE_IDX&&<span className="ml-1 text-[10px] text-brand-600">• hoje</span>}</span>
+              <span className="text-sm font-bold text-slate-700">{labelDiaFull(di)}{ehHoje(di)&&<span className="ml-1 text-[10px] text-brand-600">• hoje</span>}</span>
               {editavel && <button onClick={()=>setAdd(di)} className="w-6 h-6 rounded-lg bg-white border border-slate-200 grid place-items-center text-slate-400 hover:text-brand-600 hover:border-brand-300"><Icon d={I.plus} className="w-3.5 h-3.5"/></button>}
             </div>
             <div className="space-y-1.5">
@@ -886,7 +915,7 @@ function EscalaVisual() {
     <Modal open={!!editH} onClose={()=>setEditH(null)}>
       {editH && <div className="p-6">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-bold text-slate-900">Editar horário — {DIAS[editH.di]}</h3>
+          <h3 className="text-lg font-bold text-slate-900">Editar horário — {labelDiaFull(editH.di)}</h3>
           <button onClick={()=>setEditH(null)} className="text-slate-400 hover:text-slate-600"><Icon d={I.x}/></button>
         </div>
         <div className="flex items-end gap-3">
@@ -904,7 +933,7 @@ function EscalaVisual() {
     <Modal open={add!==null} onClose={()=>setAdd(null)}>
       <div className="p-6">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-bold text-slate-900">Incluir colaborador em {uAtual?.nome} {add!==null&&`— ${DIAS[add]}`}</h3>
+          <h3 className="text-lg font-bold text-slate-900">Incluir colaborador em {uAtual?.nome} {add!==null&&`— ${labelDiaFull(add)}`}</h3>
           <button onClick={()=>setAdd(null)} className="text-slate-400 hover:text-slate-600"><Icon d={I.x}/></button>
         </div>
         <p className="text-sm text-slate-500 mb-4">Inclua um freelancer (cobertura) ou um CLT auto-cadastrado. Só quem está escalado consegue registrar ponto.</p>
