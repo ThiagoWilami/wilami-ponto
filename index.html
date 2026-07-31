@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- build: dossie-fix (data exata, sem duplicidade, desconto CLT documentado) -->
+<!-- build: relatorios-reais + dossie voltar/foto -->
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8" />
@@ -1633,8 +1633,11 @@ function ColabForm({ tipo, inicial, onSalvar, onClose }) {
 
 /* ============================ COLABORADORES CLT ============================ */
 function ColaboradoresCLT() {
-  const { clts, salvarClt, excluirColab, unidades } = useStore();
+  const { clts, salvarClt, excluirColab, unidades, registros, pontoHist } = useStore();
   const toast=useContext(ToastCtx);
+  const bancoDe=(c)=>{ const meus=apurarHoras([...pontoHist, ...(registros||[])]).filter(x=>x.tipo==="clt"&&x.completo&&x.nome===c.nome);
+    const extras=meus.reduce((s,x)=>s+(x.extras||0)+(x.extras100||0),0), atraso=meus.reduce((s,x)=>s+(x.atraso||0),0), not=meus.reduce((s,x)=>s+minutosNoturnos(x.punches||[]),0);
+    return {extras,atraso,not,saldo:extras-atraso}; };
   const [q,setQ]=useState("");
   const [form,setForm]=useState(null); // {inicial?} aberto p/ cadastro/edição
   const [pasta,setPasta]=useState(null); // colaborador aberto
@@ -1721,14 +1724,15 @@ function ColaboradoresCLT() {
                 {pasta.docs[k]?<Badge tone="green">OK</Badge>:<Btn size="sm" variant="soft" icon={I.upload} onClick={()=>toast("Upload simulado (S3/Firebase)")}>Enviar</Btn>}
               </div>)}
           </div>}
-          {tab==="escala" && <div className="grid sm:grid-cols-2 gap-4">
-            <Card className="p-4"><div className="text-sm text-slate-500">Banco de horas</div>
-              <div className={cx("text-3xl font-extrabold mt-1", pasta.banco.startsWith("-")?"text-rose-600":"text-emerald-600")}>{pasta.banco}</div></Card>
+          {tab==="escala" && (()=>{ const b=bancoDe(pasta); return <div className="grid sm:grid-cols-2 gap-4">
+            <Card className="p-4"><div className="text-sm text-slate-500">Banco de horas (saldo)</div>
+              <div className={cx("text-3xl font-extrabold mt-1", b.saldo<0?"text-rose-600":"text-emerald-600")}>{fmtSaldo(b.saldo)}</div>
+              <div className="text-xs text-slate-400 mt-1">extras − atrasos, das batidas reais</div></Card>
             <Card className="p-4"><div className="space-y-2 text-sm mt-1">
-              <div className="flex justify-between"><span className="text-slate-500">Horas extras</span><b>{pasta.extras}</b></div>
-              <div className="flex justify-between"><span className="text-slate-500">Atrasos</span><b className="text-rose-600">{pasta.atrasos}</b></div>
-              <div className="flex justify-between"><span className="text-slate-500">Adicional noturno</span><b>2h10</b></div></div></Card>
-          </div>}
+              <div className="flex justify-between"><span className="text-slate-500">Horas extras</span><b>{b.extras?fmtHoras(b.extras):"0h00"}</b></div>
+              <div className="flex justify-between"><span className="text-slate-500">Atrasos</span><b className="text-rose-600">{b.atraso?fmtHoras(b.atraso):"0h00"}</b></div>
+              <div className="flex justify-between"><span className="text-slate-500">Adicional noturno</span><b>{b.not?fmtHoras(b.not):"0h00"}</b></div></div></Card>
+          </div>; })()}
         </div>
       </div>}
     </Modal>
@@ -1828,29 +1832,62 @@ function Freelancers() {
 }
 
 /* ============================ RELATÓRIOS ============================ */
+// minuto pertence ao horário noturno (22:00–05:00, Art. 73 CLT)?
+const ehMinNoturno=(m)=>{ const x=((m%1440)+1440)%1440; return x>=1320 || x<300; };
+function minutosNoturnos(punches){ const g=a=>{ const p=punches.find(x=>x.acao===a); return p?p.min:null; };
+  const ent=g("Entrada"), sai=g("Saída"); if(ent==null||sai==null) return 0;
+  const fim=sai<ent?sai+1440:sai; let c=0; for(let m=ent;m<fim;m++){ if(ehMinNoturno(m)) c++; } return c; }
+const fmtSaldo=(min)=> (min<0?"-":"+")+fmtHoras(min);
 function Relatorios() {
-  const { clts, freelas } = useStore();
+  const { clts, freelas, unidades, registros, pontoHist, getDossie } = useStore();
   const toast=useContext(ToastCtx);
   const [f,setF]=useState("extras");
+  const [casa,setCasa]=useState("todas");
   const filtros=[["extras","Horas extras"],["atrasos","Atrasos & faltas"],["banco","Banco de horas"],["noturno","Adicional noturno"]];
-  const linhas = clts.map(c=>({nome:c.nome,vinc:"CLT",extras:c.extras,atrasos:c.atrasos,banco:c.banco,escala:c.escala}));
-  const cols={extras:["Colaborador","Horas extras","Escala"],atrasos:["Colaborador","Atrasos","Escala"],banco:["Colaborador","Saldo","Escala"],noturno:["Colaborador","Horas noturnas","Escala"]};
-  const val=(l)=>f==="extras"?l.extras:f==="atrasos"?l.atrasos:f==="banco"?l.banco:"2h10";
+  const cols={extras:["Colaborador","Horas extras","Escala"],atrasos:["Colaborador","Atrasos & faltas","Escala"],banco:["Colaborador","Saldo de horas","Escala"],noturno:["Colaborador","Horas noturnas","Escala"]};
+  // Apuração REAL das batidas (CLT) — extras, atraso e noturno vêm dos registros; faltas do dossiê.
+  const apur=apurarHoras([...pontoHist, ...registros]).filter(x=>x.tipo==="clt" && x.completo);
+  const dados = clts.filter(c=>casa==="todas"||c.unidade===casa).map(c=>{
+    const meus=apur.filter(x=>x.nome===c.nome);
+    const extrasMin=meus.reduce((s,x)=>s+(x.extras||0)+(x.extras100||0),0);
+    const atrasoMin=meus.reduce((s,x)=>s+(x.atraso||0),0);
+    const notMin=meus.reduce((s,x)=>s+minutosNoturnos(x.punches||[]),0);
+    const dos=getDossie("clt-"+c.id);
+    const faltasQtd=(dos.faltas||[]).filter(x=>x.tipo==="falta"&&x.descontar).length;
+    const atrasosQtd=(dos.faltas||[]).filter(x=>x.tipo==="atraso").length;
+    return { c, extrasMin, atrasoMin, notMin, faltasQtd, atrasosQtd, saldoMin: extrasMin-atrasoMin };
+  });
+  const val=(d)=> f==="extras" ? (d.extrasMin?fmtHoras(d.extrasMin):"—")
+    : f==="atrasos" ? ((d.atrasoMin?fmtHoras(d.atrasoMin):"0h00")+(d.faltasQtd?` · ${d.faltasQtd} falta(s)`:""))
+    : f==="banco" ? fmtSaldo(d.saldoMin)
+    : (d.notMin?fmtHoras(d.notMin):"—");
+  const neg=(d)=> f==="banco" ? d.saldoMin<0 : f==="atrasos" ? (d.atrasoMin>0||d.faltasQtd>0) : false;
+  const exportar=()=>{
+    const cab="Colaborador;Escala;Horas_extras;Atrasos;Faltas;Saldo_banco_horas;Horas_noturnas";
+    const corpo=dados.map(d=>`${d.c.nome};${d.c.escala};${fmtHoras(d.extrasMin)};${fmtHoras(d.atrasoMin)};${d.faltasQtd};${fmtSaldo(d.saldoMin)};${fmtHoras(d.notMin)}`).join("\n");
+    const blob=new Blob([cab+"\n"+corpo],{type:"text/csv"}); const url=URL.createObjectURL(blob);
+    const a=document.createElement("a"); a.href=url; a.download="relatorio-clt.csv"; a.click(); URL.revokeObjectURL(url);
+    toast("Relatório consolidado exportado");
+  };
   return <div className="fade-in">
     <PageHeader title="Relatórios" sub="Cálculo conforme CLT e Portaria 671/2021 · consolidado para folha">
-      <Btn variant="ghost" icon={I.download} onClick={()=>toast("Relatório (AFD/AEJ) exportado")}>Exportar</Btn>
+      <Btn variant="ghost" icon={I.download} onClick={exportar}>Exportar</Btn>
     </PageHeader>
-    <div className="flex flex-wrap gap-2 mb-4">
+    <div className="flex flex-wrap gap-2 mb-3">
       {filtros.map(([k,l])=><button key={k} onClick={()=>setF(k)} className={cx("px-4 py-2 rounded-xl text-sm font-semibold border transition", f===k?"grad-brand text-white border-transparent shadow-glow":"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>{l}</button>)}
     </div>
+    <FiltroCasa casa={casa} setCasa={setCasa} unidades={unidades}/>
+    {f==="noturno" && <div className="mb-3 text-xs text-slate-400">Adicional noturno: horas trabalhadas entre 22h e 5h (Art. 73 CLT) — calculado das batidas reais.</div>}
+    {f==="banco" && <div className="mb-3 text-xs text-slate-400">Saldo do banco de horas = horas extras − atrasos (das batidas reais).</div>}
     <Card className="overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm min-w-[520px]">
       <thead><tr className="text-left text-slate-400 border-b border-slate-100">{cols[f].map(h=><th key={h} className="px-4 py-3 font-semibold">{h}</th>)}</tr></thead>
       <tbody className="divide-y divide-slate-50">
-        {linhas.map((l,i)=><tr key={i} className="hover:bg-slate-50/70">
-          <td className="px-4 py-3"><div className="flex items-center gap-2"><Avatar name={l.nome} tone="brand" size="w-7 h-7"/><span className="font-semibold text-slate-800">{l.nome}</span></div></td>
-          <td className={cx("px-4 py-3 font-semibold", String(val(l)).startsWith("-")?"text-rose-600":"text-slate-700")}>{val(l)}</td>
-          <td className="px-4 py-3"><Badge tone="brand">{l.escala}</Badge></td>
+        {dados.map((d,i)=><tr key={i} className="hover:bg-slate-50/70">
+          <td className="px-4 py-3"><div className="flex items-center gap-2"><Avatar name={d.c.nome} src={d.c.foto} tone="brand" size="w-7 h-7"/><span className="font-semibold text-slate-800">{d.c.nome}</span></div></td>
+          <td className={cx("px-4 py-3 font-semibold tabular-nums", neg(d)?"text-rose-600":"text-slate-700")}>{val(d)}</td>
+          <td className="px-4 py-3"><Badge tone="brand">{d.c.escala}</Badge></td>
         </tr>)}
+        {dados.length===0 && <tr><td colSpan="3" className="px-4 py-8 text-center text-slate-400">Nenhum colaborador CLT nesta casa.</td></tr>}
       </tbody></table></div></Card>
   </div>;
 }
@@ -2186,6 +2223,7 @@ function Dossie() {
   const [tab,setTab]=useState("docs");
   const [q,setQ]=useState("");
   const [casa,setCasa]=useState("todas");
+  const [fotoZoom,setFotoZoom]=useState(null); // foto ampliada em tela cheia
   const editavel=can("documentos");
   const todos=[...clts.map(c=>({tipo:"clt",p:c})),...freelas.map(f=>({tipo:"free",p:f}))]
     .filter(x=>x.p.nome.toLowerCase().includes(q.toLowerCase()) && (casa==="todas"||x.p.unidade===casa));
@@ -2293,10 +2331,13 @@ function Dossie() {
     <Modal open={!!sel} onClose={()=>setSel(null)} wide>
       {sel && <div>
         <div className="grad-ink grad-hero p-6 text-white rounded-t-3xl relative">
+          <button onClick={()=>setSel(null)} className="absolute top-4 left-4 flex items-center gap-1 text-white/85 hover:text-white text-sm font-semibold"><Icon d={I.arrow} className="w-4 h-4 rotate-180"/>Voltar</button>
           <button onClick={()=>setSel(null)} className="absolute top-4 right-4 text-white/80 hover:text-white"><Icon d={I.x}/></button>
-          <div className="flex items-center gap-4">
-            <Avatar name={sel.p.nome} src={pAtual?.foto} tone={sel.tipo==="clt"?"brand":"free"} size="w-16 h-16"/>
-            <div className="flex-1"><h3 className="text-2xl font-extrabold">{sel.p.nome}</h3>
+          <div className="flex items-center gap-4 mt-6">
+            <button onClick={()=>{ if(pAtual?.foto) setFotoZoom(pAtual.foto); }} className={cx("rounded-2xl overflow-hidden ring-2 ring-white/40 shrink-0", pAtual?.foto&&"cursor-zoom-in hover:ring-white/80 transition")} title={pAtual?.foto?"Ver foto ampliada":""}>
+              {pAtual?.foto ? <img src={pAtual.foto} alt={sel.p.nome} className="w-16 h-16 object-cover"/> : <Avatar name={sel.p.nome} tone={sel.tipo==="clt"?"brand":"free"} size="w-16 h-16"/>}
+            </button>
+            <div className="flex-1 min-w-0"><h3 className="text-2xl font-extrabold truncate">{sel.p.nome}</h3>
               <p className="text-white/80">{sel.p.cargo} · {unidadeNome(sel.p.unidade,unidades)} · {sel.tipo==="clt"?"CLT":"Freelancer"}</p></div>
             <Btn variant="soft" icon={I.download} onClick={extrairPasta}>Extrair pasta</Btn>
           </div>
@@ -2415,13 +2456,19 @@ function Dossie() {
               {historico.map((h,i)=>
                 <div key={i} className="flex gap-3 p-3 rounded-xl bg-slate-50">
                   <div className={cx("w-2 rounded-full", h.tone==="amber"?"bg-amber-400":"bg-brand-400")}/>
-                  <div className="flex-1"><div className="text-xs text-slate-400">{new Date(h.data).toLocaleDateString("pt-BR")} · {h.t}</div><div className="text-sm text-slate-700">{h.desc}</div></div>
+                  <div className="flex-1"><div className="text-xs text-slate-400">{fmtDataBR(h.data)} · {h.t}</div><div className="text-sm text-slate-700">{h.desc}</div></div>
                 </div>)}
             </div>
           </div>}
         </div>
       </div>}
     </Modal>
+
+    {/* Foto ampliada em tela cheia */}
+    {fotoZoom && <div className="fixed inset-0 z-[60] bg-black/85 flex items-center justify-center p-4" onClick={()=>setFotoZoom(null)}>
+      <button className="absolute top-5 right-5 w-11 h-11 rounded-xl bg-white/15 text-white grid place-items-center hover:bg-white/25"><Icon d={I.x}/></button>
+      <img src={fotoZoom} alt="foto" className="max-w-full max-h-full rounded-2xl object-contain shadow-2xl" onClick={e=>e.stopPropagation()}/>
+    </div>}
   </div>;
 }
 
