@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- build: multiempresa (novo cliente, dados isolados) 2026-07-31 16:05 -->
+<!-- build: login independente por cliente (dono/gerente vinculado) 2026-07-31 -->
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8" />
@@ -236,6 +236,10 @@ function comTenantUrl(baseNoHash, hashPart){
   return u + (hashPart?("#"+hashPart):"");
 }
 const tKey=(key)=> "wp_"+(WP_TENANT?WP_TENANT+"_":"")+key;
+// Login por USUÁRIO ou e-mail → e-mail resolvido (mesmo critério da tela de login).
+const emailDeLogin=(v)=>{ v=(v||"").trim(); return v.includes("@")?v.toLowerCase():(v.toLowerCase().replace(/\s+/g,"")+"@wilami.app"); };
+// Chave de documento para o vínculo de acesso (por e-mail resolvido).
+const emailKey=(v)=> emailDeLogin(v).replace(/[^a-z0-9]/g,"_");
 
 function usePersist(key, initial){
   const [v,setV]=useState(()=>{ try{ const s=localStorage.getItem(tKey(key)); return s!=null?JSON.parse(s):initial; }catch{ return initial; } });
@@ -581,6 +585,37 @@ function StoreProvider({children}) {
     if(!window.__WPDB) return Promise.reject(new Error("sem-banco"));
     return tenantsOps.add({nome:nm, cor:cor||"#6366f1", criadoEm:Date.now()}).then(function(ref){ trocarCliente(ref.id); return ref.id; });
   };
+  // ---- Login independente por cliente (dono x gerente vinculado a um cliente) ----
+  const [authUser,setAuthUser]=useState(()=> (window.__WPAUTH&&window.__WPAUTH.currentUser)||null);
+  useEffect(()=>{ const a=window.__WPAUTH; if(!a) return; return a.onAuthStateChanged(u=>setAuthUser(u)); },[]);
+  // Config global (lista de DONOS) — vive SEMPRE no espaço principal (raiz), não é isolada por cliente.
+  const [cfgGlobal,setCfgGlobal]=useState(()=> window.__WPDB ? null : {});
+  useEffect(()=>{ const db=window.__WPDB; if(!db){ setCfgGlobal({}); return; }
+    try{ return db.collection("wilami").doc("config").onSnapshot(function(s){ setCfgGlobal((s&&s.exists&&s.data().v)||{}); }, function(){ setCfgGlobal({}); }); }catch(e){ setCfgGlobal({}); }
+  },[]);
+  const donos = (cfgGlobal&&cfgGlobal.donos)||[];               // e-mails (chave normalizada) com acesso total
+  const setDonos=(arr)=>{ const db=window.__WPDB; if(db){ try{ db.collection("wilami").doc("config").set({v:{...(cfgGlobal||{}),donos:arr}},{merge:true}); }catch(e){} } };
+  // Vínculos de acesso: e-mail → cliente. Também na raiz (consultado por e-mail, antes de saber o cliente).
+  const [acessos,setAcessosItems]=useState([]);
+  const [acessosPronto,setAcessosPronto]=useState(()=>!window.__WPDB);
+  useEffect(()=>{ const db=window.__WPDB; if(!db) return;
+    try{ return db.collection("acessos").onSnapshot(function(snap){ const a=[]; snap.forEach(function(d){ a.push({id:d.id,...(d.data()||{})}); }); setAcessosItems(a); setAcessosPronto(true); }, function(){ setAcessosPronto(true); }); }catch(e){ setAcessosPronto(true); }
+  },[]);
+  const acessosOps={
+    set:(email,tenant,nome)=>{ const db=window.__WPDB; if(!db) return Promise.reject(new Error("sem-banco")); try{ return db.collection("acessos").doc(emailKey(email)).set({email:emailDeLogin(email),tenant:tenant||"",nome:nome||"",criadoEm:Date.now()},{merge:true}); }catch(e){ return Promise.reject(e); } },
+    remove:(email)=>{ const db=window.__WPDB; if(!db) return Promise.resolve(); try{ return db.collection("acessos").doc(emailKey(email)).delete(); }catch(e){} },
+  };
+  // Situação de acesso do usuário logado
+  const meuEmail = authUser && (authUser.email||"").toLowerCase();
+  const minhaChave = meuEmail ? emailKey(meuEmail) : "";
+  const meuBind = minhaChave ? acessos.find(a=>a.id===minhaChave) : null;
+  const semAuth = !window.__WPAUTH;                              // modo demo/offline → acesso total (dono)
+  const semDonosDef = donos.length===0;                          // bootstrap: sem donos definidos → todos são donos (comportamento atual)
+  const ehDono = semAuth || (!!authUser && (semDonosDef || donos.includes(minhaChave)));
+  const tenantBind = (!ehDono && meuBind) ? (meuBind.tenant||"") : null;   // cliente ao qual o gerente está preso (null = não preso)
+  const semAcesso = !semAuth && !!authUser && !ehDono && !meuBind;   // logado, não é dono e sem vínculo → sem acesso
+  const acessoPronto = semAuth ? true : (cfgGlobal!==null && acessosPronto);
+  const acesso={ pronto:acessoPronto, ehDono, tenantBind, semAcesso, email:meuEmail, minhaChave };
   // Listas expostas = base (admin) + auto-cadastros do celular (mesclados por vínculo)
   const clts=[...cltsBase, ...cadAuto.filter(c=>c.tipo==="clt")];
   const freelas=[...freelasBase, ...cadAuto.filter(c=>c.tipo==="free")];
@@ -690,7 +725,8 @@ function StoreProvider({children}) {
     escala,setEscala, registros,addRegistro, pontoHist, freelancerEscaladoHoje, valorFreela,
     cargosFreela,salvarCargoFreela,excluirCargoFreela, atestados,enviarAtestado, ajustes,enviarAjuste,resolverAjuste,
     dossie,getDossie,addFalta,addFeedback,addAnexo, perfil,setPerfil, perms,setPerms, can,
-    clientes,clienteAtivo,tenantAtual,criarCliente,trocarCliente };
+    clientes,clienteAtivo,tenantAtual,criarCliente,trocarCliente,
+    acesso,donos,setDonos,acessos,acessosOps };
   return <StoreCtx.Provider value={value}>{children}</StoreCtx.Provider>;
 }
 const pessoaNome = (pid,tipo,clts,freelas)=> (tipo==="clt"?clts:freelas).find(p=>p.id===pid)?.nome || "—";
@@ -751,7 +787,7 @@ function LoginScreen({ onLogin }) {
   const [carregando,setCarregando]=useState(false);
   const traduz=(c)=>({ "auth/invalid-email":"E-mail inválido.","auth/missing-password":"Digite a senha.","auth/weak-password":"A senha precisa ter ao menos 6 caracteres.","auth/email-already-in-use":"Este e-mail já tem conta — use Entrar.","auth/invalid-credential":"E-mail ou senha incorretos.","auth/user-not-found":"Conta não encontrada — crie uma conta.","auth/wrong-password":"Senha incorreta." }[c]||("Erro: "+c));
   // Permite login por USUÁRIO (ex.: "Wilami") ou por e-mail. Usuário vira e-mail interno.
-  const emailLogin=(v)=>{ v=(v||"").trim(); return v.includes("@")?v:(v.toLowerCase().replace(/\s+/g,"")+"@wilami.app"); };
+  const emailLogin=emailDeLogin;
   const submeterAuth=async()=>{
     if(!auth){ onLogin(); return; }
     setErroAuth(""); setCarregando(true);
@@ -2795,17 +2831,26 @@ const NAV = [
     {k:"links",l:"Links & QR",d:I.qr},
   ]},
   {sec:"Sistema", items:[
+    {k:"acessos",l:"Gerentes & acessos",d:I.team,dono:true},
     {k:"config",l:"Configurações",d:I.gear},
     {k:"ajuda",l:"Ajuda",d:I.help},
   ]},
 ];
-const TITULOS={dashboard:"Painel",escala:"Escala por unidade",ponto:"Ponto ao vivo",ajustes:"Ajustes de ponto",clt:"Colaboradores CLT",freelas:"Freelancers",dossie:"Dossiê do colaborador",equipe:"Equipe & permissões",relatorios:"Relatórios",financeiro:"Financeiro",pagamentos:"Pagamentos",unidades:"Unidades",links:"Links & QR",config:"Configurações",ajuda:"Ajuda"};
+const TITULOS={dashboard:"Painel",escala:"Escala por unidade",ponto:"Ponto ao vivo",ajustes:"Ajustes de ponto",clt:"Colaboradores CLT",freelas:"Freelancers",dossie:"Dossiê do colaborador",equipe:"Equipe & permissões",relatorios:"Relatórios",financeiro:"Financeiro",pagamentos:"Pagamentos",unidades:"Unidades",links:"Links & QR",acessos:"Gerentes & acessos",config:"Configurações",ajuda:"Ajuda"};
 
 // Seletor de cliente (multiempresa) — troca entre grupos de restaurantes e cria novo cliente.
 function ClienteSwitcher(){
-  const { clientes, clienteAtivo, criarCliente, trocarCliente, perfil } = useStore();
+  const { clientes, clienteAtivo, criarCliente, trocarCliente, acesso } = useStore();
   const toast=useContext(ToastCtx);
   const [openList,setOpenList]=useState(false);
+  // Gerente vinculado a um cliente: vê apenas o seu espaço (rótulo fixo, sem troca).
+  if(acesso && acesso.pronto && !acesso.ehDono){
+    return <div className="mb-2 flex items-center gap-2 px-2 py-2 rounded-xl bg-white/5">
+      <span className="w-6 h-6 rounded-lg shrink-0" style={{background:clienteAtivo?.cor||"#6366f1"}}/>
+      <div className="flex-1 min-w-0"><div className="text-[10px] uppercase tracking-wider text-white/40 font-bold">Cliente</div>
+        <div className="text-sm font-semibold truncate">{clienteAtivo?.nome||"Cliente"}</div></div>
+    </div>;
+  }
   const [novo,setNovo]=useState(false);
   const [nome,setNome]=useState("");
   const [cor,setCor]=useState("#6366f1");
@@ -2834,9 +2879,9 @@ function ClienteSwitcher(){
           <span className="truncate flex-1 text-left">{c.nome}</span>
           {c.id===clienteAtivo?.id && <span className="w-1.5 h-1.5 rounded-full bg-brand-400"/>}
         </button>)}
-      {perfil==="proprietario" && <button onClick={()=>{setNovo(true);setOpenList(false);}}
+      <button onClick={()=>{setNovo(true);setOpenList(false);}}
         className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm text-brand-300 hover:bg-white/10 mt-0.5">
-        <Icon d={I.plus} className="w-4 h-4"/>Novo cliente</button>}
+        <Icon d={I.plus} className="w-4 h-4"/>Novo cliente</button>
     </div>}
     <Modal open={novo} onClose={()=>!salvando&&setNovo(false)}>
       <div className="p-6">
@@ -2858,13 +2903,100 @@ function ClienteSwitcher(){
   </div>;
 }
 
+// Painel do DONO: quem administra tudo (donos) e qual gerente entra em qual cliente.
+function GerentesAcesso(){
+  const { clientes, acessos, acessosOps, donos, setDonos, acesso } = useStore();
+  const toast=useContext(ToastCtx);
+  const [email,setEmail]=useState("");
+  const [nome,setNome]=useState("");
+  const [tid,setTid]=useState("");
+  const semBanco=!window.__WPDB;
+  const nomeCliente=(t)=> (clientes.find(c=>c.id===t)||{}).nome || "Cliente";
+  const controleAtivo = donos.length>0;
+  const minhaChave = acesso&&acesso.minhaChave;
+  const ativarControle=()=>{ if(semBanco){ toast("Recurso disponível no modo online (com banco)."); return; } setDonos(minhaChave?[minhaChave]:[]); toast("Controle de acesso ativado — você é o administrador."); };
+  const addDono=()=>{ if(!email.trim()){ toast("Informe o e-mail/usuário do administrador."); return; } const k=emailKey(email); if(donos.includes(k)){ toast("Esse administrador já está na lista."); return; } setDonos([...donos,k]); setEmail(""); toast("Administrador adicionado."); };
+  const removeDono=(k)=>{ if(k===minhaChave){ toast("Você não pode remover o seu próprio acesso de administrador."); return; } if(donos.length<=1){ toast("Deixe ao menos um administrador."); return; } setDonos(donos.filter(x=>x!==k)); };
+  const vincular=()=>{
+    if(semBanco){ toast("Recurso disponível no modo online (com banco)."); return; }
+    if(!email.trim()){ toast("Informe o e-mail ou usuário do gerente."); return; }
+    acessosOps.set(email,tid,nome).then(()=>{ toast("Acesso vinculado. O gerente entra direto no cliente ao fazer login."); setEmail(""); setNome(""); })
+      .catch(()=>toast("Não foi possível salvar o vínculo agora."));
+  };
+  const desvincular=(a)=>{ acessosOps.remove(a.email||a.id); toast("Vínculo removido."); };
+  return <div className="space-y-5 max-w-3xl">
+    <Card className="p-5">
+      <div className="flex items-start gap-3">
+        <div className="w-10 h-10 rounded-xl grad-brand grid place-items-center text-white shrink-0"><Icon d={I.shield} className="w-5 h-5"/></div>
+        <div>
+          <h3 className="font-bold text-slate-900">Login independente por cliente</h3>
+          <p className="text-sm text-slate-500 mt-1">Cada gerente entra apenas no <b>cliente vinculado a ele</b>, sem enxergar nem trocar para os outros. Os <b>administradores</b> (donos) continuam com acesso total: veem todos os clientes, criam novos e definem estes acessos.</p>
+        </div>
+      </div>
+      {semBanco && <p className="text-xs text-amber-600 mt-3">Modo offline (sem banco): os acessos não são salvos. Publique/entre online para usar.</p>}
+    </Card>
+
+    <Card className="p-5">
+      <div className="flex items-center justify-between mb-1">
+        <h3 className="font-bold text-slate-900">Administradores (acesso total)</h3>
+        <Badge tone={controleAtivo?"green":"amber"}>{controleAtivo?"Controle ativo":"Controle desativado"}</Badge>
+      </div>
+      {!controleAtivo ? <>
+        <p className="text-sm text-slate-500">Hoje <b>qualquer conta de gestor</b> entra como administrador. Ative o controle para restringir: você vira o administrador e passa a definir quem é dono e qual gerente vê cada cliente.</p>
+        <Btn className="mt-4" icon={I.shield} onClick={ativarControle}>Ativar controle e me tornar administrador</Btn>
+      </> : <>
+        <p className="text-sm text-slate-500 mb-3">Estes e-mails têm acesso total ao sistema.</p>
+        <div className="space-y-2">
+          {donos.map(k=><div key={k} className="flex items-center gap-3 p-2.5 rounded-xl bg-slate-50">
+            <div className="w-8 h-8 rounded-lg bg-brand-50 text-brand-700 grid place-items-center shrink-0"><Icon d={I.user} className="w-4 h-4"/></div>
+            <span className="flex-1 min-w-0 truncate text-sm font-medium text-slate-700">{(acessos.find(a=>a.id===k)||{}).email || k}{k===minhaChave && <span className="text-brand-600"> · você</span>}</span>
+            <button onClick={()=>removeDono(k)} disabled={k===minhaChave} className="text-slate-400 hover:text-rose-500 disabled:opacity-30"><Icon d={I.trash} className="w-4 h-4"/></button>
+          </div>)}
+        </div>
+        <div className="mt-4 flex flex-col sm:flex-row gap-2">
+          <Input placeholder="E-mail ou usuário do novo administrador" value={email} onChange={e=>setEmail(e.target.value)}/>
+          <Btn variant="ghost" icon={I.plus} onClick={addDono}>Adicionar</Btn>
+        </div>
+      </>}
+    </Card>
+
+    <Card className="p-5">
+      <h3 className="font-bold text-slate-900 mb-1">Gerentes por cliente</h3>
+      <p className="text-sm text-slate-500 mb-4">Vincule o e-mail (ou usuário) do gerente ao cliente dele. Use exatamente o mesmo login que ele vai usar para entrar. Se ele ainda não tem conta, ele mesmo cria em “Primeiro acesso? Criar conta do gestor”.</p>
+      <div className="grid sm:grid-cols-4 gap-2">
+        <div className="sm:col-span-2"><Field label="E-mail ou usuário"><Input placeholder="ex.: joao ou joao@email.com" value={email} onChange={e=>setEmail(e.target.value)}/></Field></div>
+        <Field label="Nome (opcional)"><Input placeholder="Nome do gerente" value={nome} onChange={e=>setNome(e.target.value)}/></Field>
+        <Field label="Cliente"><Select value={tid} onChange={e=>setTid(e.target.value)}>{clientes.map(c=><option key={c.id||"p"} value={c.id}>{c.nome}</option>)}</Select></Field>
+      </div>
+      <Btn className="mt-4" icon={I.check} onClick={vincular}>Vincular acesso</Btn>
+
+      <div className="mt-5 border-t border-slate-100 pt-4">
+        {acessos.length===0 ? <p className="text-sm text-slate-400">Nenhum gerente vinculado ainda.</p>
+         : <div className="space-y-2">
+            {acessos.map(a=><div key={a.id} className="flex items-center gap-3 p-2.5 rounded-xl bg-slate-50">
+              <div className="w-8 h-8 rounded-lg grid place-items-center shrink-0 text-white" style={{background:(clientes.find(c=>c.id===(a.tenant||""))||{}).cor||"#6366f1"}}><Icon d={I.user} className="w-4 h-4"/></div>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-semibold text-slate-800 truncate">{a.nome||a.email||a.id}</div>
+                <div className="text-xs text-slate-500 truncate">{a.email} · {nomeCliente(a.tenant||"")}</div>
+              </div>
+              {donos.includes(a.id) && <Badge tone="brand">Administrador</Badge>}
+              <button onClick={()=>desvincular(a)} className="text-slate-400 hover:text-rose-500"><Icon d={I.trash} className="w-4 h-4"/></button>
+            </div>)}
+          </div>}
+      </div>
+    </Card>
+  </div>;
+}
+
 function Sidebar({view,setView,open,setOpen,onLogout}) {
+  const { acesso } = useStore();
+  const ehDono = !acesso || acesso.ehDono; // sem contexto (offline) → mostra tudo
   return <>
     {open && <div className="fixed inset-0 bg-black/30 z-30 lg:hidden" onClick={()=>setOpen(false)}/>}
     <aside className={cx("fixed lg:sticky top-0 z-40 h-screen w-64 shrink-0 grad-ink text-white flex flex-col transition-transform lg:translate-x-0", open?"translate-x-0":"-translate-x-full")}>
       <div className="p-5"><Logo light/></div>
       <div className="px-3 flex-1 overflow-y-auto">
-        {NAV.map(g=>
+        {NAV.map(g=>({...g, items:g.items.filter(it=>!it.dono||ehDono)})).filter(g=>g.items.length).map(g=>
           <div key={g.sec} className="mb-4">
             <div className="px-3 text-[11px] uppercase tracking-wider text-white/35 font-bold mb-1">{g.sec}</div>
             {g.items.map(it=>
@@ -2886,13 +3018,35 @@ function Sidebar({view,setView,open,setOpen,onLogout}) {
   </>;
 }
 
+function TelaBloqueio({icone,titulo,texto,onLogout,spin}){
+  return <div className="min-h-screen grad-ink grad-hero grid place-items-center p-6 text-white text-center">
+    <div className="max-w-sm">
+      <div className="flex justify-center mb-4"><Logo light/></div>
+      {spin ? <div className="w-10 h-10 mx-auto rounded-full border-2 border-white/30 border-t-white animate-spin mb-4"/>
+        : <div className="w-14 h-14 mx-auto rounded-2xl bg-white/10 grid place-items-center mb-4"><Icon d={icone||I.shield} className="w-7 h-7"/></div>}
+      <h2 className="text-xl font-bold">{titulo}</h2>
+      {texto && <p className="text-white/70 text-sm mt-2">{texto}</p>}
+      {onLogout && <button onClick={onLogout} className="mt-6 px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-sm font-semibold">Sair</button>}
+    </div>
+  </div>;
+}
+
 function Shell({ onLogout }) {
   const [view,setView]=useState("dashboard");
   const [sbOpen,setSbOpen]=useState(false);
   const [toasts,setToasts]=useState([]);
+  const { acesso, tenantAtual, trocarCliente } = useStore();
+  // Gerente vinculado a um cliente diferente do ativo → entra automaticamente no seu espaço.
+  useEffect(()=>{
+    if(acesso && acesso.pronto && acesso.tenantBind!=null && acesso.tenantBind!==tenantAtual){ trocarCliente(acesso.tenantBind); }
+  },[acesso&&acesso.pronto, acesso&&acesso.tenantBind, tenantAtual]);
   const pushToast=(msg)=>{ const id=Math.random(); setToasts(t=>[...t,{id,msg}]); setTimeout(()=>setToasts(t=>t.filter(x=>x.id!==id)),2600); };
+  // Portões de acesso (login independente por cliente)
+  if(acesso && !acesso.pronto) return <TelaBloqueio spin titulo="Carregando seu acesso…"/>;
+  if(acesso && acesso.semAcesso) return <TelaBloqueio icone={I.shield} titulo="Sua conta ainda não tem acesso" texto="Peça ao administrador para vincular seu e-mail a um cliente. Assim que ele liberar, é só entrar novamente." onLogout={onLogout}/>;
+  if(acesso && acesso.tenantBind!=null && acesso.tenantBind!==tenantAtual) return <TelaBloqueio spin titulo="Abrindo seu cliente…"/>;
   const views={ dashboard:<Dashboard go={setView}/>, escala:<EscalaVisual/>, ponto:<PontoLive/>, ajustes:<AjustesPonto/>, clt:<ColaboradoresCLT/>, freelas:<Freelancers/>,
-    dossie:<Dossie/>, equipe:<Equipe/>, relatorios:<Relatorios/>, financeiro:<Financeiro/>, pagamentos:<Pagamentos/>, unidades:<Unidades/>, links:<LinksQR/>, config:<Configuracoes/>, ajuda:<Ajuda/> };
+    dossie:<Dossie/>, equipe:<Equipe/>, relatorios:<Relatorios/>, financeiro:<Financeiro/>, pagamentos:<Pagamentos/>, unidades:<Unidades/>, links:<LinksQR/>, acessos:<GerentesAcesso/>, config:<Configuracoes/>, ajuda:<Ajuda/> };
   return <ToastCtx.Provider value={pushToast}>
     <div className="flex min-h-screen">
       <Sidebar view={view} setView={setView} open={sbOpen} setOpen={setSbOpen} onLogout={onLogout}/>
