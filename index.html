@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- build: financeiro folha CLT + freelas + valor horas extras 2026-07-31 -->
+<!-- build: criar acesso de gerente direto (login+senha, sem e-mail) 2026-08-01 -->
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8" />
@@ -38,6 +38,7 @@
 (function(){
   try{
     var cfg={apiKey:"AIzaSyAVSLJ_YO2_fP-IWHk5-5IuiPZ0WKyIUgM",authDomain:"twilami-ponto.firebaseapp.com",projectId:"twilami-ponto",storageBucket:"twilami-ponto.firebasestorage.app",messagingSenderId:"800456974595",appId:"1:800456974595:web:2ef4bc5a40d5627e7fc936"};
+    window.__WPCFG=cfg;
     if(window.firebase&&firebase.initializeApp){ firebase.initializeApp(cfg); window.__WPDB=firebase.firestore(); try{ window.__WPAUTH=firebase.auth(); }catch(e){} }
   }catch(e){ console.warn("Firebase indisponível — usando armazenamento local:", e && e.message); }
 })();
@@ -240,6 +241,23 @@ const tKey=(key)=> "wp_"+(WP_TENANT?WP_TENANT+"_":"")+key;
 const emailDeLogin=(v)=>{ v=(v||"").trim(); return v.includes("@")?v.toLowerCase():(v.toLowerCase().replace(/\s+/g,"")+"@wilami.app"); };
 // Chave de documento para o vínculo de acesso (por e-mail resolvido).
 const emailKey=(v)=> emailDeLogin(v).replace(/[^a-z0-9]/g,"_");
+// Cria a conta de acesso do gerente SEM deslogar o dono (usa um app Firebase secundário).
+async function criarUsuarioAuth(email, senha){
+  if(!window.firebase || !window.__WPCFG) throw new Error("sem-firebase");
+  const SEC="wp-sec"; let sec;
+  try{ sec = (window.firebase.apps||[]).find(a=>a && a.name===SEC) || window.firebase.initializeApp(window.__WPCFG, SEC); }
+  catch(e){ sec = window.firebase.app(SEC); }
+  const auth2=sec.auth();
+  try{
+    await auth2.createUserWithEmailAndPassword(emailDeLogin(email), senha);
+    try{ await auth2.signOut(); }catch(_){}
+    return { criado:true };
+  }catch(e){
+    try{ await auth2.signOut(); }catch(_){}
+    if(e && e.code==="auth/email-already-in-use") return { criado:false, jaExiste:true };
+    throw e;
+  }
+}
 
 function usePersist(key, initial){
   const [v,setV]=useState(()=>{ try{ const s=localStorage.getItem(tKey(key)); return s!=null?JSON.parse(s):initial; }catch{ return initial; } });
@@ -2984,22 +3002,42 @@ function ClienteSwitcher(){
 function GerentesAcesso(){
   const { clientes, acessos, acessosOps, donos, setDonos, acesso } = useStore();
   const toast=useContext(ToastCtx);
-  const [email,setEmail]=useState("");
-  const [nome,setNome]=useState("");
-  const [tid,setTid]=useState("");
+  const [emailDono,setEmailDono]=useState("");
+  // formulário de criação do gerente
+  const [gNome,setGNome]=useState("");
+  const [gEmail,setGEmail]=useState("");
+  const [gSenha,setGSenha]=useState("");
+  const [gTid,setGTid]=useState("");
+  const [criando,setCriando]=useState(false);
+  const [feito,setFeito]=useState(null);        // {login, senha, cliente, jaExiste}
   const semBanco=!window.__WPDB;
   const nomeCliente=(t)=> (clientes.find(c=>c.id===t)||{}).nome || "Cliente";
   const controleAtivo = donos.length>0;
   const minhaChave = acesso&&acesso.minhaChave;
   const ativarControle=()=>{ if(semBanco){ toast("Recurso disponível no modo online (com banco)."); return; } setDonos(minhaChave?[minhaChave]:[]); toast("Controle de acesso ativado — você é o administrador."); };
-  const addDono=()=>{ if(!email.trim()){ toast("Informe o e-mail/usuário do administrador."); return; } const k=emailKey(email); if(donos.includes(k)){ toast("Esse administrador já está na lista."); return; } setDonos([...donos,k]); setEmail(""); toast("Administrador adicionado."); };
+  const addDono=()=>{ if(!emailDono.trim()){ toast("Informe o e-mail/usuário do administrador."); return; } const k=emailKey(emailDono); if(donos.includes(k)){ toast("Esse administrador já está na lista."); return; } setDonos([...donos,k]); setEmailDono(""); toast("Administrador adicionado."); };
   const removeDono=(k)=>{ if(k===minhaChave){ toast("Você não pode remover o seu próprio acesso de administrador."); return; } if(donos.length<=1){ toast("Deixe ao menos um administrador."); return; } setDonos(donos.filter(x=>x!==k)); };
-  const vincular=()=>{
+  const gerarSenha=()=>{ const s=Math.random().toString(36).slice(2,8)+Math.floor(Math.random()*90+10); setGSenha(s); };
+  // Cria a conta do gerente (sem deslogar o dono) e já vincula ao cliente. Sem e-mail: você entrega o login e a senha.
+  const criarGerente=async()=>{
     if(semBanco){ toast("Recurso disponível no modo online (com banco)."); return; }
-    if(!email.trim()){ toast("Informe o e-mail ou usuário do gerente."); return; }
-    acessosOps.set(email,tid,nome).then(()=>{ toast("Acesso vinculado. O gerente entra direto no cliente ao fazer login."); setEmail(""); setNome(""); })
-      .catch(()=>toast("Não foi possível salvar o vínculo agora."));
+    if(!gEmail.trim()){ toast("Informe o e-mail ou usuário do gerente."); return; }
+    if(gSenha && gSenha.length<6){ toast("A senha precisa ter ao menos 6 caracteres."); return; }
+    setCriando(true); setFeito(null);
+    try{
+      let jaExiste=false;
+      if(gSenha){ const r=await criarUsuarioAuth(gEmail,gSenha); jaExiste=!!r.jaExiste; }
+      await acessosOps.set(gEmail,gTid,gNome);
+      setFeito({ login:emailDeLogin(gEmail), senha:gSenha, cliente:nomeCliente(gTid), jaExiste, semSenha:!gSenha });
+      toast(jaExiste?"Conta já existia — vínculo salvo":"Acesso do gerente criado");
+      setGNome(""); setGEmail(""); setGSenha("");
+    }catch(e){
+      const cod=e&&e.code;
+      toast(cod==="auth/invalid-email"?"E-mail inválido.":cod==="auth/weak-password"?"Senha muito fraca (mín. 6).":"Não foi possível criar o acesso agora.");
+    }
+    setCriando(false);
   };
+  const copiarCred=()=>{ if(!feito) return; const cli=feito.cliente?` — cliente: ${feito.cliente}`:""; copyText(`Acesso ao Wilami Ponto${cli}\nLink: ${location.origin}/\nLogin: ${feito.login}${feito.senha?`\nSenha: ${feito.senha}`:""}\n\nEntre em "Acesso do gestor".`); toast("Credenciais copiadas p/ WhatsApp"); };
   const desvincular=(a)=>{ acessosOps.remove(a.email||a.id); toast("Vínculo removido."); };
   return <div className="space-y-5 max-w-3xl">
     <Card className="p-5">
@@ -3031,23 +3069,41 @@ function GerentesAcesso(){
           </div>)}
         </div>
         <div className="mt-4 flex flex-col sm:flex-row gap-2">
-          <Input placeholder="E-mail ou usuário do novo administrador" value={email} onChange={e=>setEmail(e.target.value)}/>
+          <Input placeholder="E-mail ou usuário do novo administrador" value={emailDono} onChange={e=>setEmailDono(e.target.value)}/>
           <Btn variant="ghost" icon={I.plus} onClick={addDono}>Adicionar</Btn>
         </div>
       </>}
     </Card>
 
     <Card className="p-5">
-      <h3 className="font-bold text-slate-900 mb-1">Gerentes por cliente</h3>
-      <p className="text-sm text-slate-500 mb-4">Vincule o e-mail (ou usuário) do gerente ao cliente dele. Use exatamente o mesmo login que ele vai usar para entrar. Se ele ainda não tem conta, ele mesmo cria em “Primeiro acesso? Criar conta do gestor”.</p>
-      <div className="grid sm:grid-cols-4 gap-2">
-        <div className="sm:col-span-2"><Field label="E-mail ou usuário"><Input placeholder="ex.: joao ou joao@email.com" value={email} onChange={e=>setEmail(e.target.value)}/></Field></div>
-        <Field label="Nome (opcional)"><Input placeholder="Nome do gerente" value={nome} onChange={e=>setNome(e.target.value)}/></Field>
-        <Field label="Cliente"><Select value={tid} onChange={e=>setTid(e.target.value)}>{clientes.map(c=><option key={c.id||"p"} value={c.id}>{c.nome}</option>)}</Select></Field>
+      <h3 className="font-bold text-slate-900 mb-1">Criar acesso de gerente</h3>
+      <p className="text-sm text-slate-500 mb-4">Crie o login e a senha do gerente aqui mesmo — <b>não é enviado e-mail</b>. Você cria e entrega o login e a senha para ele (pelo WhatsApp, por exemplo). Ele entra em “Acesso do gestor” e cai direto no cliente vinculado.</p>
+      <div className="grid sm:grid-cols-2 gap-3">
+        <Field label="Nome do gerente"><Input placeholder="Ex.: João Silva" value={gNome} onChange={e=>setGNome(e.target.value)}/></Field>
+        <Field label="Login (e-mail ou usuário)"><Input placeholder="ex.: joao ou joao@email.com" value={gEmail} onChange={e=>setGEmail(e.target.value)}/></Field>
+        <Field label="Senha (mín. 6)">
+          <div className="flex gap-2">
+            <Input value={gSenha} onChange={e=>setGSenha(e.target.value)} placeholder="defina uma senha"/>
+            <Btn variant="ghost" size="sm" onClick={gerarSenha} title="Gerar senha">Gerar</Btn>
+          </div>
+        </Field>
+        <Field label="Cliente"><Select value={gTid} onChange={e=>setGTid(e.target.value)}>{clientes.map(c=><option key={c.id||"p"} value={c.id}>{c.nome}</option>)}</Select></Field>
       </div>
-      <Btn className="mt-4" icon={I.check} onClick={vincular}>Vincular acesso</Btn>
+      <Btn className="mt-4" icon={I.user} onClick={criarGerente} disabled={criando}>{criando?"Criando…":"Criar acesso do gerente"}</Btn>
+      {feito && <div className="mt-4 p-4 rounded-xl bg-emerald-50 border border-emerald-100">
+        <div className="flex items-center gap-2 text-emerald-700 font-bold text-sm mb-2"><Icon d={I.check} className="w-4 h-4"/>{feito.jaExiste?"Conta já existia — vínculo salvo":feito.semSenha?"Vínculo salvo (sem criar senha)":"Acesso criado com sucesso"}</div>
+        <div className="text-sm text-slate-700 space-y-0.5">
+          <div>Link: <b>{location.origin}/</b></div>
+          <div>Login: <b>{feito.login}</b></div>
+          {feito.senha && <div>Senha: <b>{feito.senha}</b></div>}
+          {feito.cliente && <div>Cliente: <b>{feito.cliente}</b></div>}
+        </div>
+        <Btn className="mt-3" size="sm" variant="soft" icon={I.copy} onClick={copiarCred}>Copiar credenciais p/ WhatsApp</Btn>
+        {feito.jaExiste && <p className="text-xs text-slate-500 mt-2">Como a conta já existia, a senha não foi alterada. Se o gerente esqueceu a senha, ele pode entrar com a que já tinha.</p>}
+      </div>}
 
-      <div className="mt-5 border-t border-slate-100 pt-4">
+      <div className="mt-6 border-t border-slate-100 pt-4">
+        <h4 className="font-bold text-slate-800 text-sm mb-3">Gerentes vinculados</h4>
         {acessos.length===0 ? <p className="text-sm text-slate-400">Nenhum gerente vinculado ainda.</p>
          : <div className="space-y-2">
             {acessos.map(a=><div key={a.id} className="flex items-center gap-3 p-2.5 rounded-xl bg-slate-50">
