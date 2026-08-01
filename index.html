@@ -1,9 +1,13 @@
 <!DOCTYPE html>
-<!-- build: correcao privacidade - sidebar mostra o proprio usuario (nao o dono) 2026-08-01 -->
+<!-- build: sessao nao permanente (link pede login) + anti-cache 2026-08-01 -->
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<!-- Evita servir versão antiga em cache (garante que a última atualização apareça) -->
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+<meta http-equiv="Pragma" content="no-cache" />
+<meta http-equiv="Expires" content="0" />
 <title>Wilami Ponto — Registro de Ponto Digital para Restaurantes</title>
 <!-- PWA: instalável como app "Wilami Ponto" (Adicionar à tela inicial → abre em tela cheia) -->
 <meta name="theme-color" content="#4f46e5" />
@@ -39,7 +43,10 @@
   try{
     var cfg={apiKey:"AIzaSyAVSLJ_YO2_fP-IWHk5-5IuiPZ0WKyIUgM",authDomain:"twilami-ponto.firebaseapp.com",projectId:"twilami-ponto",storageBucket:"twilami-ponto.firebasestorage.app",messagingSenderId:"800456974595",appId:"1:800456974595:web:2ef4bc5a40d5627e7fc936"};
     window.__WPCFG=cfg;
-    if(window.firebase&&firebase.initializeApp){ firebase.initializeApp(cfg); window.__WPDB=firebase.firestore(); try{ window.__WPAUTH=firebase.auth(); }catch(e){} }
+    if(window.firebase&&firebase.initializeApp){ firebase.initializeApp(cfg); window.__WPDB=firebase.firestore(); try{ window.__WPAUTH=firebase.auth();
+      // Sessão NÃO permanente: o login vale só enquanto a aba/janela está aberta. Ao abrir o link numa nova sessão, pede login de novo.
+      try{ window.__WPAUTH.setPersistence(firebase.auth.Auth.Persistence.SESSION); }catch(e){}
+    }catch(e){} }
   }catch(e){ console.warn("Firebase indisponível — usando armazenamento local:", e && e.message); }
 })();
 </script>
