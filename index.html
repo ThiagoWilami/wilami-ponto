@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- build: criar acesso de gerente direto (login+senha, sem e-mail) 2026-08-01 -->
+<!-- build: correcao privacidade - sidebar mostra o proprio usuario (nao o dono) 2026-08-01 -->
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8" />
@@ -635,7 +635,12 @@ function StoreProvider({children}) {
   const tenantBind = (!ehDono && meuBind) ? (meuBind.tenant||"") : null;   // cliente ao qual o gerente está preso (null = não preso)
   const semAcesso = !semAuth && !!authUser && !ehDono && !meuBind;   // logado, não é dono e sem vínculo → sem acesso
   const acessoPronto = semAuth ? true : (cfgGlobal!==null && acessosPronto);
-  const acesso={ pronto:acessoPronto, ehDono, tenantBind, semAcesso, email:meuEmail, minhaChave };
+  // Identidade a exibir = SEMPRE a do próprio usuário logado (nunca o nome do dono).
+  const _capitaliza=(s)=> s ? s.charAt(0).toUpperCase()+s.slice(1) : s;
+  const _nomeLocal = meuEmail ? _capitaliza(meuEmail.split("@")[0]) : "";
+  const meuNome = (meuBind&&meuBind.nome) || _nomeLocal || (semAuth?"Gestor":"Usuário");
+  const meuPapel = semAuth ? "Proprietário" : (ehDono ? "Administrador" : "Gerente");
+  const acesso={ pronto:acessoPronto, ehDono, tenantBind, semAcesso, email:meuEmail, minhaChave, nome:meuNome, papel:meuPapel };
   // Listas expostas = base (admin) + auto-cadastros do celular (mesclados por vínculo)
   const clts=[...cltsBase, ...cadAuto.filter(c=>c.tipo==="clt")];
   const freelas=[...freelasBase, ...cadAuto.filter(c=>c.tipo==="free")];
@@ -2916,7 +2921,7 @@ const NAV = [
     {k:"clt",l:"Colaboradores CLT",d:I.user},
     {k:"freelas",l:"Freelancers",d:I.coffee},
     {k:"dossie",l:"Dossiê",d:I.doc},
-    {k:"equipe",l:"Equipe & permissões",d:I.team},
+    {k:"equipe",l:"Equipe & permissões",d:I.team,dono:true},
   ]},
   {sec:"Gestão", items:[
     {k:"relatorios",l:"Relatórios",d:I.chart},
@@ -3143,8 +3148,8 @@ function Sidebar({view,setView,open,setOpen,onLogout}) {
       </div>
       <div className="p-3 border-t border-white/10">
         <ClienteSwitcher/>
-        <div className="flex items-center gap-3 px-2 py-2"><Avatar name="Wilami Gestor" tone="brand"/>
-          <div className="flex-1 min-w-0"><div className="text-sm font-semibold truncate">Wilami Gestor</div><div className="text-xs text-white/50 truncate">Proprietário</div></div>
+        <div className="flex items-center gap-3 px-2 py-2"><Avatar name={(acesso&&acesso.nome)||"Gestor"} tone="brand"/>
+          <div className="flex-1 min-w-0"><div className="text-sm font-semibold truncate">{(acesso&&acesso.nome)||"Gestor"}</div><div className="text-xs text-white/50 truncate">{(acesso&&acesso.papel)||"Proprietário"}</div></div>
           {onLogout && <button onClick={onLogout} title="Sair" className="w-8 h-8 rounded-lg text-white/60 hover:text-white hover:bg-white/10 grid place-items-center"><Icon d={I.logout||I.arrow} className="w-4 h-4"/></button>}</div>
       </div>
     </aside>
