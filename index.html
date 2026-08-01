@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- build: sessao nao permanente (link pede login) + anti-cache 2026-08-01 -->
+<!-- build: acesso de gerente por CASA (login+senha, isolamento por unidade) 2026-08-01 -->
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8" />
@@ -629,7 +629,7 @@ function StoreProvider({children}) {
     try{ return db.collection("acessos").onSnapshot(function(snap){ const a=[]; snap.forEach(function(d){ a.push({id:d.id,...(d.data()||{})}); }); setAcessosItems(a); setAcessosPronto(true); }, function(){ setAcessosPronto(true); }); }catch(e){ setAcessosPronto(true); }
   },[]);
   const acessosOps={
-    set:(email,tenant,nome)=>{ const db=window.__WPDB; if(!db) return Promise.reject(new Error("sem-banco")); try{ return db.collection("acessos").doc(emailKey(email)).set({email:emailDeLogin(email),tenant:tenant||"",nome:nome||"",criadoEm:Date.now()},{merge:true}); }catch(e){ return Promise.reject(e); } },
+    set:(email,opts)=>{ const db=window.__WPDB; if(!db) return Promise.reject(new Error("sem-banco")); opts=opts||{}; try{ return db.collection("acessos").doc(emailKey(email)).set({email:emailDeLogin(email),tenant:opts.tenant||"",unidade:(opts.unidade==null||opts.unidade===""?"todas":String(opts.unidade)),nome:opts.nome||"",papel:opts.papel||"gerente",criadoEm:Date.now()},{merge:true}); }catch(e){ return Promise.reject(e); } },
     remove:(email)=>{ const db=window.__WPDB; if(!db) return Promise.resolve(); try{ return db.collection("acessos").doc(emailKey(email)).delete(); }catch(e){} },
   };
   // Situação de acesso do usuário logado
@@ -647,7 +647,8 @@ function StoreProvider({children}) {
   const _nomeLocal = meuEmail ? _capitaliza(meuEmail.split("@")[0]) : "";
   const meuNome = (meuBind&&meuBind.nome) || _nomeLocal || (semAuth?"Gestor":"Usuário");
   const meuPapel = semAuth ? "Proprietário" : (ehDono ? "Administrador" : "Gerente");
-  const acesso={ pronto:acessoPronto, ehDono, tenantBind, semAcesso, email:meuEmail, minhaChave, nome:meuNome, papel:meuPapel };
+  const casaRestrita = (!ehDono && meuBind && meuBind.unidade && meuBind.unidade!=="todas") ? meuBind.unidade : null;
+  const acesso={ pronto:acessoPronto, ehDono, tenantBind, semAcesso, email:meuEmail, minhaChave, nome:meuNome, papel:meuPapel, casa:casaRestrita };
   // Listas expostas = base (admin) + auto-cadastros do celular (mesclados por vínculo)
   const clts=[...cltsBase, ...cadAuto.filter(c=>c.tipo==="clt")];
   const freelas=[...freelasBase, ...cadAuto.filter(c=>c.tipo==="free")];
@@ -753,8 +754,17 @@ function StoreProvider({children}) {
     }catch(e){}
   },[cadAuto]); // eslint-disable-line
 
-  const value={ unidades,salvarUnidade,excluirUnidade, clts,freelas,freelasComPagamentos,salvarClt,salvarFreela,excluirColab,cadastrarPublico, anexarDoc,
-    escala,setEscala, registros,addRegistro, pontoHist, freelancerEscaladoHoje, valorFreela,
+  // Gerente vinculado a uma CASA específica só enxerga os dados daquela casa (isolamento por unidade).
+  const _mesmaCasa=(uid)=> String(uid)===String(casaRestrita);
+  const unidadesVis = casaRestrita!=null ? unidades.filter(u=>_mesmaCasa(u.id)) : unidades;
+  const cltsVis = casaRestrita!=null ? clts.filter(c=>_mesmaCasa(c.unidade)) : clts;
+  const freelasVis = casaRestrita!=null ? freelas.filter(f=>_mesmaCasa(f.unidade)) : freelas;
+  const freelasPagVis = casaRestrita!=null ? freelasComPagamentos.filter(f=>_mesmaCasa(f.unidade)) : freelasComPagamentos;
+  const _nomesVis = new Set([...cltsVis,...freelasVis].map(p=>p.nome));
+  const registrosVis = casaRestrita!=null ? registros.filter(r=>_nomesVis.has(r.nome)) : registros;
+
+  const value={ unidades:unidadesVis,salvarUnidade,excluirUnidade, clts:cltsVis,freelas:freelasVis,freelasComPagamentos:freelasPagVis,salvarClt,salvarFreela,excluirColab,cadastrarPublico, anexarDoc,
+    escala,setEscala, registros:registrosVis,addRegistro, pontoHist, freelancerEscaladoHoje, valorFreela,
     cargosFreela,salvarCargoFreela,excluirCargoFreela, atestados,enviarAtestado, ajustes,enviarAjuste,resolverAjuste,
     dossie,getDossie,addFalta,addFeedback,addAnexo, perfil,setPerfil, perms,setPerms, can,
     clientes,clienteAtivo,tenantAtual,criarCliente,trocarCliente,
@@ -2793,26 +2803,78 @@ function Equipe() {
     </Modal>
   </div>;
 }
+// Router sem hooks: edição de membro legado vs. criação de acesso real.
 function MembroForm({inicial,onClose,onSalvar}) {
-  const { unidades } = useStore();
-  const [m,setM]=useState(inicial||{nome:"",email:"",papel:"gerente",unid:"Todas as casas"});
-  const set=(k,v)=>setM(p=>({...p,[k]:v}));
+  return inicial ? <MembroEdit inicial={inicial} onClose={onClose} onSalvar={onSalvar}/> : <MembroCriar onClose={onClose}/>;
+}
+function MembroEdit({inicial,onClose,onSalvar}) {
+  const [m,setM]=useState(inicial); const set=(k,v)=>setM(p=>({...p,[k]:v}));
   return <div className="p-6">
-    <div className="flex items-center justify-between mb-5"><h3 className="text-lg font-bold text-slate-900">{inicial?"Editar membro":"Convidar membro"}</h3>
+    <div className="flex items-center justify-between mb-5"><h3 className="text-lg font-bold text-slate-900">Editar membro</h3>
       <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><Icon d={I.x}/></button></div>
     <div className="space-y-4">
       <Field label="Nome"><Input value={m.nome} onChange={e=>set("nome",e.target.value)}/></Field>
       <Field label="E-mail"><Input value={m.email} onChange={e=>set("email",e.target.value)}/></Field>
-      <div className="grid grid-cols-2 gap-3">
-        <Field label="Papel"><Select value={m.papel} onChange={e=>set("papel",e.target.value)}><option value="gerente">Gerente</option><option value="rh_financeiro">RH / Financeiro</option></Select></Field>
-        <Field label="Casa (unidade)"><Select value={m.unid} onChange={e=>set("unid",e.target.value)}>
-          <option value="Todas as casas">Todas as casas</option>
-          {unidades.map(u=><option key={u.id} value={u.nome}>{u.nome}</option>)}
-        </Select></Field>
-      </div>
     </div>
     <div className="flex gap-2 mt-6"><Btn variant="ghost" className="flex-1" onClick={onClose}>Cancelar</Btn>
-      <Btn className="flex-1" icon={I.check} disabled={!m.nome||!m.email} onClick={()=>onSalvar(m)}>{inicial?"Salvar":"Convidar"}</Btn></div>
+      <Btn className="flex-1" icon={I.check} disabled={!m.nome} onClick={()=>onSalvar(m)}>Salvar</Btn></div>
+  </div>;
+}
+function MembroCriar({onClose}) {
+  const { unidades, tenantAtual, acessosOps } = useStore();
+  const toast=useContext(ToastCtx);
+  const [nome,setNome]=useState("");
+  const [login,setLogin]=useState("");
+  const [senha,setSenha]=useState("");
+  const [uni,setUni]=useState("todas");
+  const [criando,setCriando]=useState(false);
+  const [feito,setFeito]=useState(null);
+  const gerar=()=>setSenha(Math.random().toString(36).slice(2,8)+Math.floor(Math.random()*90+10));
+  const nomeUni=(u)=> (u==null||u==="todas")?"Todas as casas":((unidades.find(x=>String(x.id)===String(u))||{}).nome||"Casa");
+  const criar=async()=>{
+    if(!window.__WPDB){ toast("Recurso disponível no modo online (com banco)."); return; }
+    if(!login.trim()){ toast("Informe o login (e-mail ou usuário) do gerente."); return; }
+    if(senha && senha.length<6){ toast("A senha precisa ter ao menos 6 caracteres."); return; }
+    setCriando(true);
+    try{
+      let jaExiste=false;
+      if(senha){ const r=await criarUsuarioAuth(login,senha); jaExiste=!!r.jaExiste; }
+      await acessosOps.set(login,{tenant:tenantAtual, unidade:uni, nome, papel:"gerente"});
+      setFeito({ login:emailDeLogin(login), senha, casa:nomeUni(uni), jaExiste, semSenha:!senha });
+      toast(jaExiste?"Conta já existia — vínculo salvo":"Acesso do gerente criado");
+    }catch(e){ const c=e&&e.code; toast(c==="auth/invalid-email"?"E-mail inválido.":c==="auth/weak-password"?"Senha muito fraca (mín. 6).":"Não foi possível criar o acesso agora."); }
+    setCriando(false);
+  };
+  const copiar=()=>{ if(!feito) return; copyText(`Acesso ao Wilami Ponto\nLink: ${location.origin}/\nLogin: ${feito.login}${feito.senha?`\nSenha: ${feito.senha}`:""}\nCasa: ${feito.casa}\n\nEntre em "Acesso do gestor" com esses dados.`); toast("Credenciais copiadas p/ WhatsApp"); };
+  return <div className="p-6">
+    <div className="flex items-center justify-between mb-1"><h3 className="text-lg font-bold text-slate-900">Criar acesso de gerente</h3>
+      <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><Icon d={I.x}/></button></div>
+    <p className="text-sm text-slate-500 mb-4">Cria o login e a senha do gerente — <b>não envia e-mail</b>. Ele vê e gerencia apenas a casa escolhida.</p>
+    {!feito ? <>
+      <div className="space-y-3">
+        <Field label="Nome do gerente"><Input value={nome} onChange={e=>setNome(e.target.value)} placeholder="Ex.: João Silva"/></Field>
+        <Field label="Login (e-mail ou usuário)"><Input value={login} onChange={e=>setLogin(e.target.value)} placeholder="ex.: joao ou joao@email.com"/></Field>
+        <Field label="Senha (mín. 6)"><div className="flex gap-2"><Input value={senha} onChange={e=>setSenha(e.target.value)} placeholder="defina uma senha"/><Btn variant="ghost" size="sm" onClick={gerar}>Gerar</Btn></div></Field>
+        <Field label="Casa (unidade) que ele cuida"><Select value={uni} onChange={e=>setUni(e.target.value)}>
+          <option value="todas">Todas as casas</option>{unidades.map(u=><option key={u.id} value={u.id}>{u.nome}</option>)}
+        </Select></Field>
+      </div>
+      <div className="flex gap-2 mt-6"><Btn variant="ghost" className="flex-1" onClick={onClose}>Cancelar</Btn>
+        <Btn className="flex-1" icon={I.user} disabled={criando} onClick={criar}>{criando?"Criando…":"Criar acesso"}</Btn></div>
+    </> : <>
+      <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-100">
+        <div className="flex items-center gap-2 text-emerald-700 font-bold text-sm mb-2"><Icon d={I.check} className="w-4 h-4"/>{feito.jaExiste?"Conta já existia — vínculo salvo":feito.semSenha?"Vínculo salvo (sem criar senha)":"Acesso criado com sucesso"}</div>
+        <div className="text-sm text-slate-700 space-y-0.5">
+          <div>Link: <b>{location.origin}/</b></div>
+          <div>Login: <b>{feito.login}</b></div>
+          {feito.senha && <div>Senha: <b>{feito.senha}</b></div>}
+          <div>Casa: <b>{feito.casa}</b></div>
+        </div>
+        <Btn className="mt-3" size="sm" variant="soft" icon={I.copy} onClick={copiar}>Copiar credenciais p/ WhatsApp</Btn>
+      </div>
+      <div className="flex gap-2 mt-5"><Btn variant="ghost" className="flex-1" onClick={onClose}>Fechar</Btn>
+        <Btn className="flex-1" icon={I.plus} onClick={()=>{setFeito(null);setNome("");setLogin("");setSenha("");setUni("todas");}}>Criar outro</Btn></div>
+    </>}
   </div>;
 }
 
@@ -3012,7 +3074,7 @@ function ClienteSwitcher(){
 
 // Painel do DONO: quem administra tudo (donos) e qual gerente entra em qual cliente.
 function GerentesAcesso(){
-  const { clientes, acessos, acessosOps, donos, setDonos, acesso } = useStore();
+  const { clientes, acessos, acessosOps, donos, setDonos, acesso, unidades } = useStore();
   const toast=useContext(ToastCtx);
   const [emailDono,setEmailDono]=useState("");
   // formulário de criação do gerente
@@ -3020,6 +3082,7 @@ function GerentesAcesso(){
   const [gEmail,setGEmail]=useState("");
   const [gSenha,setGSenha]=useState("");
   const [gTid,setGTid]=useState("");
+  const [gUni,setGUni]=useState("todas");
   const [criando,setCriando]=useState(false);
   const [feito,setFeito]=useState(null);        // {login, senha, cliente, jaExiste}
   const semBanco=!window.__WPDB;
@@ -3039,8 +3102,9 @@ function GerentesAcesso(){
     try{
       let jaExiste=false;
       if(gSenha){ const r=await criarUsuarioAuth(gEmail,gSenha); jaExiste=!!r.jaExiste; }
-      await acessosOps.set(gEmail,gTid,gNome);
-      setFeito({ login:emailDeLogin(gEmail), senha:gSenha, cliente:nomeCliente(gTid), jaExiste, semSenha:!gSenha });
+      await acessosOps.set(gEmail,{tenant:gTid, unidade:gUni, nome:gNome, papel:"gerente"});
+      const casaNome = gUni==="todas" ? "Todas as casas" : ((unidades.find(u=>String(u.id)===String(gUni))||{}).nome||"");
+      setFeito({ login:emailDeLogin(gEmail), senha:gSenha, cliente:nomeCliente(gTid), casa:casaNome, jaExiste, semSenha:!gSenha });
       toast(jaExiste?"Conta já existia — vínculo salvo":"Acesso do gerente criado");
       setGNome(""); setGEmail(""); setGSenha("");
     }catch(e){
@@ -3049,7 +3113,8 @@ function GerentesAcesso(){
     }
     setCriando(false);
   };
-  const copiarCred=()=>{ if(!feito) return; const cli=feito.cliente?` — cliente: ${feito.cliente}`:""; copyText(`Acesso ao Wilami Ponto${cli}\nLink: ${location.origin}/\nLogin: ${feito.login}${feito.senha?`\nSenha: ${feito.senha}`:""}\n\nEntre em "Acesso do gestor".`); toast("Credenciais copiadas p/ WhatsApp"); };
+  const copiarCred=()=>{ if(!feito) return; const casa=feito.casa?`\nCasa: ${feito.casa}`:""; copyText(`Acesso ao Wilami Ponto\nLink: ${location.origin}/\nLogin: ${feito.login}${feito.senha?`\nSenha: ${feito.senha}`:""}${casa}\n\nEntre em "Acesso do gestor" com esses dados.`); toast("Credenciais copiadas p/ WhatsApp"); };
+  const nomeUni=(u)=> (u==null||u==="todas") ? "Todas as casas" : ((unidades.find(x=>String(x.id)===String(u))||{}).nome || "Casa");
   const desvincular=(a)=>{ acessosOps.remove(a.email||a.id); toast("Vínculo removido."); };
   return <div className="space-y-5 max-w-3xl">
     <Card className="p-5">
@@ -3100,6 +3165,9 @@ function GerentesAcesso(){
           </div>
         </Field>
         <Field label="Cliente"><Select value={gTid} onChange={e=>setGTid(e.target.value)}>{clientes.map(c=><option key={c.id||"p"} value={c.id}>{c.nome}</option>)}</Select></Field>
+        <Field label="Casa (unidade) que ele cuida"><Select value={gUni} onChange={e=>setGUni(e.target.value)}>
+          <option value="todas">Todas as casas</option>{unidades.map(u=><option key={u.id} value={u.id}>{u.nome}</option>)}
+        </Select></Field>
       </div>
       <Btn className="mt-4" icon={I.user} onClick={criarGerente} disabled={criando}>{criando?"Criando…":"Criar acesso do gerente"}</Btn>
       {feito && <div className="mt-4 p-4 rounded-xl bg-emerald-50 border border-emerald-100">
@@ -3109,6 +3177,7 @@ function GerentesAcesso(){
           <div>Login: <b>{feito.login}</b></div>
           {feito.senha && <div>Senha: <b>{feito.senha}</b></div>}
           {feito.cliente && <div>Cliente: <b>{feito.cliente}</b></div>}
+          {feito.casa && <div>Casa: <b>{feito.casa}</b></div>}
         </div>
         <Btn className="mt-3" size="sm" variant="soft" icon={I.copy} onClick={copiarCred}>Copiar credenciais p/ WhatsApp</Btn>
         {feito.jaExiste && <p className="text-xs text-slate-500 mt-2">Como a conta já existia, a senha não foi alterada. Se o gerente esqueceu a senha, ele pode entrar com a que já tinha.</p>}
@@ -3122,7 +3191,7 @@ function GerentesAcesso(){
               <div className="w-8 h-8 rounded-lg grid place-items-center shrink-0 text-white" style={{background:(clientes.find(c=>c.id===(a.tenant||""))||{}).cor||"#6366f1"}}><Icon d={I.user} className="w-4 h-4"/></div>
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-semibold text-slate-800 truncate">{a.nome||a.email||a.id}</div>
-                <div className="text-xs text-slate-500 truncate">{a.email} · {nomeCliente(a.tenant||"")}</div>
+                <div className="text-xs text-slate-500 truncate">{a.email} · {nomeCliente(a.tenant||"")} · {nomeUni(a.unidade)}</div>
               </div>
               {donos.includes(a.id) && <Badge tone="brand">Administrador</Badge>}
               <button onClick={()=>desvincular(a)} className="text-slate-400 hover:text-rose-500"><Icon d={I.trash} className="w-4 h-4"/></button>
