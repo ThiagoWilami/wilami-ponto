@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- build: acesso de gerente por CASA (login+senha, isolamento por unidade) 2026-08-01 -->
+<!-- build: freela turnos/dobra + valor editavel, folha mes atual, extras CLT editaveis, 4 batidas ao vivo 2026-08-03 -->
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8" />
@@ -358,6 +358,10 @@ const horaMin = (str)=>{ const [h,m]=(str||"0:0").split(":"); return (+h)*60+(+m
 const fmtHoras = (min)=>`${Math.floor(Math.abs(min)/60)}h${String(Math.abs(min)%60).padStart(2,"0")}`;
 // Valor em reais (2 casas) — usado nas folhas de pagamento (CLT e freelancers).
 const fmtBRL = (v)=> "R$ "+Number(v||0).toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2});
+// Período do MÊS ATUAL (para a folha/pagamentos abrirem sempre no mês corrente).
+function mesAtualRange(){ const d=new Date(); const y=d.getFullYear(), m=d.getMonth(); const p=n=>String(n).padStart(2,"0");
+  return { ini:`${y}-${p(m+1)}-01`, fim:`${y}-${p(m+1)}-${p(new Date(y,m+1,0).getDate())}` }; }
+const DOBRA_HORAS = 15; // ≥15h dentro da empresa numa jornada = dobra (2 turnos)
 function calcTrabalho(punches){ // punches: [{acao,min}]
   const g=a=>{ const p=punches.find(x=>x.acao===a); return p?p.min:null; };
   const ent=g("Entrada"), sai=g("Saída");
@@ -653,6 +657,7 @@ function StoreProvider({children}) {
   const clts=[...cltsBase, ...cadAuto.filter(c=>c.tipo==="clt")];
   const freelas=[...freelasBase, ...cadAuto.filter(c=>c.tipo==="free")];
   const [escala,setEscala]=usePersist("escala",SEED_ESCALA);            // por unidade
+  const [escalaSeed,setEscalaSeed]=usePersist("escalaSeed",{});         // pids já semeados na auto-escala (nunca re-semear)
   const [registrosLocal,setRegistrosLocal]=usePersist("registros",[]);  // fallback sem banco
   const [regPub,regPubOps]=useRegistrosPub();                           // feed ao vivo (coleção pública)
   const registros = window.__WPDB ? regPub : registrosLocal;            // banco central quando disponível
@@ -669,12 +674,15 @@ function StoreProvider({children}) {
     : (()=>{ const id=nextId(prev); setEscala(e=>({...e,[id]:escalaVaziaUnidade()})); return [...prev,{...u,id}]; })());
   const excluirUnidade=(id)=>{ setUnidades(prev=>prev.filter(x=>x.id!==id)); setEscala(prev=>{ const n={...prev}; delete n[id]; return n; }); };
 
-  // Gera a escala fixa de um CLT recém-contratado, na SUA casa
-  const gerarEscalaFixa=(pid,escalaTipo,unidadeId)=>{
+  // Gera a escala fixa de um CLT recém-contratado, na SUA casa.
+  // soFaltantes=true → só adiciona nos dias em que o colaborador AINDA não tem entrada (nunca sobrescreve edições do gerente).
+  const gerarEscalaFixa=(pid,escalaTipo,unidadeId,soFaltantes)=>{
     setEscala(prev=>{
       const n={...prev}; if(!n[unidadeId]) n[unidadeId]=escalaVaziaUnidade(); else n[unidadeId]={...n[unidadeId]};
       for(let d=0;d<7;d++){ const folga=folgaFixa(escalaTipo,d);
-        n[unidadeId][d]=[...(n[unidadeId][d]||[]).filter(a=>!(a.pid===pid&&a.tipo==="clt")), {id:`c${pid}_${d}`,pid,tipo:"clt",turno:folga?"folga":turnoPorDia(d)}]; }
+        const jaTemDia=(n[unidadeId][d]||[]).some(a=>String(a.pid)===String(pid));
+        if(soFaltantes && jaTemDia) continue;   // respeita o que o gerente já definiu nesse dia
+        n[unidadeId][d]=[...(n[unidadeId][d]||[]).filter(a=>!(String(a.pid)===String(pid)&&a.tipo==="clt")), {id:`c${pid}_${d}`,pid,tipo:"clt",turno:folga?"folga":turnoPorDia(d)}]; }
       return n;
     });
   };
@@ -734,22 +742,39 @@ function StoreProvider({children}) {
 
   // ---- Pagamentos de freela a partir das jornadas batidas no link (check-in/checkout) ----
   const valorFreela=(f)=> Number(f.valor || (cargosFreela.find(c=>c.nome===f.cargo)||{}).valor || 0);
+  // Ajustes manuais do gerente por jornada: { "<fid>|<data>": {turnos, valor} }
+  const [frelaAjustes,setFrelaAjustes]=usePersist("frelaAjustes",{});
+  const setFreelaAjuste=(fid,data,patch)=>setFrelaAjustes(prev=>{ const k=fid+"|"+data; return {...prev,[k]:{...(prev[k]||{}),...patch}}; });
+  // Override manual do valor das horas extras do CLT por mês: { "<cid>|<AAAA-MM>": valor }
+  const [cltExtraAjuste,setCltExtraMap]=usePersist("cltExtraAjuste",{});
+  const setCltExtra=(cid,ym,valor)=>setCltExtraMap(prev=>{ const k=cid+"|"+ym; const n={...prev}; if(valor==null||valor==="") delete n[k]; else n[k]=Number(valor); return n; });
   const _freelaConcluidas = apurarHoras(registros).filter(x=>x.tipo==="free" && x.completo);
   const freelasComPagamentos = freelas.map(f=>{
     const hist=f.jornadasHist||[]; const histDatas=new Set(hist.map(h=>h.data));
     const novos=_freelaConcluidas.filter(x=>x.nome===f.nome && !histDatas.has(x.dia)).map(x=>({
       data:x.dia, unidade:(unidades.find(u=>u.nome===x.unidade)||{}).id,
       horas:Math.round((x.trabalhado/60)*100)/100, valor:valorFreela(f), _live:true }));
-    return {...f, jornadasHist:[...hist,...novos]};
+    // Aplica turnos/dobra e edição manual: total da jornada = valor por turno × turnos.
+    const jornadas=[...hist,...novos].map(j=>{
+      const aj=frelaAjustes[f.id+"|"+j.data]||{};
+      const valorUnit = aj.valor!=null ? Number(aj.valor) : Number(j.valor!=null?j.valor:valorFreela(f));
+      const turnos = aj.turnos!=null ? Number(aj.turnos) : (((j.horas||0)>=DOBRA_HORAS) ? 2 : 1);
+      const total = valorUnit*turnos;
+      return {...j, valorUnit, turnos, dobra:turnos>=2, editado:aj.valor!=null||aj.turnos!=null, total, valor:total };
+    });
+    return {...f, jornadasHist:jornadas };
   });
   // ---- Escala automática p/ CLT auto-cadastrado (o gestor logado é quem grava a escala) ----
   useEffect(()=>{
     try{
       const auth=window.__WPAUTH; if(!auth||!auth.currentUser) return;
       cadAuto.filter(c=>c.tipo==="clt").forEach(c=>{
-        const jaTem=Object.values(escala||{}).some(dias=>Object.values(dias||{}).some(arr=>(arr||[]).some(a=>a.pid===c.id)));
+        // já semeado alguma vez? nunca semeia de novo (não sobrescreve o que o gerente ajustou)
+        if(escalaSeed[String(c.id)]) return;
+        const jaTem=Object.values(escala||{}).some(dias=>Object.values(dias||{}).some(arr=>(arr||[]).some(a=>String(a.pid)===String(c.id))));
         const uid=c.unidade||unidades[0]?.id;
-        if(!jaTem && uid) gerarEscalaFixa(c.id, c.escala||"6x1", uid);
+        if(uid && !jaTem) gerarEscalaFixa(c.id, c.escala||"6x1", uid, true);   // só dias faltantes
+        setEscalaSeed(prev=> prev[String(c.id)]?prev:{...prev,[String(c.id)]:1});
       });
     }catch(e){}
   },[cadAuto]); // eslint-disable-line
@@ -764,7 +789,7 @@ function StoreProvider({children}) {
   const registrosVis = casaRestrita!=null ? registros.filter(r=>_nomesVis.has(r.nome)) : registros;
 
   const value={ unidades:unidadesVis,salvarUnidade,excluirUnidade, clts:cltsVis,freelas:freelasVis,freelasComPagamentos:freelasPagVis,salvarClt,salvarFreela,excluirColab,cadastrarPublico, anexarDoc,
-    escala,setEscala, registros:registrosVis,addRegistro, pontoHist, freelancerEscaladoHoje, valorFreela,
+    escala,setEscala, registros:registrosVis,addRegistro, pontoHist, freelancerEscaladoHoje, valorFreela, setFreelaAjuste, cltExtraAjuste,setCltExtra,
     cargosFreela,salvarCargoFreela,excluirCargoFreela, atestados,enviarAtestado, ajustes,enviarAjuste,resolverAjuste,
     dossie,getDossie,addFalta,addFeedback,addAnexo, perfil,setPerfil, perms,setPerms, can,
     clientes,clienteAtivo,tenantAtual,criarCliente,trocarCliente,
@@ -1128,7 +1153,13 @@ function PontoLive() {
   const [casaFiltro,setCasaFiltro]=useState("todas"); // filtrar por unidade
   const [linkModal,setLinkModal]=useState(null); // null | 'clt' | 'free'
   const [detalhe,setDetalhe]=useState(null);     // modal de detalhe das abas (Trabalhando/Almoço/Faltas)
+  const [abertoPid,setAbertoPid]=useState(null); // colaborador expandido (ver as 4 batidas do dia)
   const clock=useClock();
+  // As 4 batidas do dia de um colaborador (em tempo real), na ordem canônica.
+  const batidasDoDia=(nm)=>{ const meus=registros.filter(r=>r.nome===nm);
+    const acoes = ambiente==="free" ? [["Entrada","Check-in"],["Saída","Checkout"]]
+      : [["Entrada","Entrada"],["Início intervalo","Saída p/ almoço"],["Fim intervalo","Retorno do almoço"],["Saída","Saída final"]];
+    return acoes.map(([canon,label])=>{ const r=meus.find(x=>x.acao===canon); return {label, hora:r?(r.hora||"").slice(0,5):null}; }); };
   const casaNome = casaFiltro==="todas" ? null : unidadeNome(casaFiltro,unidades);
   const toast=useContext(ToastCtx);
   const nome=(pid,tipo)=>pessoaNome(pid,tipo,clts,freelas);
@@ -1237,8 +1268,9 @@ function PontoLive() {
         {linhas.length===0
           ? <div className="p-10 text-center text-slate-400">Nenhum {ehFree?"freelancer":"CLT"} escalado para hoje.</div>
           : <div className="divide-y divide-slate-50 max-h-[460px] overflow-auto">
-              {linhas.map(({a,nm,st,tempo})=>{ const s=STATUS[st];
-                return <div key={a.id} className="flex items-center gap-3 py-3 px-5">
+              {linhas.map(({a,nm,st,tempo})=>{ const s=STATUS[st]; const aberto=abertoPid===a.id;
+                return <div key={a.id}>
+                  <div className="flex items-center gap-3 py-3 px-5 cursor-pointer hover:bg-slate-50/70" onClick={()=>setAbertoPid(aberto?null:a.id)}>
                   <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{background:s.c}}/>
                   <Avatar name={nm} tone={a.tipo==="clt"?"brand":"free"} size="w-9 h-9"/>
                   <div className="min-w-0"><div className="font-semibold text-slate-800 truncate">{nm}</div>
@@ -1247,7 +1279,17 @@ function PontoLive() {
                     {st==="trabalhando" && tempo!=null && <span className="flex items-center gap-1 text-xs font-bold text-emerald-600 tabular-nums" title="Tempo em jornada (ao vivo)"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500 live-dot"/>{fmtHMS(tempo)}</span>}
                     <Badge tone={a.tipo==="clt"?"brand":"free"}>{a.tipo==="clt"?"CLT":"Freela"}</Badge>
                     <Badge tone={s.tone}>{s.l}</Badge>
+                    <Icon d={aberto?I.x:I.plus} className="w-3.5 h-3.5 text-slate-300"/>
                   </div>
+                </div>
+                {aberto && <div className="px-5 pb-3 -mt-1">
+                  <div className={cx("grid gap-2", ambiente==="free"?"grid-cols-2":"grid-cols-2 sm:grid-cols-4")}>
+                    {batidasDoDia(nm).map((b,i)=><div key={i} className={cx("rounded-lg p-2 text-center border", b.hora?"bg-emerald-50 border-emerald-100":"bg-slate-50 border-slate-100")}>
+                      <div className="text-[10px] uppercase tracking-wide text-slate-400 font-bold">{b.label}</div>
+                      <div className={cx("text-sm font-bold tabular-nums", b.hora?"text-emerald-700":"text-slate-300")}>{b.hora||"—"}</div>
+                    </div>)}
+                  </div>
+                </div>}
                 </div>;})}
             </div>}
       </Card>
@@ -1369,12 +1411,15 @@ function PontoKiosk({ mode, onClose }) {
   const escaladoHojePid=(p)=>{
     if(!p) return false;
     const alvoId=String(p.id); const alvoCpf=soDigitos(p.cpf); const lista=mode==="clt"?clts:freelas;
+    const alvoNome=(p.nome||"").trim().toLowerCase();
     return Object.values(escala||{}).some(dias=>((dias&&dias[HOJE_IDX])||[]).some(a=>{
       if(a.turno==="folga") return false;
       if(a.tipo && a.tipo!==mode) return false;
       if(String(a.pid)===alvoId) return true;
-      const pes=lista.find(x=>String(x.id)===String(a.pid));      // fallback por CPF
-      return !!(pes && alvoCpf.length===11 && soDigitos(pes.cpf)===alvoCpf);
+      const pes=lista.find(x=>String(x.id)===String(a.pid));      // fallback por CPF e por NOME
+      if(!pes) return false;
+      if(alvoCpf.length===11 && soDigitos(pes.cpf)===alvoCpf) return true;
+      return !!(alvoNome && (pes.nome||"").trim().toLowerCase()===alvoNome);
     }));
   };
   const buscarCpf=()=>{
@@ -2088,16 +2133,18 @@ function Relatorios() {
 
 /* ============================ PAGAMENTOS (FREELANCERS) ============================ */
 function Pagamentos() {
-  const { freelasComPagamentos:freelas, unidades } = useStore();
+  const { freelasComPagamentos:freelas, unidades, setFreelaAjuste } = useStore();
   const toast=useContext(ToastCtx);
-  const [ini,setIni]=useState("2026-07-01");
-  const [fim,setFim]=useState("2026-07-31");
+  const _mr=mesAtualRange();
+  const [ini,setIni]=useState(_mr.ini);
+  const [fim,setFim]=useState(_mr.fim);
   const [uni,setUni]=useState("todas");
+  const [aberto,setAberto]=useState(null); // freelancer expandido (edição de turnos/valor por jornada)
 
   const dentro=(j)=> (!ini||j.data>=ini) && (!fim||j.data<=fim) && (uni==="todas"||j.unidade===Number(uni));
   const linhas = freelas.map(fr=>{
-    const js=(fr.jornadasHist||[]).filter(dentro);
-    return { id:fr.id, nome:fr.nome, cargo:fr.cargo, pix:fr.pix, jornadas:js.length,
+    const js=(fr.jornadasHist||[]).filter(dentro).sort((a,b)=>(a.data<b.data?-1:1));
+    return { id:fr.id, nome:fr.nome, cargo:fr.cargo, pix:fr.pix, jornadas:js.length, js,
       horas:js.reduce((s,j)=>s+j.horas,0), total:js.reduce((s,j)=>s+j.valor,0), casas:[...new Set(js.map(j=>j.unidade))] };
   }).filter(l=>l.jornadas>0);
   const totalGeral=linhas.reduce((s,l)=>s+l.total,0);
@@ -2136,15 +2183,36 @@ function Pagamentos() {
     <Card className="overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm min-w-[760px]">
       <thead><tr className="text-left text-slate-400 border-b border-slate-100">{["Freelancer","Função","Jornadas","Horas","Casas","Valor acumulado","Chave Pix"].map(h=><th key={h} className="px-4 py-3 font-semibold">{h}</th>)}</tr></thead>
       <tbody className="divide-y divide-slate-50">
-        {linhas.map(l=><tr key={l.id} className="hover:bg-slate-50/70">
-          <td className="px-4 py-3"><div className="flex items-center gap-2"><Avatar name={l.nome} tone="free" size="w-7 h-7"/><span className="font-semibold text-slate-800">{l.nome}</span></div></td>
+        {linhas.map(l=>[
+          <tr key={l.id} className="hover:bg-slate-50/70 cursor-pointer" onClick={()=>setAberto(aberto===l.id?null:l.id)}>
+          <td className="px-4 py-3"><div className="flex items-center gap-2"><Icon d={aberto===l.id?I.x:I.plus} className="w-3.5 h-3.5 text-slate-400"/><Avatar name={l.nome} tone="free" size="w-7 h-7"/><span className="font-semibold text-slate-800">{l.nome}</span></div></td>
           <td className="px-4 py-3 text-slate-600">{l.cargo}</td>
           <td className="px-4 py-3">{l.jornadas}</td>
           <td className="px-4 py-3 font-semibold">{l.horas}h</td>
           <td className="px-4 py-3"><div className="flex gap-1 flex-wrap">{l.casas.map(cid=><Badge key={cid} tone="slate">{unidadeNome(cid,unidades).split(" ").slice(0,2).join(" ")}</Badge>)}</div></td>
           <td className="px-4 py-3 font-bold text-slate-900">R$ {l.total.toLocaleString("pt-BR")}</td>
           <td className="px-4 py-3 font-mono text-xs text-slate-500">{l.pix}</td>
-        </tr>)}
+        </tr>,
+          aberto===l.id && <tr key={l.id+"-det"} className="bg-slate-50/60"><td colSpan="7" className="px-4 py-3">
+            <div className="text-xs font-bold text-slate-500 uppercase mb-2">Jornadas — edite turnos (dobra) e valor</div>
+            <div className="space-y-1.5">
+              {l.js.map((j,idx)=><div key={idx} className="flex flex-wrap items-center gap-2 text-sm bg-white rounded-lg px-3 py-2 border border-slate-100">
+                <span className="w-20 tabular-nums text-slate-600">{fmtDataBR(j.data)}</span>
+                <span className="w-16 text-slate-500">{j.horas}h</span>
+                <span className="text-slate-400">Turnos:</span>
+                <div className="inline-flex rounded-lg overflow-hidden border border-slate-200">
+                  {[1,2].map(t=><button key={t} onClick={()=>setFreelaAjuste(l.id,j.data,{turnos:t})} className={cx("px-2.5 py-1 text-xs font-semibold", j.turnos===t?"grad-brand text-white":"bg-white text-slate-600 hover:bg-slate-50")}>{t===2?"2 (dobra)":"1"}</button>)}
+                </div>
+                <span className="text-slate-400 ml-1">Valor/turno:</span>
+                <div className="inline-flex items-center gap-1"><span className="text-slate-500 text-xs">R$</span>
+                  <input type="number" defaultValue={j.valorUnit} onBlur={e=>setFreelaAjuste(l.id,j.data,{valor:Number(e.target.value)})} className="w-20 px-2 py-1 rounded-lg border border-slate-200 text-sm"/></div>
+                <span className="ml-auto font-bold text-slate-900 tabular-nums">= {fmtBRL(j.total)}</span>
+                {j.dobra && <Badge tone="amber">dobra</Badge>}
+              </div>)}
+            </div>
+            <p className="text-[11px] text-slate-400 mt-2">Dobra automática quando a jornada tem ≥ {DOBRA_HORAS}h. Você pode ajustar turnos e o valor por turno manualmente.</p>
+          </td></tr>
+        ])}
         {linhas.length===0 && <tr><td colSpan="7" className="px-4 py-8 text-center text-slate-400">Nenhuma jornada no período/casa selecionados.</td></tr>}
       </tbody>
       {linhas.length>0 && <tfoot><tr className="border-t-2 border-slate-100 bg-slate-50/60">
@@ -2323,11 +2391,12 @@ function LinksQR() {
 
 /* ============================ RELATÓRIOS FINANCEIROS ============================ */
 function Financeiro() {
-  const { freelasComPagamentos:freelas, clts, unidades, registros, pontoHist, getDossie } = useStore();
+  const { freelasComPagamentos:freelas, clts, unidades, registros, pontoHist, getDossie, cltExtraAjuste, setCltExtra } = useStore();
   const toast=useContext(ToastCtx);
   const [aba,setAba]=useState("clt");                 // "clt" (folha) | "freela" (pagamentos)
-  const [ini,setIni]=useState("2026-07-01");
-  const [fim,setFim]=useState("2026-07-31");
+  const _mr=mesAtualRange();
+  const [ini,setIni]=useState(_mr.ini);
+  const [fim,setFim]=useState(_mr.fim);
   const [uni,setUni]=useState(unidades[0]?.id ?? "todas");
   const uNome = uni==="todas"?"Todas as casas":unidadeNome(Number(uni),unidades);
   const naData=(d)=> (!ini||d>=ini) && (!fim||d<=fim);
@@ -2344,8 +2413,12 @@ function Financeiro() {
     const salario=Number(c.salario||0);
     const vHora=salario? salario/220 : 0;              // hora normal (44h/sem → 220h/mês)
     const vDia =salario? salario/30  : 0;
-    // Horas extras: 50% em dia útil, 100% em folga trabalhada (Art. 59 CLT)
-    const extrasVal=(extrasMin/60)*vHora*1.5 + (extras100Min/60)*vHora*2;
+    // Horas extras: 50% em dia útil, 100% em folga trabalhada (Art. 59 CLT). Gerente pode sobrescrever o valor.
+    const extrasCalc=(extrasMin/60)*vHora*1.5 + (extras100Min/60)*vHora*2;
+    const ymRef=(ini||hojeStr()).slice(0,7);
+    const extraOverride = cltExtraAjuste[c.id+"|"+ymRef];
+    const extrasVal = extraOverride!=null ? Number(extraOverride) : extrasCalc;
+    const extrasEditado = extraOverride!=null;
     const notVal=(notMin/60)*vHora*0.2;                // adicional noturno 20% (Art. 73 CLT)
     // Descontos lançados no dossiê dentro do período
     const dos=getDossie("clt-"+c.id);
@@ -2357,7 +2430,7 @@ function Financeiro() {
     const proventos=salario+extrasVal+notVal;
     const liquido=proventos-descontos;
     return { id:c.id, nome:c.nome, foto:c.foto, pix:c.pix, escala:c.escala, salario, vHora,
-      extrasMin, extras100Min, extrasHoras:extrasMin+extras100Min, extrasVal, notMin, notVal,
+      extrasMin, extras100Min, extrasHoras:extrasMin+extras100Min, extrasVal, extrasEditado, notMin, notVal,
       descontos, faltasQtd:faltas.length, atrasosQtd:atrasosD.length, liquido, semSalario:!salario };
   });
   const cltFolha=linhasCLT.reduce((s,l)=>s+l.liquido,0);
@@ -2443,7 +2516,12 @@ function Financeiro() {
           {linhasCLT.map(l=><tr key={l.id} className="hover:bg-slate-50/70">
             <td className="px-4 py-3"><div className="flex items-center gap-2"><Avatar name={l.nome} src={l.foto} tone="brand" size="w-7 h-7"/><div><div className="font-semibold text-slate-800">{l.nome}</div>{l.semSalario && <div className="text-[11px] text-amber-600">defina o salário no cadastro</div>}</div></div></td>
             <td className="px-4 py-3 tabular-nums text-slate-700">{fmtBRL(l.salario)}</td>
-            <td className="px-4 py-3 tabular-nums"><span className="font-semibold text-slate-800">{fmtHoras(l.extrasHoras)}</span>{l.extrasVal>0 && <span className="text-emerald-600 font-semibold"> · {fmtBRL(l.extrasVal)}</span>}</td>
+            <td className="px-4 py-3 tabular-nums">
+              <div className="flex items-center gap-1.5"><span className="font-semibold text-slate-800">{fmtHoras(l.extrasHoras)}</span>
+                <span className="text-slate-400 text-xs">R$</span>
+                <input type="number" defaultValue={Math.round(l.extrasVal*100)/100} key={l.extrasVal} onBlur={e=>setCltExtra(l.id,(ini||hojeStr()).slice(0,7), e.target.value)} title="Valor das horas extras (editável)" className={cx("w-20 px-2 py-1 rounded-lg border text-sm", l.extrasEditado?"border-amber-300 bg-amber-50":"border-slate-200")}/>
+                {l.extrasEditado && <span className="text-[10px] text-amber-600" title="Ajustado manualmente">editado</span>}
+              </div></td>
             <td className="px-4 py-3 tabular-nums text-slate-600">{l.notVal>0?fmtBRL(l.notVal):"—"}</td>
             <td className={cx("px-4 py-3 tabular-nums",l.descontos>0?"text-rose-600 font-semibold":"text-slate-400")}>{l.descontos>0?"-"+fmtBRL(l.descontos):"—"}</td>
             <td className="px-4 py-3 font-extrabold text-slate-900 tabular-nums">{fmtBRL(l.liquido)}</td>
