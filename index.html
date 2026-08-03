@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- build: freela turnos/dobra + valor editavel, folha mes atual, extras CLT editaveis, 4 batidas ao vivo 2026-08-03 -->
+<!-- build: folga escolhida pelo gerente (repete semanal) + freela dobra/edit + folha mes atual + 4 batidas ao vivo 2026-08-03 -->
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8" />
@@ -674,15 +674,19 @@ function StoreProvider({children}) {
     : (()=>{ const id=nextId(prev); setEscala(e=>({...e,[id]:escalaVaziaUnidade()})); return [...prev,{...u,id}]; })());
   const excluirUnidade=(id)=>{ setUnidades(prev=>prev.filter(x=>x.id!==id)); setEscala(prev=>{ const n={...prev}; delete n[id]; return n; }); };
 
-  // Gera a escala fixa de um CLT recém-contratado, na SUA casa.
-  // soFaltantes=true → só adiciona nos dias em que o colaborador AINDA não tem entrada (nunca sobrescreve edições do gerente).
-  const gerarEscalaFixa=(pid,escalaTipo,unidadeId,soFaltantes)=>{
+  // Gera a escala fixa de um CLT, na SUA casa, a partir do DIA DE FOLGA escolhido pelo gerente.
+  // A folga se repete toda semana nesse dia (6x1 = 1 folga; 5x2/6x2 = 2 folgas a partir do dia base).
+  // soFaltantes=true → só adiciona nos dias ainda vazios (nunca sobrescreve edições do gerente).
+  const gerarEscalaFixa=(pid,escalaTipo,unidadeId,soFaltantes,folgaDia)=>{
+    const nFolgas = (escalaTipo==="5x2"||escalaTipo==="6x2") ? 2 : (escalaTipo==="12x36" ? 0 : 1);
+    const base = (folgaDia==null) ? null : ((folgaDia%7)+7)%7;
+    const ehFolgaDia=(d)=>{ if(base==null||nFolgas===0) return false; for(let k=0;k<nFolgas;k++){ if(((base+k)%7)===d) return true; } return false; };
     setEscala(prev=>{
       const n={...prev}; if(!n[unidadeId]) n[unidadeId]=escalaVaziaUnidade(); else n[unidadeId]={...n[unidadeId]};
-      for(let d=0;d<7;d++){ const folga=folgaFixa(escalaTipo,d);
+      for(let d=0;d<7;d++){
         const jaTemDia=(n[unidadeId][d]||[]).some(a=>String(a.pid)===String(pid));
         if(soFaltantes && jaTemDia) continue;   // respeita o que o gerente já definiu nesse dia
-        n[unidadeId][d]=[...(n[unidadeId][d]||[]).filter(a=>!(String(a.pid)===String(pid)&&a.tipo==="clt")), {id:`c${pid}_${d}`,pid,tipo:"clt",turno:folga?"folga":turnoPorDia(d)}]; }
+        n[unidadeId][d]=[...(n[unidadeId][d]||[]).filter(a=>!(String(a.pid)===String(pid)&&a.tipo==="clt")), {id:`c${pid}_${d}`,pid,tipo:"clt",turno:ehFolgaDia(d)?"folga":turnoPorDia(d)}]; }
       return n;
     });
   };
@@ -693,7 +697,7 @@ function StoreProvider({children}) {
     if(ehAuto(c.id)){ cadOps.update(c._docId||docIdDe(c.id), c); return; }
     if(c.id){ setClts(prev=>prev.map(x=>x.id===c.id?{...x,...c}:x)); }
     else { const novo={...c,id:nextId(cltsBase.length?cltsBase:[{id:0}]),banco:"+00h00",extras:"0h00",atrasos:"0h00",docs:c.docs||{contrato:false,exames:false,ctps:false,rg:false},status:"ativo"};
-      setClts(prev=>[...prev,novo]); gerarEscalaFixa(novo.id, c.escala||"6x1", c.unidade); }
+      setClts(prev=>[...prev,novo]); gerarEscalaFixa(novo.id, c.escala||"6x1", c.unidade, false, c.folgaDia); }
   };
   const salvarFreela=(f)=>{
     if(ehAuto(f.id)){ cadOps.update(f._docId||docIdDe(f.id), f); return; }
@@ -773,7 +777,7 @@ function StoreProvider({children}) {
         if(escalaSeed[String(c.id)]) return;
         const jaTem=Object.values(escala||{}).some(dias=>Object.values(dias||{}).some(arr=>(arr||[]).some(a=>String(a.pid)===String(c.id))));
         const uid=c.unidade||unidades[0]?.id;
-        if(uid && !jaTem) gerarEscalaFixa(c.id, c.escala||"6x1", uid, true);   // só dias faltantes
+        if(uid && !jaTem) gerarEscalaFixa(c.id, c.escala||"6x1", uid, true, c.folgaDia);   // só dias faltantes
         setEscalaSeed(prev=> prev[String(c.id)]?prev:{...prev,[String(c.id)]:1});
       });
     }catch(e){}
@@ -1202,9 +1206,9 @@ function PontoLive() {
   };
   const linhas=escalados.map(a=>({a, nm:nome(a.pid,a.tipo), st:statusDe(a), tempo:tempoDe(a), folgaTrab:a.turno==="folga"}));
   const cont=(s)=>linhas.filter(x=>x.st===s).length;
-  // Resolve FOLGA por grupo de apuração: CLT que trabalhou no dia de folga do seu padrão fixo → 100%.
+  // Resolve FOLGA pela escala DEFINIDA PELO GERENTE (turno marcado como "folga"), nunca automática.
   const folgaDe=(g)=>{ if(g.tipo!=="clt") return false; const p=clts.find(x=>x.nome===g.nome); if(!p) return false;
-    return folgaFixa(p.escala||"6x1", HOJE_IDX) || turnoHojeDe(p.id,"clt")==="folga"; };
+    return turnoHojeDe(p.id,"clt")==="folga"; };
   // Apuração de horas (histórico + registros reais de hoje), filtrada pelo ambiente
   const apuracao=apurarHoras([...pontoHist, ...registros], folgaDe).filter(x=>x.completo && x.tipo===ambiente && (!casaNome||x.unidade===casaNome));
   const freelaValorDe=(x)=>{ const f=freelas.find(ff=>ff.nome===x.nome); return f?valorFreela(f):0; };
@@ -1761,7 +1765,7 @@ function ColabForm({ tipo, inicial, onSalvar, onClose }) {
   const { unidades, cargosFreela } = useStore();
   const cg0 = cargosFreela[0];
   const [f,setF]=useState(inicial || (tipo==="clt"
-    ? { nome:"", cargo:CARGOS[0], setor:"salao", escala:"6x1", unidade:unidades[0]?.id, admissao:"", salario:0, cpf:"", tel:"", tipoPix:"CPF", pix:"", banco:"", foto:"", docs:{} }
+    ? { nome:"", cargo:CARGOS[0], setor:"salao", escala:"6x1", folgaDia:6, unidade:unidades[0]?.id, admissao:"", salario:0, cpf:"", tel:"", tipoPix:"CPF", pix:"", banco:"", foto:"", docs:{} }
     : { nome:"", cargo:cg0?.nome||"", setor:"salao", unidade:unidades[0]?.id, valor:cg0?.valor||0, cpf:"", tel:"", tipoPix:"CPF", pix:"", banco:"", foto:"" }));
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
   // Foto do colaborador no CADASTRO (referência facial). Usa input de arquivo/câmera:
@@ -1822,6 +1826,9 @@ function ColabForm({ tipo, inicial, onSalvar, onClose }) {
         <Field label="Setor"><Select value={f.setor} onChange={e=>set("setor",e.target.value)}>{SETORES.map(([k,l])=><option key={k} value={k}>{l}</option>)}</Select></Field>
         <Field label="Unidade (casa)"><Select value={f.unidade} onChange={e=>set("unidade",Number(e.target.value))}>{unidades.map(u=><option key={u.id} value={u.id}>{u.nome}</option>)}</Select></Field>
         <Field label="Escala fixa"><Select value={f.escala} onChange={e=>set("escala",e.target.value)}>{Object.entries(ESCALAS).map(([k,v])=><option key={k} value={k}>{v}</option>)}</Select></Field>
+        <Field label="Dia da folga (referência)"><Select value={f.folgaDia==null?"":f.folgaDia} onChange={e=>set("folgaDia",e.target.value===""?null:Number(e.target.value))}>
+          {DIAS.map((d,i)=><option key={i} value={i}>{["Segunda","Terça","Quarta","Quinta","Sexta","Sábado","Domingo"][i]}</option>)}
+        </Select></Field>
         <Field label="Admissão"><Input type="date" value={f.admissao} onChange={e=>set("admissao",e.target.value)}/></Field>
         <Field label="Salário mensal (R$)"><Input type="number" value={f.salario||0} onChange={e=>set("salario",Number(e.target.value))} placeholder="Ex.: 2200"/></Field>
       </> : <>
