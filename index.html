@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- build: folha de freelancers sempre lista o roster da casa (nunca vazia sem explicacao) 2026-08-03 -->
+<!-- build: novo modelo Freela Fixo (escala + salario mensal + folha propria) 2026-08-03 -->
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8" />
@@ -1761,7 +1761,8 @@ function PontoKiosk({ mode, onClose }) {
 }
 
 /* ============================ FORM DE COLABORADOR ============================ */
-function ColabForm({ tipo, inicial, onSalvar, onClose }) {
+function ColabForm({ tipo, inicial, onSalvar, onClose, vinculo }) {
+  const ehFixo = vinculo==="fixo" || inicial?.vinculo==="fixo";
   const { unidades, cargosFreela } = useStore();
   const cg0 = cargosFreela[0];
   const [f,setF]=useState(inicial || (tipo==="clt"
@@ -1797,7 +1798,7 @@ function ColabForm({ tipo, inicial, onSalvar, onClose }) {
     {/* Cabeçalho fixo com botão de VOLTAR intuitivo */}
     <div className="flex items-center gap-2 px-5 py-3 border-b border-slate-100 shrink-0">
       <button onClick={onClose} className="flex items-center gap-1 text-sm font-semibold text-slate-600 hover:text-slate-900 -ml-1 pr-2"><Icon d={I.arrow} className="w-4 h-4 rotate-180"/>Voltar</button>
-      <h3 className="text-base font-bold text-slate-900 ml-1">{inicial?"Editar":tipo==="clt"?"Contratar CLT":"Novo freelancer"}</h3>
+      <h3 className="text-base font-bold text-slate-900 ml-1">{inicial?(ehFixo?"Editar Freela Fixo":"Editar"):ehFixo?"Contratar Freela Fixo":tipo==="clt"?"Contratar CLT":"Novo freelancer"}</h3>
       <button onClick={onClose} className="ml-auto text-slate-400 hover:text-slate-600"><Icon d={I.x}/></button>
     </div>
     {/* Corpo rolável */}
@@ -1864,7 +1865,7 @@ function ColabForm({ tipo, inicial, onSalvar, onClose }) {
           </div>;})}
       </div>}
     </div>}
-    {tipo==="clt" && !inicial && <p className="text-xs text-slate-500 mt-3 flex items-center gap-1"><Icon d={I.calendar} className="w-3.5 h-3.5"/> Ao cadastrar, o CLT entra automaticamente na escala fixa ({f.escala}) da sua casa.</p>}
+    {tipo==="clt" && !inicial && <p className="text-xs text-slate-500 mt-3 flex items-center gap-1"><Icon d={I.calendar} className="w-3.5 h-3.5"/> Ao cadastrar, o {ehFixo?"Freela Fixo":"CLT"} entra automaticamente na escala ({f.escala}) da sua casa, com a folga no dia escolhido.</p>}
     </div>
     {/* Rodapé fixo — sempre visível, com o que falta */}
     <div className="border-t border-slate-100 px-5 py-3 shrink-0 bg-white rounded-b-3xl">
@@ -1890,12 +1891,19 @@ function ColaboradoresCLT() {
   const [tab,setTab]=useState("dados");
   const [confirmar,setConfirmar]=useState(null);
   const [casa,setCasa]=useState("todas");
-  const list=clts.filter(c=>c.nome.toLowerCase().includes(q.toLowerCase()) && (casa==="todas"||c.unidade===casa));
+  const [vinc,setVinc]=useState("todos"); // filtro: todos | clt | fixo
+  const ehFixo=(c)=>c.vinculo==="fixo";
+  const list=clts.filter(c=>c.nome.toLowerCase().includes(q.toLowerCase()) && (casa==="todas"||c.unidade===casa)
+    && (vinc==="todos" || (vinc==="fixo"?ehFixo(c):!ehFixo(c))));
 
   return <div className="fade-in">
-    <PageHeader title="Colaboradores CLT" sub="Escala fixa automática · pasta individual · cadastro, edição e exclusão">
+    <PageHeader title="Colaboradores CLT & Freela Fixo" sub="Escala fixa · salário mensal · pasta individual · cadastro, edição e exclusão">
       <Btn icon={I.plus} onClick={()=>setForm({})}>Contratar CLT</Btn>
+      <Btn variant="free" icon={I.plus} onClick={()=>setForm({vinculo:"fixo"})}>Contratar Freela Fixo</Btn>
     </PageHeader>
+    <div className="flex flex-wrap gap-2 mb-3">
+      {[["todos","Todos"],["clt","CLT"],["fixo","Freela Fixo"]].map(([k,l])=><button key={k} onClick={()=>setVinc(k)} className={cx("px-3 py-1.5 rounded-lg text-xs font-semibold border transition", vinc===k?"grad-brand text-white border-transparent":"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>{l}</button>)}
+    </div>
     <Card className="p-2 mb-3"><div className="flex items-center gap-2 px-3 py-2">
       <Icon d={I.search} className="w-4 h-4 text-slate-400"/>
       <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Buscar colaborador…" className="flex-1 outline-none text-sm bg-transparent"/>
@@ -1909,7 +1917,7 @@ function ColaboradoresCLT() {
         <tbody className="divide-y divide-slate-50">
           {list.map(c=>{ const docsOk=Object.values(c.docs).filter(Boolean).length; const docsTot=Object.keys(c.docs).length;
             return <tr key={c.id} className="hover:bg-slate-50/70">
-              <td className="px-4 py-3"><button onClick={()=>{setPasta(c);setTab("dados");}} className="flex items-center gap-3 text-left"><Avatar name={c.nome} src={c.foto} tone="brand"/><span className="font-semibold text-slate-800">{c.nome}</span></button></td>
+              <td className="px-4 py-3"><button onClick={()=>{setPasta(c);setTab("dados");}} className="flex items-center gap-3 text-left"><Avatar name={c.nome} src={c.foto} tone={ehFixo(c)?"free":"brand"}/><span className="font-semibold text-slate-800">{c.nome}</span>{ehFixo(c)&&<Badge tone="free">Freela Fixo</Badge>}</button></td>
               <td className="px-4 py-3 text-slate-600">{c.cargo}</td>
               <td className="px-4 py-3"><Badge tone="brand">{c.escala}</Badge></td>
               <td className="px-4 py-3 text-slate-600">{unidadeNome(c.unidade,unidades)}</td>
@@ -1926,8 +1934,8 @@ function ColaboradoresCLT() {
     </Card>
 
     <Modal open={!!form} onClose={()=>setForm(null)} wide>
-      {form && <ColabForm tipo="clt" inicial={form.inicial} onClose={()=>setForm(null)}
-        onSalvar={(dados)=>{ salvarClt(form.inicial?{...form.inicial,...dados}:dados); setForm(null); toast(form.inicial?"Colaborador atualizado":"CLT contratado e escalado"); }}/>}
+      {form && <ColabForm tipo="clt" vinculo={form.vinculo||form.inicial?.vinculo} inicial={form.inicial} onClose={()=>setForm(null)}
+        onSalvar={(dados)=>{ const vc=form.vinculo||form.inicial?.vinculo; const rec={...dados}; if(vc) rec.vinculo=vc; salvarClt(form.inicial?{...form.inicial,...rec}:rec); setForm(null); toast(form.inicial?"Colaborador atualizado":(vc==="fixo"?"Freela Fixo cadastrado e escalado":"CLT contratado e escalado")); }}/>}
     </Modal>
 
     <Modal open={!!confirmar} onClose={()=>setConfirmar(null)}>
@@ -2411,10 +2419,11 @@ function Financeiro() {
   const naData=(d)=> (!ini||d>=ini) && (!fim||d<=fim);
   const fmtD=(ds)=>ds.map(d=>d.slice(8,10)+"/"+d.slice(5,7)).join(", ");
 
-  /* ===================== FOLHA CLT (fechamento e pagamento) ===================== */
+  /* ===================== FOLHA CLT / FREELA FIXO (salário mensal + extras) ===================== */
   // Apuração REAL das batidas no período (extras normais, extras 100% em folga e adicional noturno).
   const apurCLT = apurarHoras([...pontoHist, ...registros]).filter(x=>x.tipo==="clt" && x.completo && naData(x.dia));
-  const linhasCLT = clts.filter(c=>uni==="todas"||c.unidade===Number(uni)).map(c=>{
+  const ymRef=(ini||hojeStr()).slice(0,7);
+  const folhaDe=(lista)=> lista.filter(c=>uni==="todas"||c.unidade===Number(uni)).map(c=>{
     const meus=apurCLT.filter(x=>x.nome===c.nome);
     const extrasMin=meus.reduce((s,x)=>s+(x.extras||0),0);
     const extras100Min=meus.reduce((s,x)=>s+(x.extras100||0),0);
@@ -2422,26 +2431,26 @@ function Financeiro() {
     const salario=Number(c.salario||0);
     const vHora=salario? salario/220 : 0;              // hora normal (44h/sem → 220h/mês)
     const vDia =salario? salario/30  : 0;
-    // Horas extras: 50% em dia útil, 100% em folga trabalhada (Art. 59 CLT). Gerente pode sobrescrever o valor.
     const extrasCalc=(extrasMin/60)*vHora*1.5 + (extras100Min/60)*vHora*2;
-    const ymRef=(ini||hojeStr()).slice(0,7);
     const extraOverride = cltExtraAjuste[c.id+"|"+ymRef];
     const extrasVal = extraOverride!=null ? Number(extraOverride) : extrasCalc;
     const extrasEditado = extraOverride!=null;
     const notVal=(notMin/60)*vHora*0.2;                // adicional noturno 20% (Art. 73 CLT)
-    // Descontos lançados no dossiê dentro do período
     const dos=getDossie("clt-"+c.id);
     const faltas=(dos.faltas||[]).filter(x=>x.tipo==="falta" && x.descontar && naData(x.data));
     const atrasosD=(dos.faltas||[]).filter(x=>x.tipo==="atraso" && x.descontar && naData(x.data));
-    const descFaltas=faltas.length*vDia;
-    const descAtrasos=atrasosD.reduce((s,x)=>s+vHora*(Number(x.horas)||0),0);
-    const descontos=descFaltas+descAtrasos;
-    const proventos=salario+extrasVal+notVal;
-    const liquido=proventos-descontos;
+    const descontos=faltas.length*vDia + atrasosD.reduce((s,x)=>s+vHora*(Number(x.horas)||0),0);
+    const liquido=salario+extrasVal+notVal-descontos;
     return { id:c.id, nome:c.nome, foto:c.foto, pix:c.pix, escala:c.escala, salario, vHora,
       extrasMin, extras100Min, extrasHoras:extrasMin+extras100Min, extrasVal, extrasEditado, notMin, notVal,
       descontos, faltasQtd:faltas.length, atrasosQtd:atrasosD.length, liquido, semSalario:!salario };
   });
+  const cltsReais = clts.filter(c=>c.vinculo!=="fixo");
+  const fixos = clts.filter(c=>c.vinculo==="fixo");
+  const linhasCLTreais = folhaDe(cltsReais);
+  const linhasFixo = folhaDe(fixos);
+  // linhas exibidas conforme a aba (clt = folha CLT; fixo = folha freela fixo)
+  const linhasCLT = aba==="fixo" ? linhasFixo : linhasCLTreais;
   const cltFolha=linhasCLT.reduce((s,l)=>s+l.liquido,0);
   const cltExtras=linhasCLT.reduce((s,l)=>s+l.extrasVal,0);
   const cltSalarios=linhasCLT.reduce((s,l)=>s+l.salario,0);
@@ -2457,12 +2466,13 @@ function Financeiro() {
   const freeDias=linhasFree.reduce((s,l)=>s+l.dias,0);
 
   /* ===================== WhatsApp ===================== */
-  const whatsCLT=(l)=>`*${l.nome}* (CLT)\nSalário base: ${fmtBRL(l.salario)}\nHoras extras: ${fmtHoras(l.extrasHoras)} = ${fmtBRL(l.extrasVal)}${l.notVal?`\nAdic. noturno: ${fmtBRL(l.notVal)}`:""}${l.descontos?`\nDescontos: -${fmtBRL(l.descontos)}`:""}\n*Líquido a pagar: ${fmtBRL(l.liquido)}*\nPix: ${l.pix||"—"}`;
+  const rotuloFolha = aba==="fixo"?"Freela Fixo":"CLT";
+  const whatsCLT=(l)=>`*${l.nome}* (${rotuloFolha})\nSalário base: ${fmtBRL(l.salario)}\nHoras extras: ${fmtHoras(l.extrasHoras)} = ${fmtBRL(l.extrasVal)}${l.notVal?`\nAdic. noturno: ${fmtBRL(l.notVal)}`:""}${l.descontos?`\nDescontos: -${fmtBRL(l.descontos)}`:""}\n*Líquido a pagar: ${fmtBRL(l.liquido)}*\nPix: ${l.pix||"—"}`;
   const whatsFree=(l)=>`*${l.nome}*\nValor acumulado: ${fmtBRL(l.total)}\nDias trabalhados: ${l.dias}\nDatas: ${fmtD(l.datas)}\nPix: ${l.pix||"—"}`;
   const copiarUm=(txt)=>{ copyText(txt); toast("Copiado para enviar no WhatsApp"); };
   const copiarTodos=()=>{
-    if(aba==="clt"){ const txt=`💼 *Folha CLT — ${uNome}*\n_${fmtDataBR(ini)} a ${fmtDataBR(fim)}_\n\n`+linhasCLT.map(whatsCLT).join("\n\n")+`\n\n*Total líquido: ${fmtBRL(cltFolha)}*`;
-      copyText(txt); toast(`${linhasCLT.length} colaboradores CLT copiados`); }
+    if(aba==="clt"||aba==="fixo"){ const txt=`💼 *Folha ${rotuloFolha} — ${uNome}*\n_${fmtDataBR(ini)} a ${fmtDataBR(fim)}_\n\n`+linhasCLT.map(whatsCLT).join("\n\n")+`\n\n*Total líquido: ${fmtBRL(cltFolha)}*`;
+      copyText(txt); toast(`${linhasCLT.length} lançamentos copiados`); }
     else { const txt=`💰 *Pagamento freelancers — ${uNome}*\n_${fmtDataBR(ini)} a ${fmtDataBR(fim)}_\n\n`+linhasFree.map(whatsFree).join("\n\n")+`\n\n*Total: ${fmtBRL(freeTotal)}* (${freeDias} dias)`;
       copyText(txt); toast(`${linhasFree.length} freelancers copiados`); }
   };
@@ -2471,19 +2481,24 @@ function Financeiro() {
   const exportarExcel=async()=>{
     if(!window.ExcelJS){ toast("Biblioteca Excel não carregada — verifique a conexão"); return; }
     const wb=new ExcelJS.Workbook();
-    const azul="FF6366F1", cinza="FFEEF2FF";
-    // --- Aba 1: Folha CLT ---
-    const wc=wb.addWorksheet("Folha CLT");
-    wc.columns=[{width:30},{width:16},{width:14},{width:18},{width:16},{width:16},{width:18},{width:22}];
-    wc.mergeCells("A1:H1"); const tc=wc.getCell("A1"); tc.value=`Folha de fechamento CLT — ${uNome}`; tc.font={bold:true,size:15,color:{argb:"FF1E1B4B"}};
-    wc.mergeCells("A2:H2"); wc.getCell("A2").value=`Período: ${fmtDataBR(ini)} a ${fmtDataBR(fim)}`; wc.getCell("A2").font={italic:true,color:{argb:"FF64748B"}};
-    const hc=wc.addRow(["Colaborador","Salário base","Horas extras","Valor extras","Adic. noturno","Descontos","Líquido a pagar","Pix"]);
-    hc.eachCell(cell=>{ cell.font={bold:true,color:{argb:"FFFFFFFF"}}; cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:azul}}; cell.alignment={horizontal:"center"}; });
-    linhasCLT.forEach(l=>{ const r=wc.addRow([l.nome,l.salario,fmtHoras(l.extrasHoras),l.extrasVal,l.notVal,-l.descontos,l.liquido,l.pix||""]);
-      [2,4,5,6,7].forEach(i=>r.getCell(i).numFmt='"R$" #,##0.00'); r.getCell(7).font={bold:true}; });
-    const tcTot=wc.addRow(["TOTAL",cltSalarios,"",cltExtras,"","",cltFolha,""]); tcTot.eachCell(cell=>{ cell.font={bold:true}; cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:cinza}}; });
-    [2,4,7].forEach(i=>tcTot.getCell(i).numFmt='"R$" #,##0.00');
-    // --- Aba 2: Pagamento freelancers ---
+    const cinza="FFEEF2FF";
+    // helper: escreve uma folha (CLT ou Freela Fixo) com salário + extras
+    const addFolha=(nomeAba,titulo,linhas,cabecor)=>{
+      const wc=wb.addWorksheet(nomeAba);
+      wc.columns=[{width:30},{width:16},{width:14},{width:18},{width:16},{width:16},{width:18},{width:22}];
+      wc.mergeCells("A1:H1"); const tc=wc.getCell("A1"); tc.value=`${titulo} — ${uNome}`; tc.font={bold:true,size:15,color:{argb:"FF1E1B4B"}};
+      wc.mergeCells("A2:H2"); wc.getCell("A2").value=`Período: ${fmtDataBR(ini)} a ${fmtDataBR(fim)}`; wc.getCell("A2").font={italic:true,color:{argb:"FF64748B"}};
+      const hc=wc.addRow(["Colaborador","Salário base","Horas extras","Valor extras","Adic. noturno","Descontos","Líquido a pagar","Pix"]);
+      hc.eachCell(cell=>{ cell.font={bold:true,color:{argb:"FFFFFFFF"}}; cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:cabecor}}; cell.alignment={horizontal:"center"}; });
+      linhas.forEach(l=>{ const r=wc.addRow([l.nome,l.salario,fmtHoras(l.extrasHoras),l.extrasVal,l.notVal,-l.descontos,l.liquido,l.pix||""]);
+        [2,4,5,6,7].forEach(i=>r.getCell(i).numFmt='"R$" #,##0.00'); r.getCell(7).font={bold:true}; });
+      const T=linhas.reduce((s,l)=>s+l.liquido,0), S=linhas.reduce((s,l)=>s+l.salario,0), E=linhas.reduce((s,l)=>s+l.extrasVal,0);
+      const tot=wc.addRow(["TOTAL",S,"",E,"","",T,""]); tot.eachCell(cell=>{ cell.font={bold:true}; cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:cinza}}; });
+      [2,4,7].forEach(i=>tot.getCell(i).numFmt='"R$" #,##0.00');
+    };
+    addFolha("Folha CLT","Folha de fechamento CLT",linhasCLTreais,"FF6366F1");
+    addFolha("Freela Fixo","Folha Freela Fixo",linhasFixo,"FFEA580C");
+    // --- Aba: Pagamento freelancers ---
     const wf=wb.addWorksheet("Freelancers");
     wf.columns=[{width:30},{width:16},{width:20},{width:22},{width:36}];
     wf.mergeCells("A1:E1"); const tf=wf.getCell("A1"); tf.value=`Pagamento freelancers — ${uNome}`; tf.font={bold:true,size:15,color:{argb:"FF1E1B4B"}};
@@ -2494,10 +2509,10 @@ function Financeiro() {
     const tfTot=wf.addRow(["TOTAL",freeDias,freeTotal,"",""]); tfTot.eachCell(cell=>{ cell.font={bold:true}; cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFFFF1E8"}}; }); tfTot.getCell(3).numFmt='"R$" #,##0.00';
     const buf=await wb.xlsx.writeBuffer(); const blob=new Blob([buf],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
     const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`folha_${uNome.replace(/\s+/g,"-")}_${ini}.xlsx`; a.click(); URL.revokeObjectURL(url);
-    toast("Excel gerado: Folha CLT + Freelancers");
+    toast("Excel gerado: Folha CLT + Freela Fixo + Freelancers");
   };
 
-  const abas=[["clt","Folha CLT"],["freela","Pagamento freelancers"]];
+  const abas=[["clt","Folha CLT"],["fixo","Freela Fixo"],["freela","Pagamento freelancers"]];
   return <div className="fade-in">
     <PageHeader title="Relatórios financeiros" sub="Folha CLT (salário + extras) e pagamento de freelancers · filtro por período e casa · Excel · WhatsApp">
       <Btn variant="ghost" icon={I.copy} onClick={copiarTodos}>Copiar p/ WhatsApp</Btn>
@@ -2515,11 +2530,11 @@ function Financeiro() {
       </Select></Field>
     </div></Card>
 
-    {aba==="clt" ? <>
+    {(aba==="clt"||aba==="fixo") ? <>
       <div className="grid sm:grid-cols-3 gap-3 mb-4">
-        <StatCard icon={I.wallet} label="Folha líquida CLT" value={fmtBRL(cltFolha)} tone="brand"/>
+        <StatCard icon={I.wallet} label={aba==="fixo"?"Folha líquida Freela Fixo":"Folha líquida CLT"} value={fmtBRL(cltFolha)} tone={aba==="fixo"?"free":"brand"}/>
         <StatCard icon={I.chart} label="Valor em horas extras" value={fmtBRL(cltExtras)} tone="amber"/>
-        <StatCard icon={I.user} label="Colaboradores CLT" value={linhasCLT.length} tone="green"/>
+        <StatCard icon={I.user} label={aba==="fixo"?"Freelas fixos":"Colaboradores CLT"} value={linhasCLT.length} tone="green"/>
       </div>
       <Card className="overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm min-w-[860px]">
         <thead><tr className="text-left text-slate-400 border-b border-slate-100">{["Colaborador","Salário base","Horas extras","Adic. noturno","Descontos","Líquido a pagar","Pix","WhatsApp"].map(h=><th key={h} className="px-4 py-3 font-semibold">{h}</th>)}</tr></thead>
@@ -2539,14 +2554,14 @@ function Financeiro() {
             <td className="px-4 py-3 font-mono text-xs text-slate-500">{l.pix||"—"}</td>
             <td className="px-4 py-3"><Btn size="sm" variant="soft" icon={I.copy} onClick={()=>copiarUm(whatsCLT(l))}>Copiar</Btn></td>
           </tr>)}
-          {linhasCLT.length===0 && <tr><td colSpan="8" className="px-4 py-8 text-center text-slate-400">Nenhum colaborador CLT nesta casa.</td></tr>}
+          {linhasCLT.length===0 && <tr><td colSpan="8" className="px-4 py-8 text-center text-slate-400">Nenhum {aba==="fixo"?"freela fixo":"colaborador CLT"} nesta casa.</td></tr>}
         </tbody>
         {linhasCLT.length>0 && <tfoot><tr className="border-t-2 border-slate-100 bg-slate-50/60">
           <td className="px-4 py-3 font-bold">Total</td><td className="px-4 py-3 font-bold tabular-nums">{fmtBRL(cltSalarios)}</td>
           <td className="px-4 py-3 font-bold text-emerald-700 tabular-nums">{fmtBRL(cltExtras)}</td><td/>
           <td/><td className="px-4 py-3 font-extrabold text-brand-700 tabular-nums">{fmtBRL(cltFolha)}</td><td colSpan="2"/></tr></tfoot>}
       </table></div></Card>
-      <p className="text-xs text-slate-400 mt-3">Extras: 50% em dia útil e 100% em folga trabalhada (Art. 59) · adicional noturno 20% entre 22h e 5h (Art. 73) · base da hora = salário ÷ 220. Se um CLT (ex.: Thiago) não aparecer aqui, confira em Colaboradores CLT se o vínculo dele está como CLT e se a casa é a selecionada.</p>
+      <p className="text-xs text-slate-400 mt-3">{aba==="fixo"?"Freela Fixo: salário mensal definido pelo gerente + extras (50% dia útil, 100% folga) e adicional noturno 20%. ":"Extras: 50% em dia útil e 100% em folga trabalhada (Art. 59) · adicional noturno 20% entre 22h e 5h (Art. 73) · base da hora = salário ÷ 220. "}O valor das horas extras é editável. Cadastre em “Colaboradores CLT & Freela Fixo”.</p>
     </> : <>
       <div className="grid sm:grid-cols-3 gap-3 mb-4">
         <StatCard icon={I.wallet} label="Total a pagar (freelas)" value={fmtBRL(freeTotal)} tone="free"/>
