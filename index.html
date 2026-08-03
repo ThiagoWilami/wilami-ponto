@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- build: folga escolhida pelo gerente (repete semanal) + freela dobra/edit + folha mes atual + 4 batidas ao vivo 2026-08-03 -->
+<!-- build: folha de freelancers sempre lista o roster da casa (nunca vazia sem explicacao) 2026-08-03 -->
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8" />
@@ -2149,11 +2149,13 @@ function Pagamentos() {
   const [aberto,setAberto]=useState(null); // freelancer expandido (edição de turnos/valor por jornada)
 
   const dentro=(j)=> (!ini||j.data>=ini) && (!fim||j.data<=fim) && (uni==="todas"||j.unidade===Number(uni));
+  const daCasa=(fr)=> uni==="todas" || Number(fr.unidade)===Number(uni);
   const linhas = freelas.map(fr=>{
     const js=(fr.jornadasHist||[]).filter(dentro).sort((a,b)=>(a.data<b.data?-1:1));
-    return { id:fr.id, nome:fr.nome, cargo:fr.cargo, pix:fr.pix, jornadas:js.length, js,
+    return { id:fr.id, nome:fr.nome, cargo:fr.cargo, pix:fr.pix, unidade:fr.unidade, jornadas:js.length, js,
       horas:js.reduce((s,j)=>s+j.horas,0), total:js.reduce((s,j)=>s+j.valor,0), casas:[...new Set(js.map(j=>j.unidade))] };
-  }).filter(l=>l.jornadas>0);
+  // inclui também os freelancers cadastrados na casa (mesmo sem jornada no período)
+  }).filter(l=> l.jornadas>0 || daCasa(l)).sort((a,b)=>b.total-a.total);
   const totalGeral=linhas.reduce((s,l)=>s+l.total,0);
   const horasGeral=linhas.reduce((s,l)=>s+l.horas,0);
 
@@ -2446,9 +2448,11 @@ function Financeiro() {
 
   /* ===================== PAGAMENTO FREELANCERS ===================== */
   const dentroFree=(j)=> naData(j.data) && (uni==="todas"||j.unidade===Number(uni));
+  const daCasa=(fr)=> uni==="todas" || Number(fr.unidade)===Number(uni);
   const linhasFree = freelas.map(fr=>{ const js=(fr.jornadasHist||[]).filter(dentroFree);
-    return { id:fr.id, nome:fr.nome, pix:fr.pix, dias:js.length, total:js.reduce((s,j)=>s+j.valor,0), datas:js.map(j=>j.data).sort() };
-  }).filter(l=>l.dias>0);
+    return { id:fr.id, nome:fr.nome, pix:fr.pix, unidade:fr.unidade, dias:js.length, total:js.reduce((s,j)=>s+j.valor,0), datas:js.map(j=>j.data).sort() };
+  // mostra quem trabalhou no período E também os freelancers cadastrados na casa (mesmo sem jornada), p/ a folha nunca ficar vazia sem explicação
+  }).filter(l=> l.dias>0 || daCasa(l)).sort((a,b)=>b.total-a.total);
   const freeTotal=linhasFree.reduce((s,l)=>s+l.total,0);
   const freeDias=linhasFree.reduce((s,l)=>s+l.dias,0);
 
