@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- build: pagamentos freela por semana + pagar semana + parciais/adiantamento + saldo do mes 2026-08-04b -->
+<!-- build: gerentes/diretor sem ponto na folha (cargo de confianca) + pagamento diretoria sigiloso (so diretor/financeira) + papeis diretor/financeira 2026-08-04c -->
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8" />
@@ -499,9 +499,12 @@ const PERMS_INIT = {
   // Gerente: pode INCLUIR e AJUSTAR (escala, colaboradores, unidades, ajustes de ponto), mas NÃO pode apagar (excluir:false).
   gerente:       { escala:true,  colaboradores:true,  financeiro:true,  documentos:true,  equipe:false, unidades:true,  ajustes:true,  excluir:false },
   rh_financeiro: { escala:false, colaboradores:true,  financeiro:true,  documentos:true,  equipe:false, unidades:false, ajustes:false, excluir:false },
+  diretor:       { escala:true,  colaboradores:true,  financeiro:true,  documentos:true,  equipe:true,  unidades:true,  ajustes:true,  excluir:true  },
+  financeira:    { escala:false, colaboradores:true,  financeiro:true,  documentos:true,  equipe:false, unidades:false, ajustes:false, excluir:false },
 };
 const CAPS = [["escala","Editar escala"],["colaboradores","Gerir colaboradores"],["financeiro","Relatórios financeiros"],["documentos","Documentos e dossiê"],["unidades","Gerir unidades"],["ajustes","Aprovar ajustes de ponto"],["equipe","Gerir equipe"],["excluir","Excluir/apagar dados"]];
-const PAPEIS = { proprietario:"Proprietário", gerente:"Gerente", rh_financeiro:"RH / Financeiro" };
+// "diretor" e "financeira" (Diretora Financeira) são os únicos que enxergam o pagamento SIGILOSO da diretoria.
+const PAPEIS = { proprietario:"Proprietário", gerente:"Gerente", rh_financeiro:"RH / Financeiro", diretor:"Diretor", financeira:"Diretora Financeira" };
 
 // Coleção PÚBLICA de auto-cadastros (feitos pelo celular, sem login).
 // Cada cadastro é um documento próprio → o celular só CRIA (não sobrescreve a base).
@@ -661,7 +664,12 @@ function StoreProvider({children}) {
   const meuNome = (meuBind&&meuBind.nome) || _nomeLocal || (semAuth?"Gestor":"Usuário");
   const meuPapel = semAuth ? "Proprietário" : (ehDono ? "Administrador" : "Gerente");
   const casaRestrita = (!ehDono && meuBind && meuBind.unidade && meuBind.unidade!=="todas") ? meuBind.unidade : null;
-  const acesso={ pronto:acessoPronto, ehDono, tenantBind, semAcesso, email:meuEmail, minhaChave, nome:meuNome, papel:meuPapel, casa:casaRestrita };
+  const papelKey = (meuBind&&meuBind.papel) || (semAuth?"proprietario":(ehDono?"proprietario":""));
+  // Sigilo da diretoria: quem enxerga o valor do pagamento marcado como sigiloso.
+  // Regra escolhida pelo cliente ("Só Diretor + Financeira"); o dono/administrador da conta também vê
+  // (é o próprio titular), mas gerentes e RH comuns NÃO veem.
+  const podeSigilo = semAuth || ehDono || papelKey==="diretor" || papelKey==="financeira";
+  const acesso={ pronto:acessoPronto, ehDono, tenantBind, semAcesso, email:meuEmail, minhaChave, nome:meuNome, papel:meuPapel, papelKey, podeSigilo, casa:casaRestrita };
   // Listas expostas = base (admin) + auto-cadastros do celular (mesclados por vínculo)
   const clts=[...cltsBase, ...cadAuto.filter(c=>c.tipo==="clt")];
   const freelas=[...freelasBase, ...cadAuto.filter(c=>c.tipo==="free")];
@@ -708,7 +716,9 @@ function StoreProvider({children}) {
     if(ehAuto(c.id)){ cadOps.update(c._docId||docIdDe(c.id), c); return; }
     if(c.id){ setClts(prev=>prev.map(x=>x.id===c.id?{...x,...c}:x)); }
     else { const novo={...c,id:nextId(cltsBase.length?cltsBase:[{id:0}]),banco:"+00h00",extras:"0h00",atrasos:"0h00",docs:c.docs||{contrato:false,exames:false,ctps:false,rg:false},status:"ativo"};
-      setClts(prev=>[...prev,novo]); gerarEscalaFixa(novo.id, c.escala||"6x1", c.unidade, false, c.folgaDia); }
+      setClts(prev=>[...prev,novo]);
+      // Cargo de confiança NÃO entra na escala (não bate ponto). CLT/Freela Fixo entram normalmente.
+      if(c.vinculo!=="confianca") gerarEscalaFixa(novo.id, c.escala||"6x1", c.unidade, false, c.folgaDia); }
   };
   const salvarFreela=(f)=>{
     if(ehAuto(f.id)){ cadOps.update(f._docId||docIdDe(f.id), f); return; }
@@ -1824,9 +1834,12 @@ function PontoKiosk({ mode, onClose }) {
 /* ============================ FORM DE COLABORADOR ============================ */
 function ColabForm({ tipo, inicial, onSalvar, onClose, vinculo }) {
   const ehFixo = vinculo==="fixo" || inicial?.vinculo==="fixo";
+  const ehConf = vinculo==="confianca" || inicial?.vinculo==="confianca"; // cargo de confiança: NÃO bate ponto, só salário na folha
   const { unidades, cargosFreela } = useStore();
   const cg0 = cargosFreela[0];
-  const [f,setF]=useState(inicial || (tipo==="clt"
+  const [f,setF]=useState(inicial || (ehConf
+    ? { nome:"", cargo:"Gerente", unidade:"todas", salario:0, sigiloso:false, cpf:"", tel:"", tipoPix:"CPF", pix:"", banco:"", foto:"" }
+    : tipo==="clt"
     ? { nome:"", cargo:CARGOS[0], setor:"salao", escala:"6x1", folgaDia:6, unidade:unidades[0]?.id, admissao:"", salario:0, cpf:"", tel:"", tipoPix:"CPF", pix:"", banco:"", foto:"", docs:{} }
     : { nome:"", cargo:cg0?.nome||"", setor:"salao", unidade:unidades[0]?.id, valor:cg0?.valor||0, cpf:"", tel:"", tipoPix:"CPF", pix:"", banco:"", foto:"" }));
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
@@ -1845,8 +1858,8 @@ function ColabForm({ tipo, inicial, onSalvar, onClose, vinculo }) {
   // Lista clara do que falta — evita "botão desativado sem explicação"
   const faltando=[];
   if(!nomeOk) faltando.push("nome");
-  if(!f.foto) faltando.push("foto");
-  if(!(f.cpf||"").trim()) faltando.push("CPF");
+  if(!ehConf && !f.foto) faltando.push("foto");           // confiança não bate ponto → foto não é obrigatória
+  if(!ehConf && !(f.cpf||"").trim()) faltando.push("CPF");
   if(tipo==="free"){
     if(!f.cargo) faltando.push("cargo");
     if(!f.tipoPix) faltando.push("tipo Pix");
@@ -1859,13 +1872,17 @@ function ColabForm({ tipo, inicial, onSalvar, onClose, vinculo }) {
     {/* Cabeçalho fixo com botão de VOLTAR intuitivo */}
     <div className="flex items-center gap-2 px-5 py-3 border-b border-slate-100 shrink-0">
       <button onClick={onClose} className="flex items-center gap-1 text-sm font-semibold text-slate-600 hover:text-slate-900 -ml-1 pr-2"><Icon d={I.arrow} className="w-4 h-4 rotate-180"/>Voltar</button>
-      <h3 className="text-base font-bold text-slate-900 ml-1">{inicial?(ehFixo?"Editar Freela Fixo":"Editar"):ehFixo?"Contratar Freela Fixo":tipo==="clt"?"Contratar CLT":"Novo freelancer"}</h3>
+      <h3 className="text-base font-bold text-slate-900 ml-1">{inicial?(ehConf?"Editar cargo de confiança":ehFixo?"Editar Freela Fixo":"Editar"):ehConf?"Novo cargo de confiança":ehFixo?"Contratar Freela Fixo":tipo==="clt"?"Contratar CLT":"Novo freelancer"}</h3>
       <button onClick={onClose} className="ml-auto text-slate-400 hover:text-slate-600"><Icon d={I.x}/></button>
     </div>
     {/* Corpo rolável */}
     <div className="overflow-y-auto px-5 py-4">
+    {ehConf && <div className="mb-3 p-3 rounded-2xl border border-indigo-200 bg-indigo-50/50 text-sm text-indigo-800 flex items-start gap-2">
+      <Icon d={I.shield} className="w-4 h-4 mt-0.5 shrink-0"/>
+      <span>Cargo de confiança (gerente/diretor): <b>não bate ponto</b> e <b>não entra na escala</b>. Recebe salário mensal fixo e aparece na folha em “Gerência &amp; Diretoria”.</span>
+    </div>}
     {/* Foto do colaborador (OBRIGATÓRIA) — referência facial do check-in */}
-    <div className={cx("flex items-center gap-3 mb-3 p-3 rounded-2xl border", f.foto?"border-emerald-200 bg-emerald-50/40":"border-rose-200 bg-rose-50/40")}>
+    {!ehConf && <div className={cx("flex items-center gap-3 mb-3 p-3 rounded-2xl border", f.foto?"border-emerald-200 bg-emerald-50/40":"border-rose-200 bg-rose-50/40")}>
       <div className="w-16 h-16 rounded-2xl overflow-hidden bg-white ring-1 ring-slate-200 grid place-items-center shrink-0">
         {f.foto ? <img src={f.foto} alt="foto" className="w-full h-full object-cover"/> : <Icon d={I.camera} className="w-6 h-6 text-slate-300"/>}
       </div>
@@ -1880,10 +1897,17 @@ function ColabForm({ tipo, inicial, onSalvar, onClose, vinculo }) {
           {f.foto && <button onClick={()=>set("foto","")} className="text-xs font-semibold text-slate-500 hover:text-rose-500 px-2">Remover</button>}
         </div>
       </div>
-    </div>
+    </div>}
     <div className="grid sm:grid-cols-2 gap-3">
       <div className="sm:col-span-2"><Field label={req("Nome e sobrenome")}><Input value={f.nome} onChange={e=>set("nome",e.target.value)} placeholder="Ex.: João da Silva"/></Field></div>
-      {tipo==="clt" ? <>
+      {ehConf ? <>
+        <Field label="Cargo (confiança)"><Select value={f.cargo} onChange={e=>set("cargo",e.target.value)}>{["Gerente","Gerente geral","Diretor","Diretora Financeira","Coordenador","Sócio","Supervisor"].map(c=><option key={c}>{c}</option>)}</Select></Field>
+        <Field label="Unidade (casa)"><Select value={f.unidade} onChange={e=>set("unidade",e.target.value==="todas"?"todas":Number(e.target.value))}>
+          <option value="todas">Todas as casas</option>{unidades.map(u=><option key={u.id} value={u.id}>{u.nome}</option>)}
+        </Select></Field>
+        <Field label="Salário mensal (R$)"><Input type="number" value={f.salario||0} onChange={e=>set("salario",Number(e.target.value))} placeholder="Ex.: 6000"/></Field>
+        <Field label="Telefone"><Input value={f.tel} onChange={e=>set("tel",e.target.value)} placeholder="(00) 00000-0000"/></Field>
+      </> : tipo==="clt" ? <>
         <Field label="Cargo / função"><Select value={f.cargo} onChange={e=>setCargoClt(e.target.value)}>{CARGOS.map(c=><option key={c}>{c}</option>)}</Select></Field>
         <Field label="Setor"><Select value={f.setor} onChange={e=>set("setor",e.target.value)}>{SETORES.map(([k,l])=><option key={k} value={k}>{l}</option>)}</Select></Field>
         <Field label="Unidade (casa)"><Select value={f.unidade} onChange={e=>set("unidade",Number(e.target.value))}>{unidades.map(u=><option key={u.id} value={u.id}>{u.nome}</option>)}</Select></Field>
@@ -1899,14 +1923,22 @@ function ColabForm({ tipo, inicial, onSalvar, onClose, vinculo }) {
         <Field label="Unidade (casa)"><Select value={f.unidade} onChange={e=>set("unidade",Number(e.target.value))}>{unidades.map(u=><option key={u.id} value={u.id}>{u.nome}</option>)}</Select></Field>
         <Field label="Telefone"><Input value={f.tel} onChange={e=>set("tel",e.target.value)} placeholder="(00) 00000-0000"/></Field>
       </>}
-      <Field label={req("CPF")}><Input value={f.cpf} onChange={e=>set("cpf",e.target.value)} placeholder="000.000.000-00"/></Field>
-      {tipo==="clt" && <Field label="Telefone"><Input value={f.tel} onChange={e=>set("tel",e.target.value)} placeholder="(00) 00000-0000"/></Field>}
-      <Field label={req("Tipo de Pix")}><Select value={f.tipoPix} onChange={e=>set("tipoPix",e.target.value)}>{PIX_TIPOS.map(t=><option key={t}>{t}</option>)}</Select></Field>
-      <Field label={req("Chave Pix")}><Input value={f.pix} onChange={e=>set("pix",e.target.value)} placeholder="conforme o tipo de Pix"/></Field>
-      <Field label={req("Nome do Banco")}><Input value={f.banco} onChange={e=>set("banco",e.target.value)} placeholder="Ex.: Nubank, Itaú, Caixa"/></Field>
+      <Field label={ehConf?"CPF":req("CPF")}><Input value={f.cpf} onChange={e=>set("cpf",e.target.value)} placeholder="000.000.000-00"/></Field>
+      {tipo==="clt" && !ehConf && <Field label="Telefone"><Input value={f.tel} onChange={e=>set("tel",e.target.value)} placeholder="(00) 00000-0000"/></Field>}
+      <Field label={ehConf?"Tipo de Pix":req("Tipo de Pix")}><Select value={f.tipoPix} onChange={e=>set("tipoPix",e.target.value)}>{PIX_TIPOS.map(t=><option key={t}>{t}</option>)}</Select></Field>
+      <Field label={ehConf?"Chave Pix":req("Chave Pix")}><Input value={f.pix} onChange={e=>set("pix",e.target.value)} placeholder="conforme o tipo de Pix"/></Field>
+      <Field label={ehConf?"Nome do Banco":req("Nome do Banco")}><Input value={f.banco} onChange={e=>set("banco",e.target.value)} placeholder="Ex.: Nubank, Itaú, Caixa"/></Field>
     </div>
+    {ehConf && <div className="mt-4 p-3 rounded-2xl border border-slate-200 bg-slate-50/70">
+      <label className="flex items-start gap-3 cursor-pointer">
+        <button type="button" onClick={()=>set("sigiloso",!f.sigiloso)} className={cx("w-10 h-6 rounded-full inline-flex p-0.5 transition shrink-0 mt-0.5", f.sigiloso?"grad-brand":"bg-slate-300")}>
+          <span className={cx("w-5 h-5 bg-white rounded-full transition", f.sigiloso&&"translate-x-4")}/>
+        </button>
+        <span className="text-sm text-slate-700"><b>Pagamento sigiloso (diretoria)</b><br/><span className="text-xs text-slate-500">Quando ligado, o valor deste salário na folha fica visível <b>apenas para o Diretor e a Diretora Financeira</b> — os demais gestores veem o nome, mas o valor aparece bloqueado.</span></span>
+      </label>
+    </div>}
 
-    {tipo==="clt" && <div className="mt-4">
+    {tipo==="clt" && !ehConf && <div className="mt-4">
       <button onClick={()=>setShowDocs(v=>!v)} className="w-full flex items-center gap-2 text-xs font-semibold text-slate-600 hover:text-slate-900 py-2 px-3 rounded-xl bg-slate-50 border border-slate-200">
         <Icon d={I.doc} className="w-3.5 h-3.5"/> Documentos (opcional) {nDocsUp>0 && <Badge tone="green">{nDocsUp} enviado(s)</Badge>}
         <Icon d={I.arrow} className={cx("w-3.5 h-3.5 ml-auto transition", showDocs?"rotate-90":"rotate-0")}/>
@@ -1926,7 +1958,7 @@ function ColabForm({ tipo, inicial, onSalvar, onClose, vinculo }) {
           </div>;})}
       </div>}
     </div>}
-    {tipo==="clt" && !inicial && <p className="text-xs text-slate-500 mt-3 flex items-center gap-1"><Icon d={I.calendar} className="w-3.5 h-3.5"/> Ao cadastrar, o {ehFixo?"Freela Fixo":"CLT"} entra automaticamente na escala ({f.escala}) da sua casa, com a folga no dia escolhido.</p>}
+    {tipo==="clt" && !ehConf && !inicial && <p className="text-xs text-slate-500 mt-3 flex items-center gap-1"><Icon d={I.calendar} className="w-3.5 h-3.5"/> Ao cadastrar, o {ehFixo?"Freela Fixo":"CLT"} entra automaticamente na escala ({f.escala}) da sua casa, com a folga no dia escolhido.</p>}
     </div>
     {/* Rodapé fixo — sempre visível, com o que falta */}
     <div className="border-t border-slate-100 px-5 py-3 shrink-0 bg-white rounded-b-3xl">
@@ -1952,18 +1984,21 @@ function ColaboradoresCLT() {
   const [tab,setTab]=useState("dados");
   const [confirmar,setConfirmar]=useState(null);
   const [casa,setCasa]=useState("todas");
-  const [vinc,setVinc]=useState("todos"); // filtro: todos | clt | fixo
+  const [vinc,setVinc]=useState("todos"); // filtro: todos | clt | fixo | confianca
   const ehFixo=(c)=>c.vinculo==="fixo";
-  const list=clts.filter(c=>c.nome.toLowerCase().includes(q.toLowerCase()) && (casa==="todas"||c.unidade===casa)
-    && (vinc==="todos" || (vinc==="fixo"?ehFixo(c):!ehFixo(c))));
+  const ehConf=(c)=>c.vinculo==="confianca";
+  const casaOk=(c)=> casa==="todas" || c.unidade===casa || (ehConf(c)&&(c.unidade==="todas"||c.unidade==null));
+  const list=clts.filter(c=>c.nome.toLowerCase().includes(q.toLowerCase()) && casaOk(c)
+    && (vinc==="todos" || (vinc==="confianca"?ehConf(c): vinc==="fixo"?ehFixo(c): (!ehFixo(c)&&!ehConf(c)))));
 
   return <div className="fade-in">
-    <PageHeader title="Colaboradores CLT & Freela Fixo" sub="Escala fixa · salário mensal · pasta individual · cadastro, edição e exclusão">
+    <PageHeader title="Colaboradores CLT & Freela Fixo" sub="Escala fixa · salário mensal · cargos de confiança · pasta individual · cadastro, edição e exclusão">
       <Btn icon={I.plus} onClick={()=>setForm({})}>Contratar CLT</Btn>
       <Btn variant="free" icon={I.plus} onClick={()=>setForm({vinculo:"fixo"})}>Contratar Freela Fixo</Btn>
+      <Btn variant="ghost" icon={I.shield} onClick={()=>setForm({vinculo:"confianca"})}>Cargo de confiança</Btn>
     </PageHeader>
     <div className="flex flex-wrap gap-2 mb-3">
-      {[["todos","Todos"],["clt","CLT"],["fixo","Freela Fixo"]].map(([k,l])=><button key={k} onClick={()=>setVinc(k)} className={cx("px-3 py-1.5 rounded-lg text-xs font-semibold border transition", vinc===k?"grad-brand text-white border-transparent":"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>{l}</button>)}
+      {[["todos","Todos"],["clt","CLT"],["fixo","Freela Fixo"],["confianca","Confiança"]].map(([k,l])=><button key={k} onClick={()=>setVinc(k)} className={cx("px-3 py-1.5 rounded-lg text-xs font-semibold border transition", vinc===k?"grad-brand text-white border-transparent":"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>{l}</button>)}
     </div>
     <Card className="p-2 mb-3"><div className="flex items-center gap-2 px-3 py-2">
       <Icon d={I.search} className="w-4 h-4 text-slate-400"/>
@@ -1976,14 +2011,14 @@ function ColaboradoresCLT() {
           {["Colaborador","Cargo","Escala","Unidade","Banco","Docs",""].map(h=><th key={h} className="px-4 py-3 font-semibold">{h}</th>)}
         </tr></thead>
         <tbody className="divide-y divide-slate-50">
-          {list.map(c=>{ const docsOk=Object.values(c.docs).filter(Boolean).length; const docsTot=Object.keys(c.docs).length;
+          {list.map(c=>{ const _docs=c.docs||{}; const docsOk=Object.values(_docs).filter(Boolean).length; const docsTot=Object.keys(_docs).length;
             return <tr key={c.id} className="hover:bg-slate-50/70">
-              <td className="px-4 py-3"><button onClick={()=>{setPasta(c);setTab("dados");}} className="flex items-center gap-3 text-left"><Avatar name={c.nome} src={c.foto} tone={ehFixo(c)?"free":"brand"}/><span className="font-semibold text-slate-800">{c.nome}</span>{ehFixo(c)&&<Badge tone="free">Freela Fixo</Badge>}</button></td>
+              <td className="px-4 py-3"><button onClick={()=>{setPasta(c);setTab("dados");}} className="flex items-center gap-3 text-left"><Avatar name={c.nome} src={c.foto} tone={ehConf(c)?"slate":ehFixo(c)?"free":"brand"}/><span className="font-semibold text-slate-800">{c.nome}</span>{ehConf(c)&&<Badge tone="slate">Confiança</Badge>}{ehFixo(c)&&<Badge tone="free">Freela Fixo</Badge>}</button></td>
               <td className="px-4 py-3 text-slate-600">{c.cargo}</td>
-              <td className="px-4 py-3"><Badge tone="brand">{c.escala}</Badge></td>
-              <td className="px-4 py-3 text-slate-600">{unidadeNome(c.unidade,unidades)}</td>
-              <td className="px-4 py-3"><span className={cx("font-semibold", c.banco.startsWith("-")?"text-rose-600":"text-emerald-600")}>{c.banco}</span></td>
-              <td className="px-4 py-3"><Badge tone={docsOk===docsTot?"green":"amber"}>{docsOk}/{docsTot}</Badge></td>
+              <td className="px-4 py-3">{ehConf(c)?<Badge tone="slate">sem ponto</Badge>:<Badge tone="brand">{c.escala}</Badge>}</td>
+              <td className="px-4 py-3 text-slate-600">{ehConf(c)&&(c.unidade==="todas"||c.unidade==null)?"Todas as casas":unidadeNome(c.unidade,unidades)}</td>
+              <td className="px-4 py-3">{ehConf(c)?<span className="text-slate-400">—</span>:<span className={cx("font-semibold", (c.banco||"").startsWith("-")?"text-rose-600":"text-emerald-600")}>{c.banco}</span>}</td>
+              <td className="px-4 py-3">{ehConf(c)?<span className="text-slate-400">—</span>:<Badge tone={docsOk===docsTot?"green":"amber"}>{docsOk}/{docsTot}</Badge>}</td>
               <td className="px-4 py-3"><div className="flex gap-1 justify-end">
                 <button onClick={()=>setForm({inicial:c})} className="w-8 h-8 rounded-lg hover:bg-slate-100 grid place-items-center text-slate-500"><Icon d={I.edit} className="w-4 h-4"/></button>
                 {can("excluir") && <button onClick={()=>setConfirmar(c)} className="w-8 h-8 rounded-lg hover:bg-rose-50 grid place-items-center text-slate-400 hover:text-rose-500"><Icon d={I.trash} className="w-4 h-4"/></button>}
@@ -1996,7 +2031,7 @@ function ColaboradoresCLT() {
 
     <Modal open={!!form} onClose={()=>setForm(null)} wide>
       {form && <ColabForm tipo="clt" vinculo={form.vinculo||form.inicial?.vinculo} inicial={form.inicial} onClose={()=>setForm(null)}
-        onSalvar={(dados)=>{ const vc=form.vinculo||form.inicial?.vinculo; const rec={...dados}; if(vc) rec.vinculo=vc; salvarClt(form.inicial?{...form.inicial,...rec}:rec); setForm(null); toast(form.inicial?"Colaborador atualizado":(vc==="fixo"?"Freela Fixo cadastrado e escalado":"CLT contratado e escalado")); }}/>}
+        onSalvar={(dados)=>{ const vc=form.vinculo||form.inicial?.vinculo; const rec={...dados}; if(vc) rec.vinculo=vc; salvarClt(form.inicial?{...form.inicial,...rec}:rec); setForm(null); toast(form.inicial?"Colaborador atualizado":(vc==="confianca"?"Cargo de confiança cadastrado na folha":vc==="fixo"?"Freela Fixo cadastrado e escalado":"CLT contratado e escalado")); }}/>}
     </Modal>
 
     <Modal open={!!confirmar} onClose={()=>setConfirmar(null)}>
@@ -2542,7 +2577,8 @@ function LinksQR() {
 
 /* ============================ RELATÓRIOS FINANCEIROS ============================ */
 function Financeiro() {
-  const { freelasComPagamentos:freelas, clts, unidades, registros, pontoHist, getDossie, cltExtraAjuste, setCltExtra } = useStore();
+  const { freelasComPagamentos:freelas, clts, unidades, registros, pontoHist, getDossie, cltExtraAjuste, setCltExtra, acesso } = useStore();
+  const podeSigilo = !acesso || acesso.podeSigilo;   // sem contexto (offline) → mostra tudo
   const toast=useContext(ToastCtx);
   const [aba,setAba]=useState("clt");                 // "clt" (folha) | "freela" (pagamentos)
   const _mr=mesAtualRange();
@@ -2579,7 +2615,7 @@ function Financeiro() {
       extrasMin, extras100Min, extrasHoras:extrasMin+extras100Min, extrasVal, extrasEditado, notMin, notVal,
       descontos, faltasQtd:faltas.length, atrasosQtd:atrasosD.length, liquido, semSalario:!salario };
   });
-  const cltsReais = clts.filter(c=>c.vinculo!=="fixo");
+  const cltsReais = clts.filter(c=>c.vinculo!=="fixo" && c.vinculo!=="confianca");
   const fixos = clts.filter(c=>c.vinculo==="fixo");
   const linhasCLTreais = folhaDe(cltsReais);
   const linhasFixo = folhaDe(fixos);
@@ -2588,6 +2624,17 @@ function Financeiro() {
   const cltFolha=linhasCLT.reduce((s,l)=>s+l.liquido,0);
   const cltExtras=linhasCLT.reduce((s,l)=>s+l.extrasVal,0);
   const cltSalarios=linhasCLT.reduce((s,l)=>s+l.salario,0);
+
+  /* ===================== GERÊNCIA & DIRETORIA (cargo de confiança, sem ponto) ===================== */
+  // Salário mensal fixo, sem apuração de ponto. Filtro por casa considera "todas as casas".
+  const confs = clts.filter(c=>c.vinculo==="confianca" && (uni==="todas"||c.unidade===Number(uni)||c.unidade==="todas"||c.unidade==null));
+  const linhasConf = confs.map(c=>({ id:c.id, nome:c.nome, foto:c.foto, cargo:c.cargo, pix:c.pix, salario:Number(c.salario||0),
+    sigiloso:!!c.sigiloso, oculto:(!!c.sigiloso && !podeSigilo), semSalario:!Number(c.salario||0),
+    unidade:(c.unidade==="todas"||c.unidade==null)?"Todas as casas":unidadeNome(c.unidade,unidades) }))
+    .sort((a,b)=>b.salario-a.salario);
+  // Total da folha de confiança conta apenas o que o usuário PODE ver (linhas sigilosas ocultas não somam).
+  const confFolhaVisivel = linhasConf.filter(l=>!l.oculto).reduce((s,l)=>s+l.salario,0);
+  const confOcultos = linhasConf.filter(l=>l.oculto).length;
 
   /* ===================== PAGAMENTO FREELANCERS ===================== */
   const dentroFree=(j)=> naData(j.data) && (uni==="todas"||j.unidade===Number(uni));
@@ -2603,10 +2650,14 @@ function Financeiro() {
   const rotuloFolha = aba==="fixo"?"Freela Fixo":"CLT";
   const whatsCLT=(l)=>`*${l.nome}* (${rotuloFolha})\nSalário base: ${fmtBRL(l.salario)}\nHoras extras: ${fmtHoras(l.extrasHoras)} = ${fmtBRL(l.extrasVal)}${l.notVal?`\nAdic. noturno: ${fmtBRL(l.notVal)}`:""}${l.descontos?`\nDescontos: -${fmtBRL(l.descontos)}`:""}\n*Líquido a pagar: ${fmtBRL(l.liquido)}*\nPix: ${l.pix||"—"}`;
   const whatsFree=(l)=>`*${l.nome}*\nValor acumulado: ${fmtBRL(l.total)}\nDias trabalhados: ${l.dias}\nDatas: ${fmtD(l.datas)}\nPix: ${l.pix||"—"}`;
+  const whatsConf=(l)=>`*${l.nome}* (${l.cargo})\nSalário mensal: ${fmtBRL(l.salario)}\nPix: ${l.pix||"—"}`;
   const copiarUm=(txt)=>{ copyText(txt); toast("Copiado para enviar no WhatsApp"); };
   const copiarTodos=()=>{
     if(aba==="clt"||aba==="fixo"){ const txt=`💼 *Folha ${rotuloFolha} — ${uNome}*\n_${fmtDataBR(ini)} a ${fmtDataBR(fim)}_\n\n`+linhasCLT.map(whatsCLT).join("\n\n")+`\n\n*Total líquido: ${fmtBRL(cltFolha)}*`;
       copyText(txt); toast(`${linhasCLT.length} lançamentos copiados`); }
+    else if(aba==="confianca"){ const vis=linhasConf.filter(l=>!l.oculto);
+      const txt=`🛡️ *Gerência & Diretoria — ${uNome}*\n\n`+vis.map(whatsConf).join("\n\n")+`\n\n*Total: ${fmtBRL(confFolhaVisivel)}*`+(confOcultos>0?`\n\n_(${confOcultos} pagamento(s) sigiloso(s) não incluídos)_`:"");
+      copyText(txt); toast(`${vis.length} cargo(s) de confiança copiados`); }
     else { const txt=`💰 *Pagamento freelancers — ${uNome}*\n_${fmtDataBR(ini)} a ${fmtDataBR(fim)}_\n\n`+linhasFree.map(whatsFree).join("\n\n")+`\n\n*Total: ${fmtBRL(freeTotal)}* (${freeDias} dias)`;
       copyText(txt); toast(`${linhasFree.length} freelancers copiados`); }
   };
@@ -2641,14 +2692,24 @@ function Financeiro() {
     hf.eachCell(cell=>{ cell.font={bold:true,color:{argb:"FFFFFFFF"}}; cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFEA580C"}}; cell.alignment={horizontal:"center"}; });
     linhasFree.forEach(l=>{ const r=wf.addRow([l.nome,l.dias,l.total,l.pix||"",fmtD(l.datas)]); r.getCell(3).numFmt='"R$" #,##0.00'; r.getCell(3).font={bold:true}; });
     const tfTot=wf.addRow(["TOTAL",freeDias,freeTotal,"",""]); tfTot.eachCell(cell=>{ cell.font={bold:true}; cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFFFF1E8"}}; }); tfTot.getCell(3).numFmt='"R$" #,##0.00';
+    // --- Aba: Gerência & Diretoria (cargo de confiança) — pagamentos sigilosos ocultos p/ quem não é diretor/financeira ---
+    if(linhasConf.length){
+      const wg=wb.addWorksheet("Gerencia e Diretoria");
+      wg.columns=[{width:30},{width:20},{width:18},{width:18},{width:24}];
+      wg.mergeCells("A1:E1"); const tg=wg.getCell("A1"); tg.value=`Gerência & Diretoria — ${uNome}`; tg.font={bold:true,size:15,color:{argb:"FF1E1B4B"}};
+      const hg=wg.addRow(["Nome","Cargo","Casa","Salário mensal","Pix"]);
+      hg.eachCell(cell=>{ cell.font={bold:true,color:{argb:"FFFFFFFF"}}; cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FF4338CA"}}; cell.alignment={horizontal:"center"}; });
+      linhasConf.forEach(l=>{ const r=wg.addRow([l.nome,l.cargo,l.unidade, l.oculto?"(sigiloso)":l.salario, l.oculto?"":(l.pix||"")]); if(!l.oculto){ r.getCell(4).numFmt='"R$" #,##0.00'; r.getCell(4).font={bold:true}; } });
+      const gTot=wg.addRow(["TOTAL"+(podeSigilo?"":" (visível)"),"","",confFolhaVisivel,""]); gTot.eachCell(cell=>{ cell.font={bold:true}; cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFEEF2FF"}}; }); gTot.getCell(4).numFmt='"R$" #,##0.00';
+    }
     const buf=await wb.xlsx.writeBuffer(); const blob=new Blob([buf],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
     const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`folha_${uNome.replace(/\s+/g,"-")}_${ini}.xlsx`; a.click(); URL.revokeObjectURL(url);
     toast("Excel gerado: Folha CLT + Freela Fixo + Freelancers");
   };
 
-  const abas=[["clt","Folha CLT"],["fixo","Freela Fixo"],["freela","Pagamento freelancers"]];
+  const abas=[["clt","Folha CLT"],["fixo","Freela Fixo"],["confianca","Gerência & Diretoria"],["freela","Pagamento freelancers"]];
   return <div className="fade-in">
-    <PageHeader title="Relatórios financeiros" sub="Folha CLT (salário + extras) e pagamento de freelancers · filtro por período e casa · Excel · WhatsApp">
+    <PageHeader title="Relatórios financeiros" sub="Folha CLT · Freela Fixo · Gerência & Diretoria · pagamento de freelancers · filtro por período e casa · Excel · WhatsApp">
       <Btn variant="ghost" icon={I.copy} onClick={copiarTodos}>Copiar p/ WhatsApp</Btn>
       <Btn icon={I.download} onClick={exportarExcel}>Exportar Excel</Btn>
     </PageHeader>
@@ -2696,6 +2757,34 @@ function Financeiro() {
           <td/><td className="px-4 py-3 font-extrabold text-brand-700 tabular-nums">{fmtBRL(cltFolha)}</td><td colSpan="2"/></tr></tfoot>}
       </table></div></Card>
       <p className="text-xs text-slate-400 mt-3">{aba==="fixo"?"Freela Fixo: salário mensal definido pelo gerente + extras (50% dia útil, 100% folga) e adicional noturno 20%. ":"Extras: 50% em dia útil e 100% em folga trabalhada (Art. 59) · adicional noturno 20% entre 22h e 5h (Art. 73) · base da hora = salário ÷ 220. "}O valor das horas extras é editável. Cadastre em “Colaboradores CLT & Freela Fixo”.</p>
+    </> : aba==="confianca" ? <>
+      <div className="grid sm:grid-cols-3 gap-3 mb-4">
+        <StatCard icon={I.wallet} label="Folha da diretoria/gerência" value={fmtBRL(confFolhaVisivel)} tone="brand"/>
+        <StatCard icon={I.user} label="Cargos de confiança" value={linhasConf.length} tone="green"/>
+        <StatCard icon={I.shield} label="Pagamentos sigilosos" value={linhasConf.filter(l=>l.sigiloso).length} tone="amber"/>
+      </div>
+      {!podeSigilo && confOcultos>0 && <div className="mb-3 p-3 rounded-xl bg-amber-50 text-amber-700 text-xs flex items-center gap-2"><Icon d={I.shield} className="w-4 h-4"/> {confOcultos} pagamento(s) de diretoria estão <b>ocultos</b> — o valor é visível apenas para o Diretor e a Diretora Financeira.</div>}
+      <Card className="overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm min-w-[680px]">
+        <thead><tr className="text-left text-slate-400 border-b border-slate-100">{["Nome","Cargo","Casa","Salário mensal","Pix",""].map(h=><th key={h} className="px-4 py-3 font-semibold">{h}</th>)}</tr></thead>
+        <tbody className="divide-y divide-slate-50">
+          {linhasConf.map(l=><tr key={l.id} className="hover:bg-slate-50/70">
+            <td className="px-4 py-3"><div className="flex items-center gap-2"><Avatar name={l.nome} src={l.foto} tone="slate" size="w-7 h-7"/><span className="font-semibold text-slate-800">{l.nome}</span>{l.sigiloso&&<Badge tone="amber">sigiloso</Badge>}</div></td>
+            <td className="px-4 py-3 text-slate-600">{l.cargo}</td>
+            <td className="px-4 py-3 text-slate-600">{l.unidade}</td>
+            <td className="px-4 py-3 font-extrabold text-slate-900 tabular-nums">
+              {l.oculto ? <span className="inline-flex items-center gap-1 text-slate-400 font-semibold"><Icon d={I.lock||I.shield} className="w-3.5 h-3.5"/>••••••</span>
+                : (l.semSalario ? <span className="text-amber-600 text-xs font-semibold">defina o salário no cadastro</span> : fmtBRL(l.salario))}
+            </td>
+            <td className="px-4 py-3 font-mono text-xs text-slate-500">{l.oculto?"—":(l.pix||"—")}</td>
+            <td className="px-4 py-3">{!l.oculto && <Btn size="sm" variant="soft" icon={I.copy} onClick={()=>copiarUm(whatsConf(l))}>Copiar</Btn>}</td>
+          </tr>)}
+          {linhasConf.length===0 && <tr><td colSpan="6" className="px-4 py-8 text-center text-slate-400">Nenhum cargo de confiança cadastrado. Cadastre em “Colaboradores CLT & Freela Fixo” → “Cargo de confiança”.</td></tr>}
+        </tbody>
+        {linhasConf.length>0 && <tfoot><tr className="border-t-2 border-slate-100 bg-slate-50/60">
+          <td className="px-4 py-3 font-bold" colSpan="3">Total {podeSigilo?"":"(visível)"}</td>
+          <td className="px-4 py-3 font-extrabold text-brand-700 tabular-nums">{fmtBRL(confFolhaVisivel)}</td><td colSpan="2"/></tr></tfoot>}
+      </table></div></Card>
+      <p className="text-xs text-slate-400 mt-3">Cargos de confiança (gerentes/diretoria) não batem ponto: recebem salário mensal fixo. Os pagamentos marcados como <b>sigilosos</b> só têm o valor visível para o Diretor e a Diretora Financeira.</p>
     </> : <>
       <div className="grid sm:grid-cols-3 gap-3 mb-4">
         <StatCard icon={I.wallet} label="Total a pagar (freelas)" value={fmtBRL(freeTotal)} tone="free"/>
@@ -3321,6 +3410,7 @@ function GerentesAcesso(){
   const [gSenha,setGSenha]=useState("");
   const [gTid,setGTid]=useState("");
   const [gUni,setGUni]=useState("todas");
+  const [gPapel,setGPapel]=useState("gerente");
   const [criando,setCriando]=useState(false);
   const [feito,setFeito]=useState(null);        // {login, senha, cliente, jaExiste}
   const semBanco=!window.__WPDB;
@@ -3340,9 +3430,9 @@ function GerentesAcesso(){
     try{
       let jaExiste=false;
       if(gSenha){ const r=await criarUsuarioAuth(gEmail,gSenha); jaExiste=!!r.jaExiste; }
-      await acessosOps.set(gEmail,{tenant:gTid, unidade:gUni, nome:gNome, papel:"gerente"});
+      await acessosOps.set(gEmail,{tenant:gTid, unidade:gUni, nome:gNome, papel:gPapel});
       const casaNome = gUni==="todas" ? "Todas as casas" : ((unidades.find(u=>String(u.id)===String(gUni))||{}).nome||"");
-      setFeito({ login:emailDeLogin(gEmail), senha:gSenha, cliente:nomeCliente(gTid), casa:casaNome, jaExiste, semSenha:!gSenha });
+      setFeito({ login:emailDeLogin(gEmail), senha:gSenha, cliente:nomeCliente(gTid), casa:casaNome, papel:gPapel, jaExiste, semSenha:!gSenha });
       toast(jaExiste?"Conta já existia — vínculo salvo":"Acesso do gerente criado");
       setGNome(""); setGEmail(""); setGSenha("");
     }catch(e){
@@ -3406,6 +3496,10 @@ function GerentesAcesso(){
         <Field label="Casa (unidade) que ele cuida"><Select value={gUni} onChange={e=>setGUni(e.target.value)}>
           <option value="todas">Todas as casas</option>{unidades.map(u=><option key={u.id} value={u.id}>{u.nome}</option>)}
         </Select></Field>
+        <div className="sm:col-span-2"><Field label="Papel (permissões)"><Select value={gPapel} onChange={e=>setGPapel(e.target.value)}>
+          {Object.entries(PAPEIS).filter(([k])=>k!=="proprietario").map(([k,v])=><option key={k} value={k}>{v}</option>)}
+        </Select></Field>
+        <p className="text-[11px] text-slate-400 mt-1">Apenas <b>Diretor</b> e <b>Diretora Financeira</b> enxergam o valor dos pagamentos sigilosos da diretoria.</p></div>
       </div>
       <Btn className="mt-4" icon={I.user} onClick={criarGerente} disabled={criando}>{criando?"Criando…":"Criar acesso do gerente"}</Btn>
       {feito && <div className="mt-4 p-4 rounded-xl bg-emerald-50 border border-emerald-100">
@@ -3431,6 +3525,7 @@ function GerentesAcesso(){
                 <div className="text-sm font-semibold text-slate-800 truncate">{a.nome||a.email||a.id}</div>
                 <div className="text-xs text-slate-500 truncate">{a.email} · {nomeCliente(a.tenant||"")} · {nomeUni(a.unidade)}</div>
               </div>
+              {a.papel && a.papel!=="gerente" && <Badge tone={a.papel==="diretor"||a.papel==="financeira"?"amber":"slate"}>{PAPEIS[a.papel]||a.papel}</Badge>}
               {donos.includes(a.id) && <Badge tone="brand">Administrador</Badge>}
               <button onClick={()=>desvincular(a)} className="text-slate-400 hover:text-rose-500"><Icon d={I.trash} className="w-4 h-4"/></button>
             </div>)}
