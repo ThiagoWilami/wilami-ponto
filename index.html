@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- build: fix check-in cross-tipo + escala por data (sem replicar semanas) 2026-08-04 -->
+<!-- build: freela nunca recorre (so na data) - CLT/fixo recorrem - migra freelas do padrao 2026-08-04 -->
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8" />
@@ -469,10 +469,13 @@ const folgaFixa = (t,d)=> t==="6x1"? d===6 : (t==="5x2"||t==="6x2")? d>=5 : fals
 // Escala POR UNIDADE: { [unidadeId]: { 0..6: [alocações] } }
 const escalaVaziaUnidade = ()=>{ const o={}; for(let d=0;d<7;d++) o[d]=[]; return o; };
 // Resolve a lista de UMA data: usa a exceção da data (override) se existir; senão, o padrão semanal (weekday).
+// IMPORTANTE: o padrão semanal só recorre para CLT/Freela Fixo. FREELANCER nunca recorre — ele existe
+// apenas na data específica em que foi colocado (fica só nos overrides por data). Isso evita replicar freela nas semanas.
 function diaEscala(escala, escalaOv, uid, dateStr, weekday){
   const ov = escalaOv && escalaOv[uid] && escalaOv[uid][dateStr];
   if(ov) return ov;
-  return (escala && escala[uid] && escala[uid][weekday]) || [];
+  const base = (escala && escala[uid] && escala[uid][weekday]) || [];
+  return base.filter(a=>a.tipo!=="free");
 }
 const escalaInicial = () => {
   const esc={};
@@ -665,6 +668,7 @@ function StoreProvider({children}) {
   const [escala,setEscala]=usePersist("escala",SEED_ESCALA);            // padrão semanal (repete toda semana)
   const [escalaOv,setEscalaOv]=usePersist("escalaOv",{});              // exceções por DATA: {unidade:{"AAAA-MM-DD":[...]}}
   const [escalaSeed,setEscalaSeed]=usePersist("escalaSeed",{});         // pids já semeados na auto-escala (nunca re-semear)
+  const [freeMigr,setFreeMigr]=usePersist("freeMigr",0);               // migração: tira freela do padrão semanal (1x)
   const [registrosLocal,setRegistrosLocal]=usePersist("registros",[]);  // fallback sem banco
   const [regPub,regPubOps]=useRegistrosPub();                           // feed ao vivo (coleção pública)
   const registros = window.__WPDB ? regPub : registrosLocal;            // banco central quando disponível
@@ -791,6 +795,23 @@ function StoreProvider({children}) {
       });
     }catch(e){}
   },[cadAuto]); // eslint-disable-line
+
+  // Migração 1x: freelas que estavam no PADRÃO SEMANAL (replicando) → viram exceção só da SEMANA ATUAL,
+  // preservando quem já estava escalado esta semana e parando a replicação nas próximas.
+  useEffect(()=>{
+    try{
+      if(freeMigr) return;
+      if(!escala || !Object.keys(escala).length) return;
+      const seg=segDaSemana(new Date()); const add={}; let any=false;
+      Object.keys(escala).forEach(uid=>{ Object.keys(escala[uid]||{}).forEach(wd=>{
+        const arr=escala[uid][wd]||[]; if(arr.some(a=>a.tipo==="free")){ any=true;
+          const ds=ymd(addDias(seg,Number(wd))); (add[uid]=add[uid]||{})[ds]=arr.map(a=>({...a})); } // mantém a lista cheia (CLT+free) só nesta data
+      }); });
+      if(any){ setEscalaOv(prev=>{ const n={...(prev||{})}; Object.keys(add).forEach(uid=>{ n[uid]={...(n[uid]||{})};
+        Object.keys(add[uid]).forEach(ds=>{ if(n[uid][ds]==null) n[uid][ds]=add[uid][ds]; }); }); return n; }); }
+      setFreeMigr(1);
+    }catch(e){ setFreeMigr(1); }
+  },[escala]); // eslint-disable-line
 
   // Gerente vinculado a uma CASA específica só enxerga os dados daquela casa (isolamento por unidade).
   const _mesmaCasa=(uid)=> String(uid)===String(casaRestrita);
