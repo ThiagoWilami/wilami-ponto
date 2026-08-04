@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- build: gerentes/diretor sem ponto na folha (cargo de confianca) + pagamento diretoria sigiloso (so diretor/financeira) + papeis diretor/financeira 2026-08-04c -->
+<!-- build: ponto ao vivo - checkout (ajuste aprovado) encerra o dia mesmo com feed fora de ordem + timer congela na saida + esconde escalado fantasma (sem cadastro) 2026-08-04d -->
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8" />
@@ -1246,22 +1246,34 @@ function PontoLive() {
   const cpfDe=(pid,tipo)=>{ const p=(tipo==="clt"?clts:freelas).find(x=>x.id===pid); return p?soDigitos(p.cpf):""; };
   const regsDe=(a)=>{ const nm=nome(a.pid,a.tipo); const idS=String(a.pid); const cpf=cpfDe(a.pid,a.tipo);
     return registros.filter(r=> (r.pid!=null && String(r.pid)===idS) || (cpf && r.cpf && String(r.cpf)===cpf) || r.nome===nm ); };
+  // horário (em minutos do dia) de um registro — usa min; se faltar, converte de "HH:MM"
+  const minDe=(r)=>{ if(r.min!=null) return Number(r.min); const m=/^(\d{1,2}):(\d{2})/.exec(r.hora||""); return m? Number(m[1])*60+Number(m[2]) : 0; };
   const statusDe=(a)=>{
     if(a.marca==="faltou") return "faltou";
-    const regs=regsDe(a); // mais recente primeiro
+    const regs=regsDe(a);
     if(!regs.length) return a.turno==="folga" ? "folga" : "aguardando";
-    const last=regs[0].acao;
-    return last==="Saída"?"encerrado" : last==="Início intervalo"?"pausa" : "trabalhando";
+    // Um CHECKOUT ("Saída") encerra o dia — mesmo que tenha entrado via ajuste aprovado,
+    // e independentemente da ordem em que os registros chegaram no feed.
+    if(regs.some(r=>r.acao==="Saída")) return "encerrado";
+    // Caso contrário, decide pela batida MAIS RECENTE por HORÁRIO (não pela posição no array).
+    const ord=regs.slice().sort((x,y)=>minDe(x)-minDe(y));
+    const last=ord[ord.length-1].acao;
+    return last==="Início intervalo"?"pausa":"trabalhando";
   };
-  // Tempo em jornada em TEMPO REAL (desde a Entrada, atualiza a cada segundo com o relógio)
+  // Tempo em jornada em TEMPO REAL (desde a Entrada). Congela na Saída quando o dia é encerrado
+  // (assim não fica "correndo horas" depois do checkout / ajuste aprovado).
   const nowSec = clock.getHours()*3600 + clock.getMinutes()*60 + clock.getSeconds();
   const tempoDe=(a)=>{
     const regs=regsDe(a);
     const ent=regs.find(r=>r.acao==="Entrada");
     if(!ent || ent.min==null) return null;
-    let d=nowSec - ent.min*60; if(d<0) d+=86400; return d; // segundos
+    const sai=regs.find(r=>r.acao==="Saída");
+    const endSec=(sai && sai.min!=null) ? sai.min*60 : (sai ? minDe(sai)*60 : nowSec);
+    let d=endSec - ent.min*60; if(d<0) d+=86400; return d; // segundos
   };
-  const linhas=escalados.map(a=>({a, nm:nome(a.pid,a.tipo), st:statusDe(a), tempo:tempoDe(a), folgaTrab:a.turno==="folga"}));
+  // Ignora linhas "fantasma": escala com colaborador que não existe mais (nome não resolve → "—").
+  const linhas=escalados.map(a=>({a, nm:nome(a.pid,a.tipo), st:statusDe(a), tempo:tempoDe(a), folgaTrab:a.turno==="folga"}))
+    .filter(x=> x.nm && x.nm!=="—");
   const cont=(s)=>linhas.filter(x=>x.st===s).length;
   // Resolve FOLGA pela escala DEFINIDA PELO GERENTE (turno marcado como "folga"), nunca automática.
   const folgaDe=(g)=>{ if(g.tipo!=="clt") return false; const p=clts.find(x=>x.nome===g.nome); if(!p) return false;
