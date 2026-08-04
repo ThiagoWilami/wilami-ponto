@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- build: novo modelo Freela Fixo (escala + salario mensal + folha propria) 2026-08-03 -->
+<!-- build: fix check-in cross-tipo + escala por data (sem replicar semanas) 2026-08-04 -->
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8" />
@@ -468,6 +468,12 @@ const turnoPorDia = (d)=> d%3===0?"manha":d%3===1?"tarde":"noite";
 const folgaFixa = (t,d)=> t==="6x1"? d===6 : (t==="5x2"||t==="6x2")? d>=5 : false;
 // Escala POR UNIDADE: { [unidadeId]: { 0..6: [alocações] } }
 const escalaVaziaUnidade = ()=>{ const o={}; for(let d=0;d<7;d++) o[d]=[]; return o; };
+// Resolve a lista de UMA data: usa a exceção da data (override) se existir; senão, o padrão semanal (weekday).
+function diaEscala(escala, escalaOv, uid, dateStr, weekday){
+  const ov = escalaOv && escalaOv[uid] && escalaOv[uid][dateStr];
+  if(ov) return ov;
+  return (escala && escala[uid] && escala[uid][weekday]) || [];
+}
 const escalaInicial = () => {
   const esc={};
   INIT_UNIDADES.forEach(u=>{ esc[u.id]=escalaVaziaUnidade(); });
@@ -656,7 +662,8 @@ function StoreProvider({children}) {
   // Listas expostas = base (admin) + auto-cadastros do celular (mesclados por vínculo)
   const clts=[...cltsBase, ...cadAuto.filter(c=>c.tipo==="clt")];
   const freelas=[...freelasBase, ...cadAuto.filter(c=>c.tipo==="free")];
-  const [escala,setEscala]=usePersist("escala",SEED_ESCALA);            // por unidade
+  const [escala,setEscala]=usePersist("escala",SEED_ESCALA);            // padrão semanal (repete toda semana)
+  const [escalaOv,setEscalaOv]=usePersist("escalaOv",{});              // exceções por DATA: {unidade:{"AAAA-MM-DD":[...]}}
   const [escalaSeed,setEscalaSeed]=usePersist("escalaSeed",{});         // pids já semeados na auto-escala (nunca re-semear)
   const [registrosLocal,setRegistrosLocal]=usePersist("registros",[]);  // fallback sem banco
   const [regPub,regPubOps]=useRegistrosPub();                           // feed ao vivo (coleção pública)
@@ -716,6 +723,7 @@ function StoreProvider({children}) {
     else if(tipo==="clt") setClts(prev=>prev.filter(x=>x.id!==id));
     else setFreelas(prev=>prev.filter(x=>x.id!==id));
     setEscala(prev=>{ const n={}; Object.keys(prev).forEach(uid=>{ n[uid]={}; Object.keys(prev[uid]).forEach(d=>{ n[uid][d]=prev[uid][d].filter(a=>a.pid!==id); }); }); return n; });
+    setEscalaOv(prev=>{ const n={}; Object.keys(prev||{}).forEach(uid=>{ n[uid]={}; Object.keys(prev[uid]||{}).forEach(ds=>{ n[uid][ds]=(prev[uid][ds]||[]).filter(a=>a.pid!==id); }); }); return n; });
   };
 
   const addRegistro=(r)=>{
@@ -729,7 +737,8 @@ function StoreProvider({children}) {
     else { setRegistrosLocal(prev=>[{...rec, id:Math.random().toString(36).slice(2)}, ...prev].slice(0,60)); }
   };
   // freelancer escalado hoje em QUALQUER casa
-  const freelancerEscaladoHoje=(pid)=> Object.values(escala).some(dias=> (dias[HOJE_IDX]||[]).some(a=>a.pid===pid && a.tipo==="free" && a.turno!=="folga"));
+  const freelancerEscaladoHoje=(pid)=>{ const hoje=hojeStr(); const uids=new Set([...Object.keys(escala||{}),...Object.keys(escalaOv||{})]);
+    for(const uid of uids){ if(diaEscala(escala,escalaOv,uid,hoje,HOJE_IDX).some(a=>a.pid===pid && a.tipo==="free" && a.turno!=="folga")) return true; } return false; };
 
   // Anexa/atualiza um documento de um colaborador (aceita string legado ou {nome,dados})
   const anexarDoc=(tipo,id,key,doc)=>{
@@ -793,7 +802,7 @@ function StoreProvider({children}) {
   const registrosVis = casaRestrita!=null ? registros.filter(r=>_nomesVis.has(r.nome)) : registros;
 
   const value={ unidades:unidadesVis,salvarUnidade,excluirUnidade, clts:cltsVis,freelas:freelasVis,freelasComPagamentos:freelasPagVis,salvarClt,salvarFreela,excluirColab,cadastrarPublico, anexarDoc,
-    escala,setEscala, registros:registrosVis,addRegistro, pontoHist, freelancerEscaladoHoje, valorFreela, setFreelaAjuste, cltExtraAjuste,setCltExtra,
+    escala,setEscala, escalaOv,setEscalaOv, registros:registrosVis,addRegistro, pontoHist, freelancerEscaladoHoje, valorFreela, setFreelaAjuste, cltExtraAjuste,setCltExtra,
     cargosFreela,salvarCargoFreela,excluirCargoFreela, atestados,enviarAtestado, ajustes,enviarAjuste,resolverAjuste,
     dossie,getDossie,addFalta,addFeedback,addAnexo, perfil,setPerfil, perms,setPerms, can,
     clientes,clienteAtivo,tenantAtual,criarCliente,trocarCliente,
@@ -968,9 +977,21 @@ function Dashboard({go}) {
 
 /* ============================ ESCALA VISUAL (POR UNIDADE) ============================ */
 function EscalaVisual() {
-  const { escala, setEscala, clts, freelas, unidades, can } = useStore();
+  const { escala, setEscala, escalaOv, setEscalaOv, clts, freelas, unidades, can } = useStore();
   const toast=useContext(ToastCtx);
   const [uSel,setUSel]=useState(unidades[0]?.id);
+  // Semana visível (para editar POR DATA, sem replicar nas outras semanas)
+  const [semanaBase,setSemanaBase]=useState(()=>segDaSemana(new Date())); // segunda-feira da semana exibida
+  const datasSemana=[0,1,2,3,4,5,6].map(i=>addDias(semanaBase,i));
+  const dataDe=(di)=>ymd(datasSemana[di]);   // "AAAA-MM-DD" da coluna
+  // lista efetiva da coluna: exceção da data (se houver) ou o padrão semanal
+  const diaDe=(di)=> diaEscala(escala, escalaOv, uSel, dataDe(di), di);
+  // grava a exceção da data (semeando a partir do que está visível hoje, para não perder ninguém)
+  const setDiaData=(di,fn)=> setEscalaOv(prev=>{
+    const u={...(prev[uSel]||{})}; const ds=dataDe(di);
+    const base = (u[ds]!=null) ? u[ds] : (diaEscala(escala, escalaOv, uSel, ds, di)||[]);
+    u[ds]=fn(base.map(a=>({...a}))); return {...prev,[uSel]:u};
+  });
   const [drag,setDrag]=useState(null);
   const [over,setOver]=useState(null);
   const [add,setAdd]=useState(null);
@@ -978,34 +999,31 @@ function EscalaVisual() {
   const [menu,setMenu]=useState(null); // {di,id}
   const editavel=can("escala");
   const nome=(pid,tipo)=>pessoaNome(pid,tipo,clts,freelas);
-  const escU = escala[uSel] || escalaVaziaUnidade();
   const pessoaDe=(a)=>(a.tipo==="clt"?clts:freelas).find(p=>p.id===a.pid);
   const passaSetor=(a)=> setorF==="todos" || setorDe(pessoaDe(a))===setorF;
 
+  // Todas as edições gravam SÓ na data da coluna (exceção), sem replicar nas outras semanas.
   const onDrop=(dia)=>{
     if(!drag||!editavel) return;
-    setEscala(prev=>{ const u={...(prev[uSel]||escalaVaziaUnidade())};
-      u[drag.from]=u[drag.from].filter(a=>a.id!==drag.aloc.id);
-      u[dia]=[...(u[dia]||[]), {...drag.aloc}]; return {...prev,[uSel]:u}; });
-    toast(`${nome(drag.aloc.pid,drag.aloc.tipo)} movido para ${DIAS[dia]}`);
+    setDiaData(drag.from, arr=>arr.filter(a=>a.id!==drag.aloc.id));
+    setDiaData(dia, arr=>[...arr, {...drag.aloc}]);
+    toast(`${nome(drag.aloc.pid,drag.aloc.tipo)} movido para ${labelDiaFull(dia)}`);
     setDrag(null); setOver(null);
   };
-  const remover=(dia,id)=>setEscala(prev=>{ const u={...prev[uSel]}; u[dia]=u[dia].filter(a=>a.id!==id); return {...prev,[uSel]:u}; });
-  const setMarca=(dia,id,marca)=>setEscala(prev=>{ const u={...prev[uSel]}; u[dia]=u[dia].map(a=>a.id===id?{...a,marca}:a); return {...prev,[uSel]:u}; });
-  const setTurnoTo=(dia,id,turno)=>setEscala(prev=>{ const u={...prev[uSel]}; u[dia]=u[dia].map(a=>a.id===id?{...a,turno,marca:turno==="folga"?null:a.marca}:a); return {...prev,[uSel]:u}; });
-  const setHorario=(dia,id,h)=>setEscala(prev=>{ const u={...prev[uSel]}; u[dia]=u[dia].map(a=>a.id===id?{...a,h}:a); return {...prev,[uSel]:u}; });
+  const remover=(dia,id)=>setDiaData(dia, arr=>arr.filter(a=>a.id!==id));
+  const setMarca=(dia,id,marca)=>setDiaData(dia, arr=>arr.map(a=>a.id===id?{...a,marca}:a));
+  const setTurnoTo=(dia,id,turno)=>setDiaData(dia, arr=>arr.map(a=>a.id===id?{...a,turno,marca:turno==="folga"?null:a.marca}:a));
+  const setHorario=(dia,id,h)=>setDiaData(dia, arr=>arr.map(a=>a.id===id?{...a,h}:a));
   const [editH,setEditH]=useState(null); // {di,id,hi,hf}
-  const addColab=(dia,pid,tipo)=>{ setEscala(prev=>{ const u={...(prev[uSel]||escalaVaziaUnidade())}; u[dia]=[...(u[dia]||[]),{id:(tipo==="clt"?"c":"f")+Date.now(),pid,tipo,turno:tipo==="clt"?turnoPorDia(dia):"noite"}]; return {...prev,[uSel]:u}; }); setAdd(null); toast("Colaborador inserido na escala desta casa"); };
+  const addColab=(dia,pid,tipo)=>{ setDiaData(dia, arr=>[...arr,{id:(tipo==="clt"?"c":"f")+Date.now(),pid,tipo,turno:tipo==="clt"?turnoPorDia(dia):"noite"}]); setAdd(null); toast("Colaborador inserido na escala do dia "+labelDiaFull(dia)); };
 
-  const tot=Object.values(escU).flat();
+  const tot=[0,1,2,3,4,5,6].map(di=>diaDe(di)).flat();
   const nClt=tot.filter(a=>a.tipo==="clt"&&a.turno!=="folga").length;
   const nFree=tot.filter(a=>a.tipo==="free").length;
   const nFolga=tot.filter(a=>a.turno==="folga").length;
   const uAtual=unidades.find(u=>u.id===uSel);
 
-  // ===== Passador de datas: semana visível, "hoje" real e busca de data específica =====
-  const [semanaBase,setSemanaBase]=useState(()=>segDaSemana(new Date())); // segunda-feira da semana exibida
-  const datasSemana=[0,1,2,3,4,5,6].map(i=>addDias(semanaBase,i));
+  // ===== Passador de datas: "hoje" real, rótulos e busca de data específica =====
   const ehHoje=(di)=> ymd(datasSemana[di])===hojeStr();
   const labelDiaFull=(di)=>{ const d=datasSemana[di]; return `${DIAS[di]} ${d.getDate()}/${String(d.getMonth()+1).padStart(2,"0")}`; };
   const semanaLabel=`${datasSemana[0].getDate()} ${MESES_CURTO[datasSemana[0].getMonth()]} – ${datasSemana[6].getDate()} ${MESES_CURTO[datasSemana[6].getMonth()]}`;
@@ -1068,7 +1086,7 @@ function EscalaVisual() {
               {editavel && <button onClick={()=>setAdd(di)} className="w-6 h-6 rounded-lg bg-white border border-slate-200 grid place-items-center text-slate-400 hover:text-brand-600 hover:border-brand-300"><Icon d={I.plus} className="w-3.5 h-3.5"/></button>}
             </div>
             <div className="space-y-1.5">
-              {(escU[di]||[]).filter(passaSetor).map(a=>{ const t=TURNOS[a.turno]; const setor=SETOR_MAP[setorDe(pessoaDe(a))]; const aberto=menu&&menu.di===di&&menu.id===a.id;
+              {(diaDe(di)||[]).filter(passaSetor).map(a=>{ const t=TURNOS[a.turno]; const setor=SETOR_MAP[setorDe(pessoaDe(a))]; const aberto=menu&&menu.di===di&&menu.id===a.id;
                 return <div key={a.id} className="relative">
                   <div draggable={editavel} onDragStart={()=>setDrag({aloc:a,from:di})} onDragEnd={()=>{setDrag(null);setOver(null);}}
                     className={cx("rounded-lg pl-2 pr-1 py-1.5 bg-white shadow-soft border border-slate-100 border-l-[3px]", editavel&&"cursor-grab", a.marca==="faltou"&&"opacity-70")}
@@ -1149,7 +1167,7 @@ const STATUS = {
   folga:{l:"Folga",tone:"slate",c:"#cbd5e1"},
 };
 function PontoLive() {
-  const { registros:registrosAll, clts, freelas, unidades, escala, pontoHist, valorFreela } = useStore();
+  const { registros:registrosAll, clts, freelas, unidades, escala, escalaOv, pontoHist, valorFreela } = useStore();
   // Só os registros de HOJE alimentam o status ao vivo (a coleção persiste entre os dias).
   const _hoje=hojeStr();
   const registros = registrosAll.filter(r=>!r.data || r.data===_hoje);
@@ -1176,14 +1194,16 @@ function PontoLive() {
   const base = (pubUrl.trim() ? pubUrl.trim().replace(/#.*$/,"").replace(/\/+$/,"")+"/" : hrefBase);
   const linkDe=(m)=> comTenantUrl(base.replace(/#.*$/,""), "ponto-"+m);
 
-  // turno de HOJE de uma pessoa (para saber se é dia de FOLGA)
-  const turnoHojeDe=(pid,tipo)=>{ let t=null; Object.values(escala).forEach(dias=>{ (dias[HOJE_IDX]||[]).forEach(a=>{ if(a.pid===pid&&a.tipo===tipo) t=a.turno; }); }); return t; };
+  // turno de HOJE de uma pessoa (resolve exceção da data OU padrão semanal)
+  const _hojeIdx=HOJE_IDX; const _hojeStr=hojeStr();
+  const _uidsHoje=new Set([...Object.keys(escala||{}),...Object.keys(escalaOv||{})]);
+  const turnoHojeDe=(pid,tipo)=>{ let t=null; _uidsHoje.forEach(uid=>{ diaEscala(escala,escalaOv,uid,_hojeStr,_hojeIdx).forEach(a=>{ if(a.pid===pid&&a.tipo===tipo) t=a.turno; }); }); return t; };
 
   // Escalados hoje do AMBIENTE + CASA selecionados (folga aparece marcada, mas não conta como falta)
   const escalados=[];
-  Object.entries(escala).forEach(([uid,dias])=>{
+  _uidsHoje.forEach(uid=>{
     if(casaFiltro!=="todas" && Number(uid)!==casaFiltro) return;
-    (dias[HOJE_IDX]||[]).forEach(a=>{ if(a.tipo!==ambiente) return; escalados.push({...a, unidadeId:Number(uid)}); });
+    diaEscala(escala,escalaOv,uid,_hojeStr,_hojeIdx).forEach(a=>{ if(a.tipo!==ambiente) return; escalados.push({...a, unidadeId:Number(uid)}); });
   });
   // Casa os registros do dia com a pessoa escalada por pid → CPF → nome (robusto p/ status ao vivo)
   const cpfDe=(pid,tipo)=>{ const p=(tipo==="clt"?clts:freelas).find(x=>x.id===pid); return p?soDigitos(p.cpf):""; };
@@ -1402,7 +1422,7 @@ function PontoLive() {
 
 /* ============================ QUIOSQUE DE PONTO ============================ */
 function PontoKiosk({ mode, onClose }) {
-  const { unidades, clts, freelas, escala, registros, freelancerEscaladoHoje, addRegistro, salvarClt, salvarFreela, cadastrarPublico, enviarAtestado, enviarAjuste } = useStore();
+  const { unidades, clts, freelas, escala, escalaOv, registros, freelancerEscaladoHoje, addRegistro, salvarClt, salvarFreela, cadastrarPublico, enviarAtestado, enviarAjuste } = useStore();
   const ativos = mode==="clt" ? clts : freelas.filter(f=>f.status==="ativo");
   const [fluxo,setFluxo]=useState("escolha"); // escolha | registro | cadastro
   const [unidadeId,setUnidadeId]=useState(unidades[0]?.id);
@@ -1414,23 +1434,37 @@ function PontoKiosk({ mode, onClose }) {
   // aceita qualquer casa e qualquer turno de trabalho (só bloqueia FOLGA). Assim, cadastrado + na escala = bate ponto.
   const escaladoHojePid=(p)=>{
     if(!p) return false;
+    const hoje=hojeStr();
     const alvoId=String(p.id); const alvoCpf=soDigitos(p.cpf); const lista=mode==="clt"?clts:freelas;
     const alvoNome=(p.nome||"").trim().toLowerCase();
-    return Object.values(escala||{}).some(dias=>((dias&&dias[HOJE_IDX])||[]).some(a=>{
-      if(a.turno==="folga") return false;
-      if(a.tipo && a.tipo!==mode) return false;
-      if(String(a.pid)===alvoId) return true;
-      const pes=lista.find(x=>String(x.id)===String(a.pid));      // fallback por CPF e por NOME
-      if(!pes) return false;
-      if(alvoCpf.length===11 && soDigitos(pes.cpf)===alvoCpf) return true;
-      return !!(alvoNome && (pes.nome||"").trim().toLowerCase()===alvoNome);
-    }));
+    const uids=new Set([...Object.keys(escala||{}), ...Object.keys(escalaOv||{})]);
+    for(const uid of uids){
+      const arr=diaEscala(escala, escalaOv, uid, hoje, HOJE_IDX);  // exceção da data OU padrão semanal
+      const ok=(arr||[]).some(a=>{
+        if(a.turno==="folga") return false;
+        if(a.tipo && a.tipo!==mode) return false;
+        if(String(a.pid)===alvoId) return true;
+        const pes=lista.find(x=>String(x.id)===String(a.pid));      // fallback por CPF e por NOME
+        if(!pes) return false;
+        if(alvoCpf.length===11 && soDigitos(pes.cpf)===alvoCpf) return true;
+        return !!(alvoNome && (pes.nome||"").trim().toLowerCase()===alvoNome);
+      });
+      if(ok) return true;
+    }
+    return false;
   };
   const buscarCpf=()=>{
     const d=soDigitos(cpf);
     if(d.length<11){ setCpfErr("Digite os 11 números do CPF."); return; }
     const p=ativos.find(x=>soDigitos(x.cpf)===d);
-    if(!p){ setCpfErr("CPF não encontrado. Use “Fazer cadastro (1º acesso)”."); return; }
+    if(!p){
+      // Já cadastrado no OUTRO vínculo? Orienta a abrir o link certo (em vez de pedir novo cadastro).
+      const outra = mode==="clt" ? freelas : clts;
+      const pOutro = outra.find(x=>soDigitos(x.cpf)===d);
+      if(pOutro){ const ehFixo=pOutro.vinculo==="fixo"; const rot = mode==="clt" ? "Freelancer" : (ehFixo?"CLT (Freela Fixo)":"CLT");
+        setCpfErr(pOutro.nome.split(" ")[0]+", seu cadastro é "+rot+". Abra o link de "+(mode==="clt"?"Freelancer":"CLT")+" para bater o ponto — não precisa cadastrar de novo."); return; }
+      setCpfErr("CPF não encontrado. Use “Fazer cadastro (1º acesso)”."); return;
+    }
     if(!escaladoHojePid(p)){ setCpfErr(p.nome.split(" ")[0]+", você não está na escala de hoje — não é possível registrar ponto."); return; }
     setPid(p.id); setUnidadeId(p.unidade||unidades[0]?.id); setCpfErr("");
     setPainel(true); // vai para o PAINEL DE STATUS do colaborador (mostra estado + ações certas do tipo)
@@ -1995,13 +2029,13 @@ function ColaboradoresCLT() {
 
 /* ============================ FREELANCERS ============================ */
 function Freelancers() {
-  const { freelas, salvarFreela, excluirColab, unidades, escala, cargosFreela, salvarCargoFreela, excluirCargoFreela, can } = useStore();
+  const { freelas, salvarFreela, excluirColab, unidades, escala, escalaOv, cargosFreela, salvarCargoFreela, excluirCargoFreela, can } = useStore();
   const toast=useContext(ToastCtx);
   const [form,setForm]=useState(null);
   const [confirmar,setConfirmar]=useState(null);
   const [cargosOpen,setCargosOpen]=useState(false);
   const [nc,setNc]=useState({nome:"",valor:120});
-  const escaladoHoje=(pid)=> Object.values(escala).some(dias=>(dias[HOJE_IDX]||[]).some(a=>a.pid===pid&&a.tipo==="free"&&a.turno!=="folga"));
+  const escaladoHoje=(pid)=>{ const hoje=hojeStr(); const uids=new Set([...Object.keys(escala||{}),...Object.keys(escalaOv||{})]); for(const uid of uids){ if(diaEscala(escala,escalaOv,uid,hoje,HOJE_IDX).some(a=>a.pid===pid&&a.tipo==="free"&&a.turno!=="folga")) return true; } return false; };
 
   return <div className="fade-in">
     <PageHeader title="Freelancers" sub="Cadastro simplificado · cargos com valor por jornada · link de check-in separado">
