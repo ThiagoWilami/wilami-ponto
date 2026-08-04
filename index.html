@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- build: freela nunca recorre (so na data) - CLT/fixo recorrem - migra freelas do padrao 2026-08-04 -->
+<!-- build: pagamentos freela por semana + pagar semana + parciais/adiantamento + saldo do mes 2026-08-04b -->
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8" />
@@ -765,12 +765,18 @@ function StoreProvider({children}) {
   // Override manual do valor das horas extras do CLT por mês: { "<cid>|<AAAA-MM>": valor }
   const [cltExtraAjuste,setCltExtraMap]=usePersist("cltExtraAjuste",{});
   const setCltExtra=(cid,ym,valor)=>setCltExtraMap(prev=>{ const k=cid+"|"+ym; const n={...prev}; if(valor==null||valor==="") delete n[k]; else n[k]=Number(valor); return n; });
-  const _freelaConcluidas = apurarHoras(registros).filter(x=>x.tipo==="free" && x.completo);
+  // Pagamentos (parciais/adiantamentos) registrados por freela: { "<fid>": [ {id,data,valor,semana,obs} ] }
+  const [pagamentosFreela,setPagFreela]=usePersist("pagamentosFreela",{});
+  const addPagamentoFreela=(fid,obj)=>setPagFreela(prev=>{ const arr=prev[String(fid)]||[]; return {...prev,[String(fid)]:[{...obj,id:Math.random().toString(36).slice(2)},...arr]}; });
+  const removePagamentoFreela=(fid,pid)=>setPagFreela(prev=>{ const arr=(prev[String(fid)]||[]).filter(x=>x.id!==pid); return {...prev,[String(fid)]:arr}; });
+  // Diária do freela = dia TRABALHADO: conta quando há CHECK-IN (Entrada) no dia, mesmo sem checkout.
+  // (antes exigia checkout → jornada "completo" → valores zeravam quando o freela não batia a saída)
+  const _freelaDias = apurarHoras(registros).filter(x=>x.tipo==="free" && (x.punches||[]).some(pp=>pp.acao==="Entrada"));
   const freelasComPagamentos = freelas.map(f=>{
     const hist=f.jornadasHist||[]; const histDatas=new Set(hist.map(h=>h.data));
-    const novos=_freelaConcluidas.filter(x=>x.nome===f.nome && !histDatas.has(x.dia)).map(x=>({
+    const novos=_freelaDias.filter(x=>x.nome===f.nome && !histDatas.has(x.dia)).map(x=>({
       data:x.dia, unidade:(unidades.find(u=>u.nome===x.unidade)||{}).id,
-      horas:Math.round((x.trabalhado/60)*100)/100, valor:valorFreela(f), _live:true }));
+      horas: x.trabalhado!=null ? Math.round((x.trabalhado/60)*100)/100 : null, valor:valorFreela(f), _live:true }));
     // Aplica turnos/dobra e edição manual: total da jornada = valor por turno × turnos.
     const jornadas=[...hist,...novos].map(j=>{
       const aj=frelaAjustes[f.id+"|"+j.data]||{};
@@ -823,7 +829,7 @@ function StoreProvider({children}) {
   const registrosVis = casaRestrita!=null ? registros.filter(r=>_nomesVis.has(r.nome)) : registros;
 
   const value={ unidades:unidadesVis,salvarUnidade,excluirUnidade, clts:cltsVis,freelas:freelasVis,freelasComPagamentos:freelasPagVis,salvarClt,salvarFreela,excluirColab,cadastrarPublico, anexarDoc,
-    escala,setEscala, escalaOv,setEscalaOv, registros:registrosVis,addRegistro, pontoHist, freelancerEscaladoHoje, valorFreela, setFreelaAjuste, cltExtraAjuste,setCltExtra,
+    escala,setEscala, escalaOv,setEscalaOv, registros:registrosVis,addRegistro, pontoHist, freelancerEscaladoHoje, valorFreela, setFreelaAjuste, cltExtraAjuste,setCltExtra, pagamentosFreela,addPagamentoFreela,removePagamentoFreela,
     cargosFreela,salvarCargoFreela,excluirCargoFreela, atestados,enviarAtestado, ajustes,enviarAjuste,resolverAjuste,
     dossie,getDossie,addFalta,addFeedback,addAnexo, perfil,setPerfil, perms,setPerms, can,
     clientes,clienteAtivo,tenantAtual,criarCliente,trocarCliente,
@@ -2203,28 +2209,46 @@ function Relatorios() {
 
 /* ============================ PAGAMENTOS (FREELANCERS) ============================ */
 function Pagamentos() {
-  const { freelasComPagamentos:freelas, unidades, setFreelaAjuste } = useStore();
+  const { freelasComPagamentos:freelas, unidades, setFreelaAjuste, pagamentosFreela, addPagamentoFreela, removePagamentoFreela } = useStore();
   const toast=useContext(ToastCtx);
   const _mr=mesAtualRange();
   const [ini,setIni]=useState(_mr.ini);
   const [fim,setFim]=useState(_mr.fim);
   const [uni,setUni]=useState("todas");
-  const [aberto,setAberto]=useState(null); // freelancer expandido (edição de turnos/valor por jornada)
+  const [aberto,setAberto]=useState(null); // freelancer expandido
+  const [novoPag,setNovoPag]=useState({}); // {fid:{valor,obs}}
 
   const dentro=(j)=> (!ini||j.data>=ini) && (!fim||j.data<=fim) && (uni==="todas"||j.unidade===Number(uni));
   const daCasa=(fr)=> uni==="todas" || Number(fr.unidade)===Number(uni);
+  // agrupa jornadas por SEMANA (segunda-feira), para acumulado semanal e "pagar semana"
+  const porSemana=(js)=>{ const m={}; js.forEach(j=>{ const [y,mo,d]=j.data.split("-").map(Number); const wk=ymd(segDaSemana(new Date(y,mo-1,d))); (m[wk]=m[wk]||[]).push(j); }); return Object.keys(m).sort().map(wk=>({wk, js:m[wk], total:m[wk].reduce((s,j)=>s+j.valor,0)})); };
+  // Um pagamento é contado no período exibido se: (a) é "pagar semana" de uma das semanas exibidas
+  // (a semana da Segunda pode cair no mês anterior, então casamos pela semana e não pela data),
+  // ou (b) seu "ref"/data cai dentro do filtro (pagamentos manuais/adiantamentos).
+  const pagosDe=(fid,wksVis)=> (pagamentosFreela[String(fid)]||[]).filter(p=>{
+    if(p.semana && wksVis.has(p.semana)) return true;
+    const r=p.ref||p.data; return (!ini||r>=ini)&&(!fim||r<=fim);
+  });
   const linhas = freelas.map(fr=>{
     const js=(fr.jornadasHist||[]).filter(dentro).sort((a,b)=>(a.data<b.data?-1:1));
+    const total=js.reduce((s,j)=>s+j.valor,0);
+    const semanas=porSemana(js); const wksVis=new Set(semanas.map(s=>s.wk));
+    const pagos=pagosDe(fr.id,wksVis); const pago=pagos.reduce((s,p)=>s+Number(p.valor||0),0);
     return { id:fr.id, nome:fr.nome, cargo:fr.cargo, pix:fr.pix, unidade:fr.unidade, jornadas:js.length, js,
-      horas:js.reduce((s,j)=>s+j.horas,0), total:js.reduce((s,j)=>s+j.valor,0), casas:[...new Set(js.map(j=>j.unidade))] };
+      semanas, pagos, pago, saldo: total-pago,
+      horas:js.reduce((s,j)=>s+(j.horas||0),0), total, casas:[...new Set(js.map(j=>j.unidade))] };
   // inclui também os freelancers cadastrados na casa (mesmo sem jornada no período)
-  }).filter(l=> l.jornadas>0 || daCasa(l)).sort((a,b)=>b.total-a.total);
+  }).filter(l=> l.jornadas>0 || l.pago>0 || daCasa(l)).sort((a,b)=>b.total-a.total);
   const totalGeral=linhas.reduce((s,l)=>s+l.total,0);
+  const totalPago=linhas.reduce((s,l)=>s+l.pago,0);
+  const saldoGeral=totalGeral-totalPago;
   const horasGeral=linhas.reduce((s,l)=>s+l.horas,0);
+  const pagarSemana=(l,s)=>{ addPagamentoFreela(l.id,{data:hojeStr(), ref:s.wk, valor:s.total, semana:s.wk, obs:"Semana "+fmtDataBR(s.wk)}); toast("Pagamento da semana registrado"); };
+  const lancarPag=(l)=>{ const np=novoPag[l.id]||{}; const v=Number(np.valor||0); if(!v){ toast("Informe o valor do pagamento"); return; } addPagamentoFreela(l.id,{data:hojeStr(), ref:(ini||hojeStr()), valor:v, obs:np.obs||"Adiantamento"}); setNovoPag(p=>({...p,[l.id]:{valor:"",obs:""}})); toast("Pagamento registrado"); };
 
   const exportar=()=>{
-    const cab="Freelancer;Funcao;Jornadas;Horas;Valor_total_R$;Chave_Pix";
-    const corpo=linhas.map(l=>`${l.nome};${l.cargo};${l.jornadas};${l.horas};${l.total.toFixed(2)};${l.pix}`).join("\n");
+    const cab="Freelancer;Funcao;Diarias;Horas;Valor_total_R$;Pago_R$;Saldo_R$;Chave_Pix";
+    const corpo=linhas.map(l=>`${l.nome};${l.cargo};${l.jornadas};${l.horas};${l.total.toFixed(2)};${l.pago.toFixed(2)};${l.saldo.toFixed(2)};${l.pix}`).join("\n");
     const blob=new Blob([cab+"\n"+corpo],{type:"text/csv"}); const url=URL.createObjectURL(blob);
     const a=document.createElement("a"); a.href=url; a.download=`pagamentos-freelancers_${ini}_a_${fim}.csv`; a.click(); URL.revokeObjectURL(url);
     toast("CSV consolidado exportado para o financeiro");
@@ -2246,52 +2270,107 @@ function Pagamentos() {
       </div>
     </Card>
 
-    <div className="grid sm:grid-cols-3 gap-3 mb-4">
-      <StatCard icon={I.wallet} label="Total consolidado" value={"R$ "+totalGeral.toLocaleString("pt-BR")} tone="free"/>
-      <StatCard icon={I.clock} label="Horas no período" value={horasGeral+"h"} tone="brand"/>
-      <StatCard icon={I.coffee} label="Freelancers pagos" value={linhas.length} tone="green"/>
+    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+      <StatCard icon={I.wallet} label="Total a pagar (mês)" value={fmtBRL(totalGeral)} tone="free"/>
+      <StatCard icon={I.check} label="Já pago" value={fmtBRL(totalPago)} tone="green"/>
+      <StatCard icon={I.pix} label="Saldo restante" value={fmtBRL(saldoGeral)} tone={saldoGeral>0?"amber":"green"}/>
+      <StatCard icon={I.coffee} label="Freelancers" value={linhas.length} tone="brand"/>
     </div>
 
-    <Card className="overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm min-w-[760px]">
-      <thead><tr className="text-left text-slate-400 border-b border-slate-100">{["Freelancer","Função","Jornadas","Horas","Casas","Valor acumulado","Chave Pix"].map(h=><th key={h} className="px-4 py-3 font-semibold">{h}</th>)}</tr></thead>
+    <Card className="overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm min-w-[820px]">
+      <thead><tr className="text-left text-slate-400 border-b border-slate-100">{["Freelancer","Função","Diárias","Acumulado","Pago","Saldo","Pix"].map(h=><th key={h} className="px-4 py-3 font-semibold">{h}</th>)}</tr></thead>
       <tbody className="divide-y divide-slate-50">
         {linhas.map(l=>[
           <tr key={l.id} className="hover:bg-slate-50/70 cursor-pointer" onClick={()=>setAberto(aberto===l.id?null:l.id)}>
           <td className="px-4 py-3"><div className="flex items-center gap-2"><Icon d={aberto===l.id?I.x:I.plus} className="w-3.5 h-3.5 text-slate-400"/><Avatar name={l.nome} tone="free" size="w-7 h-7"/><span className="font-semibold text-slate-800">{l.nome}</span></div></td>
           <td className="px-4 py-3 text-slate-600">{l.cargo}</td>
-          <td className="px-4 py-3">{l.jornadas}</td>
-          <td className="px-4 py-3 font-semibold">{l.horas}h</td>
-          <td className="px-4 py-3"><div className="flex gap-1 flex-wrap">{l.casas.map(cid=><Badge key={cid} tone="slate">{unidadeNome(cid,unidades).split(" ").slice(0,2).join(" ")}</Badge>)}</div></td>
-          <td className="px-4 py-3 font-bold text-slate-900">R$ {l.total.toLocaleString("pt-BR")}</td>
-          <td className="px-4 py-3 font-mono text-xs text-slate-500">{l.pix}</td>
+          <td className="px-4 py-3 tabular-nums">{l.jornadas}</td>
+          <td className="px-4 py-3 font-bold text-slate-900 tabular-nums">{fmtBRL(l.total)}</td>
+          <td className="px-4 py-3 text-emerald-600 tabular-nums">{l.pago>0?fmtBRL(l.pago):"—"}</td>
+          <td className={cx("px-4 py-3 font-semibold tabular-nums", l.saldo>0?"text-amber-600":"text-emerald-600")}>{fmtBRL(l.saldo)}</td>
+          <td className="px-4 py-3 font-mono text-xs text-slate-500">{l.pix||"—"}</td>
         </tr>,
-          aberto===l.id && <tr key={l.id+"-det"} className="bg-slate-50/60"><td colSpan="7" className="px-4 py-3">
-            <div className="text-xs font-bold text-slate-500 uppercase mb-2">Jornadas — edite turnos (dobra) e valor</div>
-            <div className="space-y-1.5">
-              {l.js.map((j,idx)=><div key={idx} className="flex flex-wrap items-center gap-2 text-sm bg-white rounded-lg px-3 py-2 border border-slate-100">
-                <span className="w-20 tabular-nums text-slate-600">{fmtDataBR(j.data)}</span>
-                <span className="w-16 text-slate-500">{j.horas}h</span>
-                <span className="text-slate-400">Turnos:</span>
-                <div className="inline-flex rounded-lg overflow-hidden border border-slate-200">
-                  {[1,2].map(t=><button key={t} onClick={()=>setFreelaAjuste(l.id,j.data,{turnos:t})} className={cx("px-2.5 py-1 text-xs font-semibold", j.turnos===t?"grad-brand text-white":"bg-white text-slate-600 hover:bg-slate-50")}>{t===2?"2 (dobra)":"1"}</button>)}
+          aberto===l.id && <tr key={l.id+"-det"} className="bg-slate-50/60"><td colSpan="7" className="px-4 py-4" onClick={e=>e.stopPropagation()}>
+            <div className="grid lg:grid-cols-3 gap-4">
+              {/* ---- Diárias agrupadas por SEMANA ---- */}
+              <div className="lg:col-span-2">
+                <div className="text-xs font-bold text-slate-500 uppercase mb-2">Diárias por semana — edite turnos (dobra) e valor</div>
+                {l.semanas.length===0 && <p className="text-sm text-slate-400 bg-white rounded-lg px-3 py-3 border border-slate-100">Nenhuma diária registrada no período.</p>}
+                <div className="space-y-3">
+                  {l.semanas.map(s=>{ const pagaSemana=(l.pagos||[]).some(p=>p.semana===s.wk); return (
+                    <div key={s.wk} className="bg-white rounded-xl border border-slate-100 overflow-hidden">
+                      <div className="flex items-center justify-between gap-2 px-3 py-2 bg-slate-50/70 border-b border-slate-100">
+                        <span className="text-xs font-bold text-slate-600">Semana de {fmtDataBR(s.wk)} · {s.js.length} diária(s)</span>
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-slate-900 tabular-nums text-sm">{fmtBRL(s.total)}</span>
+                          {pagaSemana
+                            ? <Badge tone="green">paga</Badge>
+                            : <button onClick={()=>pagarSemana(l,s)} className="px-2.5 py-1 rounded-lg text-xs font-bold grad-brand text-white hover:opacity-90">Pagar semana</button>}
+                        </div>
+                      </div>
+                      <div className="divide-y divide-slate-50">
+                        {s.js.map((j,idx)=><div key={idx} className="flex flex-wrap items-center gap-2 text-sm px-3 py-2">
+                          <span className="w-20 tabular-nums text-slate-600">{fmtDataBR(j.data)}</span>
+                          <span className="w-14 text-slate-500 text-xs">{j.horas!=null?j.horas+"h":"—"}</span>
+                          <span className="text-slate-400 text-xs">Turnos:</span>
+                          <div className="inline-flex rounded-lg overflow-hidden border border-slate-200">
+                            {[1,2].map(t=><button key={t} onClick={()=>setFreelaAjuste(l.id,j.data,{turnos:t})} className={cx("px-2.5 py-1 text-xs font-semibold", j.turnos===t?"grad-brand text-white":"bg-white text-slate-600 hover:bg-slate-50")}>{t===2?"2 (dobra)":"1"}</button>)}
+                          </div>
+                          <span className="text-slate-400 ml-1 text-xs">Valor/turno:</span>
+                          <div className="inline-flex items-center gap-1"><span className="text-slate-500 text-xs">R$</span>
+                            <input type="number" defaultValue={j.valorUnit} onBlur={e=>setFreelaAjuste(l.id,j.data,{valor:Number(e.target.value)})} className="w-20 px-2 py-1 rounded-lg border border-slate-200 text-sm"/></div>
+                          <span className="ml-auto font-bold text-slate-900 tabular-nums">= {fmtBRL(j.total)}</span>
+                          {j.dobra && <Badge tone="amber">dobra</Badge>}
+                        </div>)}
+                      </div>
+                    </div>
+                  );})}
                 </div>
-                <span className="text-slate-400 ml-1">Valor/turno:</span>
-                <div className="inline-flex items-center gap-1"><span className="text-slate-500 text-xs">R$</span>
-                  <input type="number" defaultValue={j.valorUnit} onBlur={e=>setFreelaAjuste(l.id,j.data,{valor:Number(e.target.value)})} className="w-20 px-2 py-1 rounded-lg border border-slate-200 text-sm"/></div>
-                <span className="ml-auto font-bold text-slate-900 tabular-nums">= {fmtBRL(j.total)}</span>
-                {j.dobra && <Badge tone="amber">dobra</Badge>}
-              </div>)}
+                <p className="text-[11px] text-slate-400 mt-2">Dobra automática quando a jornada tem ≥ {DOBRA_HORAS}h. Você pode ajustar turnos e o valor por turno manualmente.</p>
+              </div>
+
+              {/* ---- Controle de pagamentos ---- */}
+              <div>
+                <div className="text-xs font-bold text-slate-500 uppercase mb-2">Controle de pagamentos</div>
+                <div className="bg-white rounded-xl border border-slate-100 p-3 space-y-2">
+                  <div className="flex items-center justify-between text-sm"><span className="text-slate-500">Total do mês</span><span className="font-bold text-slate-900 tabular-nums">{fmtBRL(l.total)}</span></div>
+                  <div className="flex items-center justify-between text-sm"><span className="text-slate-500">Já pago</span><span className="font-bold text-emerald-600 tabular-nums">{fmtBRL(l.pago)}</span></div>
+                  <div className="flex items-center justify-between text-sm border-t border-slate-100 pt-2"><span className="font-semibold text-slate-600">Saldo restante</span><span className={cx("font-extrabold tabular-nums", l.saldo>0?"text-amber-600":"text-emerald-600")}>{fmtBRL(l.saldo)}</span></div>
+                </div>
+
+                <div className="text-[11px] font-bold text-slate-400 uppercase mt-3 mb-1.5">Lançar pagamento manual</div>
+                <div className="bg-white rounded-xl border border-slate-100 p-3 space-y-2">
+                  <div className="flex items-center gap-1"><span className="text-slate-500 text-xs">R$</span>
+                    <input type="number" placeholder="valor" value={(novoPag[l.id]||{}).valor||""} onChange={e=>setNovoPag(p=>({...p,[l.id]:{...(p[l.id]||{}),valor:e.target.value}}))} className="w-full px-2 py-1.5 rounded-lg border border-slate-200 text-sm"/></div>
+                  <input type="text" placeholder="observação (ex.: adiantamento Pix)" value={(novoPag[l.id]||{}).obs||""} onChange={e=>setNovoPag(p=>({...p,[l.id]:{...(p[l.id]||{}),obs:e.target.value}}))} className="w-full px-2 py-1.5 rounded-lg border border-slate-200 text-sm"/>
+                  <button onClick={()=>lancarPag(l)} className="w-full px-3 py-1.5 rounded-lg text-xs font-bold grad-brand text-white hover:opacity-90">Registrar pagamento</button>
+                </div>
+
+                <div className="text-[11px] font-bold text-slate-400 uppercase mt-3 mb-1.5">Pagamentos registrados</div>
+                <div className="space-y-1.5">
+                  {(l.pagos||[]).length===0 && <p className="text-xs text-slate-400">Nenhum pagamento registrado ainda.</p>}
+                  {(l.pagos||[]).map(p=><div key={p.id} className="flex items-center gap-2 text-sm bg-white rounded-lg px-3 py-2 border border-slate-100">
+                    <div className="min-w-0">
+                      <div className="font-semibold text-slate-800 tabular-nums">{fmtBRL(Number(p.valor||0))}</div>
+                      <div className="text-[11px] text-slate-400 truncate">{fmtDataBR(p.data)} · {p.obs||"—"}</div>
+                    </div>
+                    <button onClick={()=>removePagamentoFreela(l.id,p.id)} className="ml-auto text-slate-300 hover:text-rose-500" title="Remover"><Icon d={I.trash} className="w-4 h-4"/></button>
+                  </div>)}
+                </div>
+              </div>
             </div>
-            <p className="text-[11px] text-slate-400 mt-2">Dobra automática quando a jornada tem ≥ {DOBRA_HORAS}h. Você pode ajustar turnos e o valor por turno manualmente.</p>
           </td></tr>
         ])}
         {linhas.length===0 && <tr><td colSpan="7" className="px-4 py-8 text-center text-slate-400">Nenhuma jornada no período/casa selecionados.</td></tr>}
       </tbody>
       {linhas.length>0 && <tfoot><tr className="border-t-2 border-slate-100 bg-slate-50/60">
-        <td className="px-4 py-3 font-bold" colSpan="5">Total consolidado</td>
-        <td className="px-4 py-3 font-extrabold text-free-700">R$ {totalGeral.toLocaleString("pt-BR")}</td><td/></tr></tfoot>}
+        <td className="px-4 py-3 font-bold" colSpan="3">Total consolidado</td>
+        <td className="px-4 py-3 font-extrabold text-slate-900 tabular-nums">{fmtBRL(totalGeral)}</td>
+        <td className="px-4 py-3 font-bold text-emerald-600 tabular-nums">{fmtBRL(totalPago)}</td>
+        <td className={cx("px-4 py-3 font-extrabold tabular-nums", saldoGeral>0?"text-amber-600":"text-emerald-600")}>{fmtBRL(saldoGeral)}</td>
+        <td/></tr></tfoot>}
     </table></div></Card>
-    <p className="text-xs text-slate-400 mt-3">Exportação simplificada: apenas valores consolidados por freelancer (sem status de “pago”), pronta para repasse do financeiro via Pix.</p>
+    <p className="text-xs text-slate-400 mt-3">Clique em um freelancer para ver as diárias por semana, pagar a semana e registrar pagamentos parciais. A exportação inclui total, pago e saldo, pronta para o financeiro.</p>
   </div>;
 }
 
