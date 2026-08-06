@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- build: ponto ao vivo - checkout (ajuste aprovado) encerra o dia mesmo com feed fora de ordem + timer congela na saida + esconde escalado fantasma (sem cadastro) 2026-08-04d -->
+<!-- build: escala nome+sobrenome e limpa orfaos (—) + falta automatica CLT com desconto de dia+DSR na folha + pagamentos CLT/gerentes parcelados 2026-08-06e -->
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8" />
@@ -477,6 +477,69 @@ function diaEscala(escala, escalaOv, uid, dateStr, weekday){
   const base = (escala && escala[uid] && escala[uid][weekday]) || [];
   return base.filter(a=>a.tipo!=="free");
 }
+// ---- Faltas automáticas do CLT (escalado e não bateu ponto) ----
+// Datas AAAA-MM-DD entre ini e fim (inclusive)
+function datasEntre(ini,fim){ const out=[]; if(!ini||!fim) return out; const [ay,am,ad]=ini.split("-").map(Number); const [by,bm,bd]=fim.split("-").map(Number);
+  let d=new Date(ay,am-1,ad); const f=new Date(by,bm-1,bd); let g=0; while(d<=f && g++<400){ out.push(ymd(d)); d=addDias(d,1); } return out; }
+// weekday 0..6 (Seg..Dom) de uma data AAAA-MM-DD
+const wdDe=(ds)=>{ const [y,m,dd]=ds.split("-").map(Number); return (new Date(y,m-1,dd).getDay()+6)%7; };
+// Fim do turno em minutos (para "hoje após o turno"). Noite cruza a meia-noite → não encerra no mesmo dia.
+const TURNO_FIM_MIN = { manha:16*60, tarde:20*60, noite:null };
+// Retorna as datas em que o colaborador escalado NÃO bateu ponto (falta), respeitando abonos e o turno de hoje.
+function faltasAutoDe(pessoa, ctx){
+  const {escala,escalaOv,registros,atestados,ini,fim,hoje,nowMin}=ctx;
+  const uid=pessoa.unidade; if(uid==null) return [];
+  const cpf=soDigitos(pessoa.cpf||"");
+  const casa=(pessoa.id!=null)?String(pessoa.id):null;
+  const teveEntrada=(ds)=> (registros||[]).some(r=> r.acao==="Entrada" && ((r.data===ds)||(r.dia===ds)) && ((r.pid!=null&&String(r.pid)===casa)||(cpf&&r.cpf&&soDigitos(r.cpf)===cpf)||r.nome===pessoa.nome) );
+  const abonado=(ds)=> (atestados||[]).some(a=> a.data===ds && ((a.pid!=null&&String(a.pid)===casa)||(cpf&&a.cpf&&soDigitos(a.cpf)===cpf)) );
+  const dias=[];
+  datasEntre(ini,fim).forEach(ds=>{
+    if(ds>hoje) return;                                    // dia futuro
+    const wd=wdDe(ds);
+    const aloc=diaEscala(escala,escalaOv,uid,ds,wd).find(a=>String(a.pid)===casa && a.tipo==="clt");
+    if(!aloc || aloc.turno==="folga") return;              // não escalado ou folga
+    const marcadoFaltou = aloc.marca==="faltou";
+    if(ds===hoje && !marcadoFaltou){ const ft=TURNO_FIM_MIN[aloc.turno]; if(ft==null || nowMin<ft) return; } // turno de hoje ainda não acabou
+    if(!marcadoFaltou && teveEntrada(ds)) return;          // bateu entrada → presente
+    if(abonado(ds)) return;                                // atestado abona (não desconta)
+    dias.push(ds);
+  });
+  return dias;
+}
+// Calcula UMA linha da folha (salário + extras + adicional noturno − descontos, com falta automática e DSR)
+function calcFolhaLinha(c, ctx){
+  const {apurCLT, cltExtraAjuste, ymRef, getDossie, naData, faltasCtx}=ctx;
+  const meus=apurCLT.filter(x=>x.nome===c.nome);
+  const extrasMin=meus.reduce((s,x)=>s+(x.extras||0),0);
+  const extras100Min=meus.reduce((s,x)=>s+(x.extras100||0),0);
+  const notMin=meus.reduce((s,x)=>s+minutosNoturnos(x.punches||[]),0);
+  const salario=Number(c.salario||0);
+  const vHora=salario? salario/220 : 0;              // hora normal (44h/sem → 220h/mês)
+  const vDia =salario? salario/30  : 0;              // valor do dia (base da falta e do DSR)
+  const extrasCalc=(extrasMin/60)*vHora*1.5 + (extras100Min/60)*vHora*2;
+  const extraOverride = cltExtraAjuste[c.id+"|"+ymRef];
+  const extrasVal = extraOverride!=null ? Number(extraOverride) : extrasCalc;
+  const extrasEditado = extraOverride!=null;
+  const notVal=(notMin/60)*vHora*0.2;               // adicional noturno 20% (Art. 73 CLT)
+  const dos=getDossie("clt-"+c.id);
+  const faltasManuais=(dos.faltas||[]).filter(x=>x.tipo==="falta" && x.descontar && naData(x.data)).map(x=>x.data);
+  const atrasosD=(dos.faltas||[]).filter(x=>x.tipo==="atraso" && x.descontar && naData(x.data));
+  const dossieDatas=new Set((dos.faltas||[]).map(x=>x.data));   // datas já tratadas manualmente (falta OU abono)
+  const auto = faltasCtx ? faltasAutoDe(c, faltasCtx).filter(d=>!dossieDatas.has(d)) : [];
+  const faltaDatas=[...new Set([...faltasManuais,...auto])].filter(naData);
+  const nFaltas=faltaDatas.length;
+  const semanasFalta=new Set(faltaDatas.map(d=>{ const [y,m,dd]=d.split("-").map(Number); return ymd(segDaSemana(new Date(y,m-1,dd))); }));
+  const nDSR=semanasFalta.size;                      // política escolhida: perde 1 DSR por semana com falta
+  const descFaltas=nFaltas*vDia, descDSR=nDSR*vDia;
+  const descAtrasos=atrasosD.reduce((s,x)=>s+vHora*(Number(x.horas)||0),0);
+  const descontos=descFaltas+descDSR+descAtrasos;
+  const liquido=salario+extrasVal+notVal-descontos;
+  return { id:c.id, nome:c.nome, foto:c.foto, pix:c.pix, escala:c.escala, salario, vHora,
+    extrasMin, extras100Min, extrasHoras:extrasMin+extras100Min, extrasVal, extrasEditado, notMin, notVal,
+    faltasQtd:nFaltas, dsrQtd:nDSR, faltaDatas, descFaltas, descDSR, atrasosQtd:atrasosD.length,
+    descontos, liquido, semSalario:!salario };
+}
 const escalaInicial = () => {
   const esc={};
   INIT_UNIDADES.forEach(u=>{ esc[u.id]=escalaVaziaUnidade(); });
@@ -779,6 +842,10 @@ function StoreProvider({children}) {
   const [pagamentosFreela,setPagFreela]=usePersist("pagamentosFreela",{});
   const addPagamentoFreela=(fid,obj)=>setPagFreela(prev=>{ const arr=prev[String(fid)]||[]; return {...prev,[String(fid)]:[{...obj,id:Math.random().toString(36).slice(2)},...arr]}; });
   const removePagamentoFreela=(fid,pid)=>setPagFreela(prev=>{ const arr=(prev[String(fid)]||[]).filter(x=>x.id!==pid); return {...prev,[String(fid)]:arr}; });
+  // Pagamentos de CLT e cargos de confiança (parcelados/adiantamentos), chaveados pelo id do colaborador na lista de CLTs.
+  const [pagamentosCLT,setPagCLT]=usePersist("pagamentosCLT",{});
+  const addPagamentoCLT=(id,obj)=>setPagCLT(prev=>{ const arr=prev[String(id)]||[]; return {...prev,[String(id)]:[{...obj,id:Math.random().toString(36).slice(2)},...arr]}; });
+  const removePagamentoCLT=(id,pid)=>setPagCLT(prev=>{ const arr=(prev[String(id)]||[]).filter(x=>x.id!==pid); return {...prev,[String(id)]:arr}; });
   // Diária do freela = dia TRABALHADO: conta quando há CHECK-IN (Entrada) no dia, mesmo sem checkout.
   // (antes exigia checkout → jornada "completo" → valores zeravam quando o freela não batia a saída)
   const _freelaDias = apurarHoras(registros).filter(x=>x.tipo==="free" && (x.punches||[]).some(pp=>pp.acao==="Entrada"));
@@ -839,7 +906,7 @@ function StoreProvider({children}) {
   const registrosVis = casaRestrita!=null ? registros.filter(r=>_nomesVis.has(r.nome)) : registros;
 
   const value={ unidades:unidadesVis,salvarUnidade,excluirUnidade, clts:cltsVis,freelas:freelasVis,freelasComPagamentos:freelasPagVis,salvarClt,salvarFreela,excluirColab,cadastrarPublico, anexarDoc,
-    escala,setEscala, escalaOv,setEscalaOv, registros:registrosVis,addRegistro, pontoHist, freelancerEscaladoHoje, valorFreela, setFreelaAjuste, cltExtraAjuste,setCltExtra, pagamentosFreela,addPagamentoFreela,removePagamentoFreela,
+    escala,setEscala, escalaOv,setEscalaOv, registros:registrosVis,addRegistro, pontoHist, freelancerEscaladoHoje, valorFreela, setFreelaAjuste, cltExtraAjuste,setCltExtra, pagamentosFreela,addPagamentoFreela,removePagamentoFreela, pagamentosCLT,addPagamentoCLT,removePagamentoCLT,
     cargosFreela,salvarCargoFreela,excluirCargoFreela, atestados,enviarAtestado, ajustes,enviarAjuste,resolverAjuste,
     dossie,getDossie,addFalta,addFeedback,addAnexo, perfil,setPerfil, perms,setPerms, can,
     clientes,clienteAtivo,tenantAtual,criarCliente,trocarCliente,
@@ -847,6 +914,10 @@ function StoreProvider({children}) {
   return <StoreCtx.Provider value={value}>{children}</StoreCtx.Provider>;
 }
 const pessoaNome = (pid,tipo,clts,freelas)=> (tipo==="clt"?clts:freelas).find(p=>p.id===pid)?.nome || "—";
+// Nome + sobrenome (1º e último token) — para exibir na escala sem cortar em "Maria ..."
+const nomeSobrenome = (full)=>{ const s=String(full||"").trim(); if(!s||s==="—") return s; const p=s.split(/\s+/); return p.length<=1?p[0]:p[0]+" "+p[p.length-1]; };
+// Alocação órfã = pid não existe em NENHUM cadastro (clt ou freela). Aparecia como "—" na escala.
+const alocOrfa = (a,clts,freelas)=> !clts.some(p=>String(p.id)===String(a.pid)) && !freelas.some(p=>String(p.id)===String(a.pid));
 const unidadeNome = (id,unidades)=> unidades.find(u=>u.id===id)?.nome || "—";
 
 // Filtro por CASA (unidade) reutilizável — chips "Todas as casas" + cada unidade
@@ -1038,6 +1109,8 @@ function EscalaVisual() {
   const nome=(pid,tipo)=>pessoaNome(pid,tipo,clts,freelas);
   const pessoaDe=(a)=>(a.tipo==="clt"?clts:freelas).find(p=>p.id===a.pid);
   const passaSetor=(a)=> setorF==="todos" || setorDe(pessoaDe(a))===setorF;
+  // Esconde alocações órfãs (colaborador que não existe mais → aparecia como "—")
+  const valido=(a)=> !alocOrfa(a,clts,freelas);
 
   // Todas as edições gravam SÓ na data da coluna (exceção), sem replicar nas outras semanas.
   const onDrop=(dia)=>{
@@ -1054,11 +1127,24 @@ function EscalaVisual() {
   const [editH,setEditH]=useState(null); // {di,id,hi,hf}
   const addColab=(dia,pid,tipo)=>{ setDiaData(dia, arr=>[...arr,{id:(tipo==="clt"?"c":"f")+Date.now(),pid,tipo,turno:tipo==="clt"?turnoPorDia(dia):"noite"}]); setAdd(null); toast("Colaborador inserido na escala do dia "+labelDiaFull(dia)); };
 
-  const tot=[0,1,2,3,4,5,6].map(di=>diaDe(di)).flat();
+  const tot=[0,1,2,3,4,5,6].map(di=>diaDe(di)).flat().filter(valido);
   const nClt=tot.filter(a=>a.tipo==="clt"&&a.turno!=="folga").length;
   const nFree=tot.filter(a=>a.tipo==="free").length;
   const nFolga=tot.filter(a=>a.turno==="folga").length;
   const uAtual=unidades.find(u=>u.id===uSel);
+  // Conta e remove (com segurança) marcações órfãs de TODAS as casas/datas — só quando os cadastros já carregaram.
+  const cadastrosProntos = (clts.length+freelas.length)>0;
+  const contarOrfaos=()=>{ let n=0;
+    Object.values(escala||{}).forEach(dias=>Object.values(dias||{}).forEach(arr=>(arr||[]).forEach(a=>{ if(alocOrfa(a,clts,freelas)) n++; })));
+    Object.values(escalaOv||{}).forEach(datas=>Object.values(datas||{}).forEach(arr=>(arr||[]).forEach(a=>{ if(alocOrfa(a,clts,freelas)) n++; })));
+    return n; };
+  const nOrfaos = cadastrosProntos ? contarOrfaos() : 0;
+  const limparOrfaos=()=>{
+    if(!cadastrosProntos){ toast("Aguarde os cadastros carregarem."); return; }
+    setEscala(prev=>{ const n={}; Object.keys(prev||{}).forEach(uid=>{ n[uid]={}; Object.keys(prev[uid]||{}).forEach(d=>{ n[uid][d]=(prev[uid][d]||[]).filter(a=>!alocOrfa(a,clts,freelas)); }); }); return n; });
+    setEscalaOv(prev=>{ const n={}; Object.keys(prev||{}).forEach(uid=>{ n[uid]={}; Object.keys(prev[uid]||{}).forEach(ds=>{ n[uid][ds]=(prev[uid][ds]||[]).filter(a=>!alocOrfa(a,clts,freelas)); }); }); return n; });
+    toast("Marcações órfãs removidas da escala");
+  };
 
   // ===== Passador de datas: "hoje" real, rótulos e busca de data específica =====
   const ehHoje=(di)=> ymd(datasSemana[di])===hojeStr();
@@ -1069,6 +1155,7 @@ function EscalaVisual() {
 
   return <div className="fade-in">
     <PageHeader title="Escala por unidade" sub="Uma aba por casa · filtro por setor · layout compacto · menu (⋯) para turno, faltou, atrasou, folga">
+      {editavel && nOrfaos>0 && <Btn variant="ghost" icon={I.trash} onClick={limparOrfaos} title="Remover alocações de colaboradores que não existem mais">Limpar órfãos ({nOrfaos})</Btn>}
       {editavel && <Btn icon={I.plus} onClick={()=>setAdd(HOJE_IDX)}>Incluir colaborador</Btn>}
     </PageHeader>
 
@@ -1123,14 +1210,14 @@ function EscalaVisual() {
               {editavel && <button onClick={()=>setAdd(di)} className="w-6 h-6 rounded-lg bg-white border border-slate-200 grid place-items-center text-slate-400 hover:text-brand-600 hover:border-brand-300"><Icon d={I.plus} className="w-3.5 h-3.5"/></button>}
             </div>
             <div className="space-y-1.5">
-              {(diaDe(di)||[]).filter(passaSetor).map(a=>{ const t=TURNOS[a.turno]; const setor=SETOR_MAP[setorDe(pessoaDe(a))]; const aberto=menu&&menu.di===di&&menu.id===a.id;
+              {(diaDe(di)||[]).filter(valido).filter(passaSetor).map(a=>{ const t=TURNOS[a.turno]; const setor=SETOR_MAP[setorDe(pessoaDe(a))]; const aberto=menu&&menu.di===di&&menu.id===a.id;
                 return <div key={a.id} className="relative">
                   <div draggable={editavel} onDragStart={()=>setDrag({aloc:a,from:di})} onDragEnd={()=>{setDrag(null);setOver(null);}}
                     className={cx("rounded-lg pl-2 pr-1 py-1.5 bg-white shadow-soft border border-slate-100 border-l-[3px]", editavel&&"cursor-grab", a.marca==="faltou"&&"opacity-70")}
                     style={{borderLeftColor:setor?.c||"#6366f1"}}>
                     <div className="flex items-center gap-1.5">
                       <Avatar name={nome(a.pid,a.tipo)} tone={a.tipo==="clt"?"brand":"free"} size="w-5 h-5"/>
-                      <span className="text-[11px] font-semibold text-slate-800 flex-1 min-w-0 truncate">{nome(a.pid,a.tipo)}</span>
+                      <span className="text-[11px] font-semibold text-slate-800 flex-1 min-w-0 leading-tight break-words" title={nome(a.pid,a.tipo)}>{nomeSobrenome(nome(a.pid,a.tipo))}</span>
                       {editavel && <button onClick={()=>setMenu(aberto?null:{di,id:a.id})} className="text-slate-400 hover:text-slate-700 font-bold px-1 leading-none">⋯</button>}
                     </div>
                     <div className="flex items-center gap-1 mt-1 flex-wrap">
@@ -2255,6 +2342,113 @@ function Relatorios() {
 }
 
 /* ============================ PAGAMENTOS (FREELANCERS) ============================ */
+// Pagamentos de SALARIADOS (CLT ou Cargos de confiança) — parcelado/adiantamento + saldo, modelo dos freelancers.
+function PagamentoSalariados({ modo, ini, fim, uni }){
+  const { clts, unidades, registros, pontoHist, getDossie, cltExtraAjuste, escala, escalaOv, atestados, acesso, pagamentosCLT, addPagamentoCLT, removePagamentoCLT } = useStore();
+  const toast=useContext(ToastCtx);
+  const _clock=useClock();
+  const [aberto,setAberto]=useState(null);
+  const [novoPag,setNovoPag]=useState({});
+  const podeSigilo=!acesso||acesso.podeSigilo;
+  const naData=(d)=> (!ini||d>=ini)&&(!fim||d<=fim);
+  const ymRef=(ini||hojeStr()).slice(0,7);
+  const _nowMin=_clock.getHours()*60+_clock.getMinutes();
+  const apurCLT=apurarHoras([...pontoHist,...registros]).filter(x=>x.tipo==="clt"&&x.completo&&naData(x.dia));
+  const faltasCtx={ escala, escalaOv, registros:[...pontoHist,...registros], atestados, ini, fim, hoje:hojeStr(), nowMin:_nowMin };
+  const folhaCtx={ apurCLT, cltExtraAjuste, ymRef, getDossie, naData, faltasCtx };
+  const naCasa=(c)=> uni==="todas" || c.unidade===Number(uni) || (modo==="confianca" && (c.unidade==="todas"||c.unidade==null));
+  const lista = (modo==="confianca"
+    ? clts.filter(c=>c.vinculo==="confianca")
+    : clts.filter(c=>c.vinculo!=="fixo" && c.vinculo!=="confianca")).filter(naCasa);
+  const pagosDe=(id)=> (pagamentosCLT[String(id)]||[]).filter(p=>{ const r=p.ref||p.data; return (r||"").slice(0,7)===ymRef || naData(r); });
+  const linhas=lista.map(c=>{
+    let total, det=null;
+    if(modo==="confianca"){ total=Number(c.salario||0); }
+    else { det=calcFolhaLinha(c,folhaCtx); total=det.liquido; }
+    const oculto = modo==="confianca" && c.sigiloso && !podeSigilo;
+    const pagos=pagosDe(c.id); const pago=pagos.reduce((s,p)=>s+Number(p.valor||0),0);
+    return { id:c.id, nome:c.nome, foto:c.foto, pix:c.pix, cargo:c.cargo, sigiloso:!!c.sigiloso, oculto, total, pago, saldo:total-pago, pagos, det };
+  }).sort((a,b)=>b.total-a.total);
+  const vis=linhas.filter(l=>!l.oculto);
+  const totalGeral=vis.reduce((s,l)=>s+l.total,0);
+  const totalPago=vis.reduce((s,l)=>s+l.pago,0);
+  const saldoGeral=totalGeral-totalPago;
+  const confOcultos=linhas.filter(l=>l.oculto).length;
+  const pagarTudo=(l)=>{ if(l.saldo<=0){ toast("Nada em aberto para "+l.nome); return; } addPagamentoCLT(l.id,{data:hojeStr(), ref:(ini||hojeStr()), valor:Math.round(l.saldo*100)/100, obs:(modo==="confianca"?"Salário ":"Folha ")+ymRef}); toast("Pagamento registrado"); };
+  const lancarPag=(l)=>{ const np=novoPag[l.id]||{}; const v=Number(np.valor||0); if(!v){ toast("Informe o valor do pagamento"); return; } addPagamentoCLT(l.id,{data:hojeStr(), ref:(ini||hojeStr()), valor:v, obs:np.obs||"Adiantamento"}); setNovoPag(p=>({...p,[l.id]:{valor:"",obs:""}})); toast("Pagamento registrado"); };
+  const rot = modo==="confianca"?"Gerência & Diretoria":"CLT";
+  return <>
+    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+      <StatCard icon={I.wallet} label={"Total a pagar ("+rot+")"} value={fmtBRL(totalGeral)} tone="brand"/>
+      <StatCard icon={I.check} label="Já pago" value={fmtBRL(totalPago)} tone="green"/>
+      <StatCard icon={I.pix} label="Saldo restante" value={fmtBRL(saldoGeral)} tone={saldoGeral>0?"amber":"green"}/>
+      <StatCard icon={I.user} label={rot} value={linhas.length} tone="slate"/>
+    </div>
+    {modo==="confianca" && confOcultos>0 && <div className="mb-3 p-3 rounded-xl bg-amber-50 text-amber-700 text-xs flex items-center gap-2"><Icon d={I.shield} className="w-4 h-4"/> {confOcultos} pagamento(s) de diretoria ocultos — valor visível apenas para o Diretor e a Diretora Financeira.</div>}
+    <Card className="overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm min-w-[760px]">
+      <thead><tr className="text-left text-slate-400 border-b border-slate-100">{["Colaborador","Cargo",modo==="confianca"?"Salário mensal":"Líquido do mês","Pago","Saldo","Pix"].map(h=><th key={h} className="px-4 py-3 font-semibold">{h}</th>)}</tr></thead>
+      <tbody className="divide-y divide-slate-50">
+        {linhas.map(l=>[
+          <tr key={l.id} className={cx("hover:bg-slate-50/70", !l.oculto&&"cursor-pointer")} onClick={()=>{ if(!l.oculto) setAberto(aberto===l.id?null:l.id); }}>
+          <td className="px-4 py-3"><div className="flex items-center gap-2">{!l.oculto&&<Icon d={aberto===l.id?I.x:I.plus} className="w-3.5 h-3.5 text-slate-400"/>}<Avatar name={l.nome} src={l.foto} tone={modo==="confianca"?"slate":"brand"} size="w-7 h-7"/><span className="font-semibold text-slate-800">{l.nome}</span>{l.sigiloso&&<Badge tone="amber">sigiloso</Badge>}</div></td>
+          <td className="px-4 py-3 text-slate-600">{l.cargo}</td>
+          <td className="px-4 py-3 font-bold text-slate-900 tabular-nums">{l.oculto?<span className="inline-flex items-center gap-1 text-slate-400"><Icon d={I.shield} className="w-3.5 h-3.5"/>••••••</span>:fmtBRL(l.total)}</td>
+          <td className="px-4 py-3 text-emerald-600 tabular-nums">{l.oculto?"—":(l.pago>0?fmtBRL(l.pago):"—")}</td>
+          <td className={cx("px-4 py-3 font-semibold tabular-nums", l.oculto?"text-slate-400":l.saldo>0?"text-amber-600":"text-emerald-600")}>{l.oculto?"—":fmtBRL(l.saldo)}</td>
+          <td className="px-4 py-3 font-mono text-xs text-slate-500">{l.oculto?"—":(l.pix||"—")}</td>
+        </tr>,
+          aberto===l.id && !l.oculto && <tr key={l.id+"-d"} className="bg-slate-50/60"><td colSpan="6" className="px-4 py-4" onClick={e=>e.stopPropagation()}>
+            <div className="grid lg:grid-cols-3 gap-4">
+              <div className="lg:col-span-2">
+                <div className="text-xs font-bold text-slate-500 uppercase mb-2">Resumo do mês</div>
+                <div className="bg-white rounded-xl border border-slate-100 p-3 text-sm space-y-1">
+                  {modo!=="confianca" && l.det && <>
+                    <div className="flex justify-between"><span className="text-slate-500">Salário base</span><span className="tabular-nums">{fmtBRL(l.det.salario)}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">Horas extras</span><span className="tabular-nums text-emerald-600">+{fmtBRL(l.det.extrasVal)}</span></div>
+                    {l.det.notVal>0 && <div className="flex justify-between"><span className="text-slate-500">Adic. noturno</span><span className="tabular-nums text-emerald-600">+{fmtBRL(l.det.notVal)}</span></div>}
+                    {l.det.descontos>0 && <div className="flex justify-between"><span className="text-slate-500">Descontos ({l.det.faltasQtd} falta{l.det.dsrQtd?` +${l.det.dsrQtd} DSR`:""})</span><span className="tabular-nums text-rose-600">-{fmtBRL(l.det.descontos)}</span></div>}
+                  </>}
+                  {modo==="confianca" && <div className="flex justify-between"><span className="text-slate-500">Salário mensal</span><span className="tabular-nums">{fmtBRL(l.total)}</span></div>}
+                  <div className="flex justify-between border-t border-slate-100 pt-1 font-bold"><span className="text-slate-700">{modo==="confianca"?"Total":"Líquido do mês"}</span><span className="tabular-nums text-slate-900">{fmtBRL(l.total)}</span></div>
+                </div>
+                <div className="text-[11px] font-bold text-slate-400 uppercase mt-3 mb-1.5">Pagamentos registrados</div>
+                <div className="space-y-1.5">
+                  {l.pagos.length===0 && <p className="text-xs text-slate-400">Nenhum pagamento registrado ainda.</p>}
+                  {l.pagos.map(p=><div key={p.id} className="flex items-center gap-2 text-sm bg-white rounded-lg px-3 py-2 border border-slate-100">
+                    <div className="min-w-0"><div className="font-semibold text-slate-800 tabular-nums">{fmtBRL(Number(p.valor||0))}</div><div className="text-[11px] text-slate-400 truncate">{fmtDataBR(p.data)} · {p.obs||"—"}</div></div>
+                    <button onClick={()=>removePagamentoCLT(l.id,p.id)} className="ml-auto text-slate-300 hover:text-rose-500" title="Remover"><Icon d={I.trash} className="w-4 h-4"/></button>
+                  </div>)}
+                </div>
+              </div>
+              <div>
+                <div className="bg-white rounded-xl border border-slate-100 p-3 space-y-2">
+                  <div className="flex items-center justify-between text-sm"><span className="text-slate-500">Total do mês</span><span className="font-bold tabular-nums">{fmtBRL(l.total)}</span></div>
+                  <div className="flex items-center justify-between text-sm"><span className="text-slate-500">Já pago</span><span className="font-bold text-emerald-600 tabular-nums">{fmtBRL(l.pago)}</span></div>
+                  <div className="flex items-center justify-between text-sm border-t border-slate-100 pt-2"><span className="font-semibold text-slate-600">Saldo</span><span className={cx("font-extrabold tabular-nums", l.saldo>0?"text-amber-600":"text-emerald-600")}>{fmtBRL(l.saldo)}</span></div>
+                  <button onClick={()=>pagarTudo(l)} disabled={l.saldo<=0} className={cx("w-full px-3 py-1.5 rounded-lg text-xs font-bold text-white", l.saldo>0?"grad-brand hover:opacity-90":"bg-slate-300 cursor-not-allowed")}>Pagar saldo do mês</button>
+                </div>
+                <div className="text-[11px] font-bold text-slate-400 uppercase mt-3 mb-1.5">Adiantamento / parcial</div>
+                <div className="bg-white rounded-xl border border-slate-100 p-3 space-y-2">
+                  <div className="flex items-center gap-1"><span className="text-slate-500 text-xs">R$</span><input type="number" placeholder="valor" value={(novoPag[l.id]||{}).valor||""} onChange={e=>setNovoPag(p=>({...p,[l.id]:{...(p[l.id]||{}),valor:e.target.value}}))} className="w-full px-2 py-1.5 rounded-lg border border-slate-200 text-sm"/></div>
+                  <input type="text" placeholder="observação (ex.: adiantamento Pix)" value={(novoPag[l.id]||{}).obs||""} onChange={e=>setNovoPag(p=>({...p,[l.id]:{...(p[l.id]||{}),obs:e.target.value}}))} className="w-full px-2 py-1.5 rounded-lg border border-slate-200 text-sm"/>
+                  <button onClick={()=>lancarPag(l)} className="w-full px-3 py-1.5 rounded-lg text-xs font-bold grad-brand text-white hover:opacity-90">Registrar pagamento</button>
+                </div>
+              </div>
+            </div>
+          </td></tr>
+        ])}
+        {linhas.length===0 && <tr><td colSpan="6" className="px-4 py-8 text-center text-slate-400">Nenhum {modo==="confianca"?"cargo de confiança":"colaborador CLT"} nesta casa.</td></tr>}
+      </tbody>
+      {vis.length>0 && <tfoot><tr className="border-t-2 border-slate-100 bg-slate-50/60">
+        <td className="px-4 py-3 font-bold" colSpan="2">Total {podeSigilo?"":"(visível)"}</td>
+        <td className="px-4 py-3 font-extrabold text-slate-900 tabular-nums">{fmtBRL(totalGeral)}</td>
+        <td className="px-4 py-3 font-bold text-emerald-600 tabular-nums">{fmtBRL(totalPago)}</td>
+        <td className={cx("px-4 py-3 font-extrabold tabular-nums", saldoGeral>0?"text-amber-600":"text-emerald-600")}>{fmtBRL(saldoGeral)}</td><td/></tr></tfoot>}
+    </table></div></Card>
+    <p className="text-xs text-slate-400 mt-3">{modo==="confianca"?"Salário mensal fixo dos cargos de confiança. ":"Líquido do mês = salário + extras/adic. noturno − faltas/DSR (mesma conta da folha). "}Clique no nome para registrar pagamentos parciais, adiantamentos e o saldo restante.</p>
+  </>;
+}
+
 function Pagamentos() {
   const { freelasComPagamentos:freelas, unidades, setFreelaAjuste, pagamentosFreela, addPagamentoFreela, removePagamentoFreela } = useStore();
   const toast=useContext(ToastCtx);
@@ -2262,6 +2456,7 @@ function Pagamentos() {
   const [ini,setIni]=useState(_mr.ini);
   const [fim,setFim]=useState(_mr.fim);
   const [uni,setUni]=useState("todas");
+  const [abaP,setAbaP]=useState("freela"); // freela | clt | confianca
   const [aberto,setAberto]=useState(null); // freelancer expandido
   const [novoPag,setNovoPag]=useState({}); // {fid:{valor,obs}}
 
@@ -2302,9 +2497,14 @@ function Pagamentos() {
   };
 
   return <div className="fade-in">
-    <PageHeader title="Pagamentos de freelancers" sub="Valores acumulados por freelancer · filtro por período e por casa · exportação simplificada para o financeiro">
-      <Btn icon={I.download} onClick={exportar}>Exportar consolidado</Btn>
+    <PageHeader title="Pagamentos" sub="Freelancers, CLT e gerência/diretoria · pagamento parcelado (adiantamentos), saldo do mês e filtro por período/casa">
+      {abaP==="freela" && <Btn icon={I.download} onClick={exportar}>Exportar consolidado</Btn>}
     </PageHeader>
+
+    <div className="flex flex-wrap gap-2 mb-3">
+      {[["freela","Freelancers"],["clt","CLT"],["confianca","Gerência & Diretoria"]].map(([k,l])=>
+        <button key={k} onClick={()=>{setAbaP(k);setAberto(null);}} className={cx("px-4 py-2 rounded-xl text-sm font-semibold border transition", abaP===k?"grad-brand text-white border-transparent shadow-glow":"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>{l}</button>)}
+    </div>
 
     <Card className="p-4 mb-4">
       <div className="flex flex-wrap items-end gap-3">
@@ -2317,6 +2517,7 @@ function Pagamentos() {
       </div>
     </Card>
 
+    {abaP!=="freela" ? <PagamentoSalariados modo={abaP} ini={ini} fim={fim} uni={uni}/> : <>
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
       <StatCard icon={I.wallet} label="Total a pagar (mês)" value={fmtBRL(totalGeral)} tone="free"/>
       <StatCard icon={I.check} label="Já pago" value={fmtBRL(totalPago)} tone="green"/>
@@ -2418,6 +2619,7 @@ function Pagamentos() {
         <td/></tr></tfoot>}
     </table></div></Card>
     <p className="text-xs text-slate-400 mt-3">Clique em um freelancer para ver as diárias por semana, pagar a semana e registrar pagamentos parciais. A exportação inclui total, pago e saldo, pronta para o financeiro.</p>
+    </>}
   </div>;
 }
 
@@ -2589,8 +2791,9 @@ function LinksQR() {
 
 /* ============================ RELATÓRIOS FINANCEIROS ============================ */
 function Financeiro() {
-  const { freelasComPagamentos:freelas, clts, unidades, registros, pontoHist, getDossie, cltExtraAjuste, setCltExtra, acesso } = useStore();
+  const { freelasComPagamentos:freelas, clts, unidades, registros, pontoHist, getDossie, cltExtraAjuste, setCltExtra, acesso, escala, escalaOv, atestados } = useStore();
   const podeSigilo = !acesso || acesso.podeSigilo;   // sem contexto (offline) → mostra tudo
+  const _clock=useClock();
   const toast=useContext(ToastCtx);
   const [aba,setAba]=useState("clt");                 // "clt" (folha) | "freela" (pagamentos)
   const _mr=mesAtualRange();
@@ -2605,28 +2808,10 @@ function Financeiro() {
   // Apuração REAL das batidas no período (extras normais, extras 100% em folga e adicional noturno).
   const apurCLT = apurarHoras([...pontoHist, ...registros]).filter(x=>x.tipo==="clt" && x.completo && naData(x.dia));
   const ymRef=(ini||hojeStr()).slice(0,7);
-  const folhaDe=(lista)=> lista.filter(c=>uni==="todas"||c.unidade===Number(uni)).map(c=>{
-    const meus=apurCLT.filter(x=>x.nome===c.nome);
-    const extrasMin=meus.reduce((s,x)=>s+(x.extras||0),0);
-    const extras100Min=meus.reduce((s,x)=>s+(x.extras100||0),0);
-    const notMin=meus.reduce((s,x)=>s+minutosNoturnos(x.punches||[]),0);
-    const salario=Number(c.salario||0);
-    const vHora=salario? salario/220 : 0;              // hora normal (44h/sem → 220h/mês)
-    const vDia =salario? salario/30  : 0;
-    const extrasCalc=(extrasMin/60)*vHora*1.5 + (extras100Min/60)*vHora*2;
-    const extraOverride = cltExtraAjuste[c.id+"|"+ymRef];
-    const extrasVal = extraOverride!=null ? Number(extraOverride) : extrasCalc;
-    const extrasEditado = extraOverride!=null;
-    const notVal=(notMin/60)*vHora*0.2;                // adicional noturno 20% (Art. 73 CLT)
-    const dos=getDossie("clt-"+c.id);
-    const faltas=(dos.faltas||[]).filter(x=>x.tipo==="falta" && x.descontar && naData(x.data));
-    const atrasosD=(dos.faltas||[]).filter(x=>x.tipo==="atraso" && x.descontar && naData(x.data));
-    const descontos=faltas.length*vDia + atrasosD.reduce((s,x)=>s+vHora*(Number(x.horas)||0),0);
-    const liquido=salario+extrasVal+notVal-descontos;
-    return { id:c.id, nome:c.nome, foto:c.foto, pix:c.pix, escala:c.escala, salario, vHora,
-      extrasMin, extras100Min, extrasHoras:extrasMin+extras100Min, extrasVal, extrasEditado, notMin, notVal,
-      descontos, faltasQtd:faltas.length, atrasosQtd:atrasosD.length, liquido, semSalario:!salario };
-  });
+  const _nowMin=_clock.getHours()*60+_clock.getMinutes();
+  const faltasCtx={ escala, escalaOv, registros:[...pontoHist,...registros], atestados, ini, fim, hoje:hojeStr(), nowMin:_nowMin };
+  const folhaCtx={ apurCLT, cltExtraAjuste, ymRef, getDossie, naData, faltasCtx };
+  const folhaDe=(lista)=> lista.filter(c=>uni==="todas"||c.unidade===Number(uni)).map(c=>calcFolhaLinha(c, folhaCtx));
   const cltsReais = clts.filter(c=>c.vinculo!=="fixo" && c.vinculo!=="confianca");
   const fixos = clts.filter(c=>c.vinculo==="fixo");
   const linhasCLTreais = folhaDe(cltsReais);
@@ -2660,7 +2845,7 @@ function Financeiro() {
 
   /* ===================== WhatsApp ===================== */
   const rotuloFolha = aba==="fixo"?"Freela Fixo":"CLT";
-  const whatsCLT=(l)=>`*${l.nome}* (${rotuloFolha})\nSalário base: ${fmtBRL(l.salario)}\nHoras extras: ${fmtHoras(l.extrasHoras)} = ${fmtBRL(l.extrasVal)}${l.notVal?`\nAdic. noturno: ${fmtBRL(l.notVal)}`:""}${l.descontos?`\nDescontos: -${fmtBRL(l.descontos)}`:""}\n*Líquido a pagar: ${fmtBRL(l.liquido)}*\nPix: ${l.pix||"—"}`;
+  const whatsCLT=(l)=>`*${l.nome}* (${rotuloFolha})\nSalário base: ${fmtBRL(l.salario)}\nHoras extras: ${fmtHoras(l.extrasHoras)} = ${fmtBRL(l.extrasVal)}${l.notVal?`\nAdic. noturno: ${fmtBRL(l.notVal)}`:""}${l.faltasQtd?`\nFaltas: ${l.faltasQtd} = -${fmtBRL(l.descFaltas)}`:""}${l.dsrQtd?`\nDSR perdido (${l.dsrQtd} sem.): -${fmtBRL(l.descDSR)}`:""}${l.descontos?`\nDescontos totais: -${fmtBRL(l.descontos)}`:""}\n*Líquido a pagar: ${fmtBRL(l.liquido)}*\nPix: ${l.pix||"—"}`;
   const whatsFree=(l)=>`*${l.nome}*\nValor acumulado: ${fmtBRL(l.total)}\nDias trabalhados: ${l.dias}\nDatas: ${fmtD(l.datas)}\nPix: ${l.pix||"—"}`;
   const whatsConf=(l)=>`*${l.nome}* (${l.cargo})\nSalário mensal: ${fmtBRL(l.salario)}\nPix: ${l.pix||"—"}`;
   const copiarUm=(txt)=>{ copyText(txt); toast("Copiado para enviar no WhatsApp"); };
@@ -2756,7 +2941,10 @@ function Financeiro() {
                 {l.extrasEditado && <span className="text-[10px] text-amber-600" title="Ajustado manualmente">editado</span>}
               </div></td>
             <td className="px-4 py-3 tabular-nums text-slate-600">{l.notVal>0?fmtBRL(l.notVal):"—"}</td>
-            <td className={cx("px-4 py-3 tabular-nums",l.descontos>0?"text-rose-600 font-semibold":"text-slate-400")}>{l.descontos>0?"-"+fmtBRL(l.descontos):"—"}</td>
+            <td className={cx("px-4 py-3 tabular-nums",l.descontos>0?"text-rose-600 font-semibold":"text-slate-400")} title={l.descontos>0?`${l.faltasQtd} falta(s) = -${fmtBRL(l.descFaltas)} · DSR ${l.dsrQtd} sem. = -${fmtBRL(l.descDSR)}`:""}>
+              {l.descontos>0?"-"+fmtBRL(l.descontos):"—"}
+              {(l.faltasQtd>0||l.dsrQtd>0) && <div className="text-[10px] font-normal text-rose-400">{l.faltasQtd>0?`${l.faltasQtd} falta`:""}{l.dsrQtd>0?` +${l.dsrQtd} DSR`:""}</div>}
+            </td>
             <td className="px-4 py-3 font-extrabold text-slate-900 tabular-nums">{fmtBRL(l.liquido)}</td>
             <td className="px-4 py-3 font-mono text-xs text-slate-500">{l.pix||"—"}</td>
             <td className="px-4 py-3"><Btn size="sm" variant="soft" icon={I.copy} onClick={()=>copiarUm(whatsCLT(l))}>Copiar</Btn></td>
