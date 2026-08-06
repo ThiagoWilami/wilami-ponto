@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- build: escala nome+sobrenome e limpa orfaos (—) + falta automatica CLT com desconto de dia+DSR na folha + pagamentos CLT/gerentes parcelados 2026-08-06e -->
+<!-- build: falta nao replica nas proximas semanas (padrao nunca carrega faltou) + desconto automatico so a partir da data configurada (sem retroativo indevido); manual conta sempre 2026-08-06f -->
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8" />
@@ -475,7 +475,9 @@ function diaEscala(escala, escalaOv, uid, dateStr, weekday){
   const ov = escalaOv && escalaOv[uid] && escalaOv[uid][dateStr];
   if(ov) return ov;
   const base = (escala && escala[uid] && escala[uid][weekday]) || [];
-  return base.filter(a=>a.tipo!=="free");
+  // O PADRÃO SEMANAL define só quem trabalha em cada turno — NUNCA carrega "faltou"/"atrasou".
+  // Falta/atraso são eventos de UMA data (ficam no override da data), então nunca replicam nas outras semanas.
+  return base.filter(a=>a.tipo!=="free").map(a=> a.marca ? {...a, marca:null} : a);
 }
 // ---- Faltas automáticas do CLT (escalado e não bateu ponto) ----
 // Datas AAAA-MM-DD entre ini e fim (inclusive)
@@ -485,9 +487,13 @@ function datasEntre(ini,fim){ const out=[]; if(!ini||!fim) return out; const [ay
 const wdDe=(ds)=>{ const [y,m,dd]=ds.split("-").map(Number); return (new Date(y,m-1,dd).getDay()+6)%7; };
 // Fim do turno em minutos (para "hoje após o turno"). Noite cruza a meia-noite → não encerra no mesmo dia.
 const TURNO_FIM_MIN = { manha:16*60, tarde:20*60, noite:null };
-// Retorna as datas em que o colaborador escalado NÃO bateu ponto (falta), respeitando abonos e o turno de hoje.
+// Retorna as datas de falta CONFIRMADA do colaborador escalado. Duas origens:
+//  (a) o gestor marcou "Faltou" naquela data (override manual) → conta sempre;
+//  (b) detecção automática: turno já encerrado e SEM batida de entrada → conta só a partir de "desde".
+// Nunca considera dias futuros nem folga, e atestado sempre abona. "desde" evita descontar
+// retroativamente dias anteriores à adoção do controle (não cria marcações indevidas).
 function faltasAutoDe(pessoa, ctx){
-  const {escala,escalaOv,registros,atestados,ini,fim,hoje,nowMin}=ctx;
+  const {escala,escalaOv,registros,atestados,ini,fim,hoje,nowMin,desde}=ctx;
   const uid=pessoa.unidade; if(uid==null) return [];
   const cpf=soDigitos(pessoa.cpf||"");
   const casa=(pessoa.id!=null)?String(pessoa.id):null;
@@ -495,14 +501,17 @@ function faltasAutoDe(pessoa, ctx){
   const abonado=(ds)=> (atestados||[]).some(a=> a.data===ds && ((a.pid!=null&&String(a.pid)===casa)||(cpf&&a.cpf&&soDigitos(a.cpf)===cpf)) );
   const dias=[];
   datasEntre(ini,fim).forEach(ds=>{
-    if(ds>hoje) return;                                    // dia futuro
+    if(ds>hoje) return;                                    // dia futuro nunca é falta
     const wd=wdDe(ds);
     const aloc=diaEscala(escala,escalaOv,uid,ds,wd).find(a=>String(a.pid)===casa && a.tipo==="clt");
     if(!aloc || aloc.turno==="folga") return;              // não escalado ou folga
-    const marcadoFaltou = aloc.marca==="faltou";
-    if(ds===hoje && !marcadoFaltou){ const ft=TURNO_FIM_MIN[aloc.turno]; if(ft==null || nowMin<ft) return; } // turno de hoje ainda não acabou
-    if(!marcadoFaltou && teveEntrada(ds)) return;          // bateu entrada → presente
-    if(abonado(ds)) return;                                // atestado abona (não desconta)
+    if(abonado(ds)) return;                                // atestado abona (nunca desconta)
+    // (a) Falta marcada manualmente pelo gestor NAQUELA data → confirmada, conta sempre.
+    if(aloc.marca==="faltou"){ dias.push(ds); return; }
+    // (b) Detecção automática — só a partir da data de início do controle e com o turno encerrado.
+    if(desde && ds<desde) return;
+    if(ds===hoje){ const ft=TURNO_FIM_MIN[aloc.turno]; if(ft==null || nowMin<ft) return; } // turno de hoje ainda não acabou
+    if(teveEntrada(ds)) return;                            // bateu entrada → presente
     dias.push(ds);
   });
   return dias;
@@ -842,6 +851,10 @@ function StoreProvider({children}) {
   const [pagamentosFreela,setPagFreela]=usePersist("pagamentosFreela",{});
   const addPagamentoFreela=(fid,obj)=>setPagFreela(prev=>{ const arr=prev[String(fid)]||[]; return {...prev,[String(fid)]:[{...obj,id:Math.random().toString(36).slice(2)},...arr]}; });
   const removePagamentoFreela=(fid,pid)=>setPagFreela(prev=>{ const arr=(prev[String(fid)]||[]).filter(x=>x.id!==pid); return {...prev,[String(fid)]:arr}; });
+  // Data de início do desconto automático de faltas (evita descontar retroativamente dias antes da adoção).
+  // Padrão: hoje (só desconta faltas de hoje em diante); faltas marcadas manualmente pelo gestor contam sempre.
+  const [faltaDescontoDesde,setFaltaDescontoDesde]=usePersist("faltaDescontoDesde","");
+  useEffect(()=>{ if(!faltaDescontoDesde) setFaltaDescontoDesde(hojeStr()); },[]); // eslint-disable-line
   // Pagamentos de CLT e cargos de confiança (parcelados/adiantamentos), chaveados pelo id do colaborador na lista de CLTs.
   const [pagamentosCLT,setPagCLT]=usePersist("pagamentosCLT",{});
   const addPagamentoCLT=(id,obj)=>setPagCLT(prev=>{ const arr=prev[String(id)]||[]; return {...prev,[String(id)]:[{...obj,id:Math.random().toString(36).slice(2)},...arr]}; });
@@ -906,7 +919,7 @@ function StoreProvider({children}) {
   const registrosVis = casaRestrita!=null ? registros.filter(r=>_nomesVis.has(r.nome)) : registros;
 
   const value={ unidades:unidadesVis,salvarUnidade,excluirUnidade, clts:cltsVis,freelas:freelasVis,freelasComPagamentos:freelasPagVis,salvarClt,salvarFreela,excluirColab,cadastrarPublico, anexarDoc,
-    escala,setEscala, escalaOv,setEscalaOv, registros:registrosVis,addRegistro, pontoHist, freelancerEscaladoHoje, valorFreela, setFreelaAjuste, cltExtraAjuste,setCltExtra, pagamentosFreela,addPagamentoFreela,removePagamentoFreela, pagamentosCLT,addPagamentoCLT,removePagamentoCLT,
+    escala,setEscala, escalaOv,setEscalaOv, registros:registrosVis,addRegistro, pontoHist, freelancerEscaladoHoje, valorFreela, setFreelaAjuste, cltExtraAjuste,setCltExtra, pagamentosFreela,addPagamentoFreela,removePagamentoFreela, pagamentosCLT,addPagamentoCLT,removePagamentoCLT, faltaDescontoDesde,setFaltaDescontoDesde,
     cargosFreela,salvarCargoFreela,excluirCargoFreela, atestados,enviarAtestado, ajustes,enviarAjuste,resolverAjuste,
     dossie,getDossie,addFalta,addFeedback,addAnexo, perfil,setPerfil, perms,setPerms, can,
     clientes,clienteAtivo,tenantAtual,criarCliente,trocarCliente,
@@ -2344,7 +2357,7 @@ function Relatorios() {
 /* ============================ PAGAMENTOS (FREELANCERS) ============================ */
 // Pagamentos de SALARIADOS (CLT ou Cargos de confiança) — parcelado/adiantamento + saldo, modelo dos freelancers.
 function PagamentoSalariados({ modo, ini, fim, uni }){
-  const { clts, unidades, registros, pontoHist, getDossie, cltExtraAjuste, escala, escalaOv, atestados, acesso, pagamentosCLT, addPagamentoCLT, removePagamentoCLT } = useStore();
+  const { clts, unidades, registros, pontoHist, getDossie, cltExtraAjuste, escala, escalaOv, atestados, acesso, pagamentosCLT, addPagamentoCLT, removePagamentoCLT, faltaDescontoDesde } = useStore();
   const toast=useContext(ToastCtx);
   const _clock=useClock();
   const [aberto,setAberto]=useState(null);
@@ -2354,7 +2367,7 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
   const ymRef=(ini||hojeStr()).slice(0,7);
   const _nowMin=_clock.getHours()*60+_clock.getMinutes();
   const apurCLT=apurarHoras([...pontoHist,...registros]).filter(x=>x.tipo==="clt"&&x.completo&&naData(x.dia));
-  const faltasCtx={ escala, escalaOv, registros:[...pontoHist,...registros], atestados, ini, fim, hoje:hojeStr(), nowMin:_nowMin };
+  const faltasCtx={ escala, escalaOv, registros:[...pontoHist,...registros], atestados, ini, fim, hoje:hojeStr(), nowMin:_nowMin, desde:faltaDescontoDesde };
   const folhaCtx={ apurCLT, cltExtraAjuste, ymRef, getDossie, naData, faltasCtx };
   const naCasa=(c)=> uni==="todas" || c.unidade===Number(uni) || (modo==="confianca" && (c.unidade==="todas"||c.unidade==null));
   const lista = (modo==="confianca"
@@ -2791,7 +2804,7 @@ function LinksQR() {
 
 /* ============================ RELATÓRIOS FINANCEIROS ============================ */
 function Financeiro() {
-  const { freelasComPagamentos:freelas, clts, unidades, registros, pontoHist, getDossie, cltExtraAjuste, setCltExtra, acesso, escala, escalaOv, atestados } = useStore();
+  const { freelasComPagamentos:freelas, clts, unidades, registros, pontoHist, getDossie, cltExtraAjuste, setCltExtra, acesso, escala, escalaOv, atestados, faltaDescontoDesde } = useStore();
   const podeSigilo = !acesso || acesso.podeSigilo;   // sem contexto (offline) → mostra tudo
   const _clock=useClock();
   const toast=useContext(ToastCtx);
@@ -2809,7 +2822,7 @@ function Financeiro() {
   const apurCLT = apurarHoras([...pontoHist, ...registros]).filter(x=>x.tipo==="clt" && x.completo && naData(x.dia));
   const ymRef=(ini||hojeStr()).slice(0,7);
   const _nowMin=_clock.getHours()*60+_clock.getMinutes();
-  const faltasCtx={ escala, escalaOv, registros:[...pontoHist,...registros], atestados, ini, fim, hoje:hojeStr(), nowMin:_nowMin };
+  const faltasCtx={ escala, escalaOv, registros:[...pontoHist,...registros], atestados, ini, fim, hoje:hojeStr(), nowMin:_nowMin, desde:faltaDescontoDesde };
   const folhaCtx={ apurCLT, cltExtraAjuste, ymRef, getDossie, naData, faltasCtx };
   const folhaDe=(lista)=> lista.filter(c=>uni==="todas"||c.unidade===Number(uni)).map(c=>calcFolhaLinha(c, folhaCtx));
   const cltsReais = clts.filter(c=>c.vinculo!=="fixo" && c.vinculo!=="confianca");
@@ -3408,6 +3421,8 @@ function MembroCriar({onClose}) {
 /* ============================ CONFIGURAÇÕES ============================ */
 function Configuracoes() {
   const [tol,setTol]=useState(true),[banco,setBanco]=useState(true),[facial,setFacial]=useState(true),[not,setNot]=useState(false);
+  const { faltaDescontoDesde, setFaltaDescontoDesde } = useStore();
+  const toast=useContext(ToastCtx);
   return <div className="fade-in">
     <PageHeader title="Configurações" sub="Regras de ponto, termos LGPD e identidade da marca"/>
     <div className="grid lg:grid-cols-2 gap-4">
@@ -3416,6 +3431,14 @@ function Configuracoes() {
         {[["Tolerância de 10 min (Art. 58 CLT)",tol,setTol],["Banco de horas ativo",banco,setBanco],["Validação facial obrigatória",facial,setFacial],["Freelancer só com escala + cerca",true,()=>{}],["Notificar atrasos por e-mail",not,setNot]].map(([l,v,s],i)=>
           <div key={i} className="flex items-center justify-between py-3 border-b border-slate-50 last:border-0">
             <span className="text-sm text-slate-700">{l}</span><Toggle on={v} onChange={s}/></div>)}
+        <div className="mt-4 pt-4 border-t border-slate-100">
+          <div className="text-sm font-semibold text-slate-700 mb-1">Descontar faltas automaticamente a partir de</div>
+          <p className="text-xs text-slate-500 mb-2">O CLT escalado que não bater ponto vira falta (com desconto de dia + DSR) somente de <b>hoje/desta data em diante</b>. Dias anteriores só descontam se o gestor marcar “Faltou” manualmente na escala. Assim o sistema não cria faltas retroativas indevidas.</p>
+          <div className="flex items-center gap-2">
+            <input type="date" value={faltaDescontoDesde||""} onChange={e=>{ setFaltaDescontoDesde(e.target.value); toast("Data de início do desconto de faltas atualizada"); }} className="px-3 py-2 rounded-lg border border-slate-200 text-sm outline-none focus:ring-2 focus:ring-brand-400"/>
+            {faltaDescontoDesde && <button onClick={()=>{ setFaltaDescontoDesde(hojeStr()); toast("Definido para hoje"); }} className="text-xs font-semibold text-brand-600 hover:underline">Usar hoje</button>}
+          </div>
+        </div>
       </Card>
       <Card className="p-5">
         <h3 className="font-bold text-slate-900 mb-4 flex items-center gap-2"><Icon d={I.shield} className="w-4 h-4 text-emerald-600"/>Privacidade & LGPD</h3>
