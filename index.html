@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- build: escala conta CLT por PESSOAS distintas (nao dia-slots) + coberturas = turnos sem folga + ignora fantasmas 2026-08-06g -->
+<!-- build: Vale Transporte (VT) para CLT - valor mensal no cadastro + desconto legal 6% no liquido + dia de pagamento global em Configuracoes (aditivo, sem afetar dados existentes) 2026-08-06h -->
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8" />
@@ -542,12 +542,15 @@ function calcFolhaLinha(c, ctx){
   const nDSR=semanasFalta.size;                      // política escolhida: perde 1 DSR por semana com falta
   const descFaltas=nFaltas*vDia, descDSR=nDSR*vDia;
   const descAtrasos=atrasosD.reduce((s,x)=>s+vHora*(Number(x.horas)||0),0);
-  const descontos=descFaltas+descDSR+descAtrasos;
+  // Vale Transporte: benefício mensal fixo; desconto legal = menor entre 6% do salário base e o valor do VT (Lei 7.418/85).
+  const vt=Number(c.vt||0);
+  const vtDesconto = vt>0 ? Math.min(salario*0.06, vt) : 0;
+  const descontos=descFaltas+descDSR+descAtrasos+vtDesconto;
   const liquido=salario+extrasVal+notVal-descontos;
   return { id:c.id, nome:c.nome, foto:c.foto, pix:c.pix, escala:c.escala, salario, vHora,
     extrasMin, extras100Min, extrasHoras:extrasMin+extras100Min, extrasVal, extrasEditado, notMin, notVal,
     faltasQtd:nFaltas, dsrQtd:nDSR, faltaDatas, descFaltas, descDSR, atrasosQtd:atrasosD.length,
-    descontos, liquido, semSalario:!salario };
+    vt, vtDesconto, descontos, liquido, semSalario:!salario };
 }
 const escalaInicial = () => {
   const esc={};
@@ -855,6 +858,8 @@ function StoreProvider({children}) {
   // Padrão: hoje (só desconta faltas de hoje em diante); faltas marcadas manualmente pelo gestor contam sempre.
   const [faltaDescontoDesde,setFaltaDescontoDesde]=usePersist("faltaDescontoDesde","");
   useEffect(()=>{ if(!faltaDescontoDesde) setFaltaDescontoDesde(hojeStr()); },[]); // eslint-disable-line
+  // Dia do mês em que o Vale Transporte é pago (global para todos os CLTs). Padrão: dia 5.
+  const [vtDiaPagamento,setVtDiaPagamento]=usePersist("vtDiaPagamento",5);
   // Pagamentos de CLT e cargos de confiança (parcelados/adiantamentos), chaveados pelo id do colaborador na lista de CLTs.
   const [pagamentosCLT,setPagCLT]=usePersist("pagamentosCLT",{});
   const addPagamentoCLT=(id,obj)=>setPagCLT(prev=>{ const arr=prev[String(id)]||[]; return {...prev,[String(id)]:[{...obj,id:Math.random().toString(36).slice(2)},...arr]}; });
@@ -919,7 +924,7 @@ function StoreProvider({children}) {
   const registrosVis = casaRestrita!=null ? registros.filter(r=>_nomesVis.has(r.nome)) : registros;
 
   const value={ unidades:unidadesVis,salvarUnidade,excluirUnidade, clts:cltsVis,freelas:freelasVis,freelasComPagamentos:freelasPagVis,salvarClt,salvarFreela,excluirColab,cadastrarPublico, anexarDoc,
-    escala,setEscala, escalaOv,setEscalaOv, registros:registrosVis,addRegistro, pontoHist, freelancerEscaladoHoje, valorFreela, setFreelaAjuste, cltExtraAjuste,setCltExtra, pagamentosFreela,addPagamentoFreela,removePagamentoFreela, pagamentosCLT,addPagamentoCLT,removePagamentoCLT, faltaDescontoDesde,setFaltaDescontoDesde,
+    escala,setEscala, escalaOv,setEscalaOv, registros:registrosVis,addRegistro, pontoHist, freelancerEscaladoHoje, valorFreela, setFreelaAjuste, cltExtraAjuste,setCltExtra, pagamentosFreela,addPagamentoFreela,removePagamentoFreela, pagamentosCLT,addPagamentoCLT,removePagamentoCLT, faltaDescontoDesde,setFaltaDescontoDesde, vtDiaPagamento,setVtDiaPagamento,
     cargosFreela,salvarCargoFreela,excluirCargoFreela, atestados,enviarAtestado, ajustes,enviarAjuste,resolverAjuste,
     dossie,getDossie,addFalta,addFeedback,addAnexo, perfil,setPerfil, perms,setPerms, can,
     clientes,clienteAtivo,tenantAtual,criarCliente,trocarCliente,
@@ -1954,7 +1959,7 @@ function ColabForm({ tipo, inicial, onSalvar, onClose, vinculo }) {
   const [f,setF]=useState(inicial || (ehConf
     ? { nome:"", cargo:"Gerente", unidade:"todas", salario:0, sigiloso:false, cpf:"", tel:"", tipoPix:"CPF", pix:"", banco:"", foto:"" }
     : tipo==="clt"
-    ? { nome:"", cargo:CARGOS[0], setor:"salao", escala:"6x1", folgaDia:6, unidade:unidades[0]?.id, admissao:"", salario:0, cpf:"", tel:"", tipoPix:"CPF", pix:"", banco:"", foto:"", docs:{} }
+    ? { nome:"", cargo:CARGOS[0], setor:"salao", escala:"6x1", folgaDia:6, unidade:unidades[0]?.id, admissao:"", salario:0, vt:0, cpf:"", tel:"", tipoPix:"CPF", pix:"", banco:"", foto:"", docs:{} }
     : { nome:"", cargo:cg0?.nome||"", setor:"salao", unidade:unidades[0]?.id, valor:cg0?.valor||0, cpf:"", tel:"", tipoPix:"CPF", pix:"", banco:"", foto:"" }));
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
   // Foto do colaborador no CADASTRO (referência facial). Usa input de arquivo/câmera:
@@ -2031,6 +2036,7 @@ function ColabForm({ tipo, inicial, onSalvar, onClose, vinculo }) {
         </Select></Field>
         <Field label="Admissão"><Input type="date" value={f.admissao} onChange={e=>set("admissao",e.target.value)}/></Field>
         <Field label="Salário mensal (R$)"><Input type="number" value={f.salario||0} onChange={e=>set("salario",Number(e.target.value))} placeholder="Ex.: 2200"/></Field>
+        <Field label="Vale Transporte (R$/mês)"><Input type="number" value={f.vt||0} onChange={e=>set("vt",Number(e.target.value))} placeholder="Ex.: 220"/></Field>
       </> : <>
         <Field label={req("Cargo")}><Select value={f.cargo} onChange={e=>setCargoFree(e.target.value)}>{cargosFreela.map(c=><option key={c.id} value={c.nome}>{c.nome}</option>)}</Select></Field>
         <Field label="Valor por jornada"><div className="px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm font-semibold text-slate-700">R$ {Number(f.valor||0).toLocaleString("pt-BR")} <span className="font-normal text-slate-400 text-xs">(do cargo)</span></div></Field>
@@ -2421,7 +2427,8 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
                     <div className="flex justify-between"><span className="text-slate-500">Salário base</span><span className="tabular-nums">{fmtBRL(l.det.salario)}</span></div>
                     <div className="flex justify-between"><span className="text-slate-500">Horas extras</span><span className="tabular-nums text-emerald-600">+{fmtBRL(l.det.extrasVal)}</span></div>
                     {l.det.notVal>0 && <div className="flex justify-between"><span className="text-slate-500">Adic. noturno</span><span className="tabular-nums text-emerald-600">+{fmtBRL(l.det.notVal)}</span></div>}
-                    {l.det.descontos>0 && <div className="flex justify-between"><span className="text-slate-500">Descontos ({l.det.faltasQtd} falta{l.det.dsrQtd?` +${l.det.dsrQtd} DSR`:""})</span><span className="tabular-nums text-rose-600">-{fmtBRL(l.det.descontos)}</span></div>}
+                    {l.det.vt>0 && <div className="flex justify-between"><span className="text-slate-500">Vale Transporte ({fmtBRL(l.det.vt)}) − 6%</span><span className="tabular-nums text-rose-600">-{fmtBRL(l.det.vtDesconto)}</span></div>}
+                    {(l.det.descontos-l.det.vtDesconto)>0 && <div className="flex justify-between"><span className="text-slate-500">Descontos ({l.det.faltasQtd} falta{l.det.dsrQtd?` +${l.det.dsrQtd} DSR`:""})</span><span className="tabular-nums text-rose-600">-{fmtBRL(l.det.descontos-l.det.vtDesconto)}</span></div>}
                   </>}
                   {modo==="confianca" && <div className="flex justify-between"><span className="text-slate-500">Salário mensal</span><span className="tabular-nums">{fmtBRL(l.total)}</span></div>}
                   <div className="flex justify-between border-t border-slate-100 pt-1 font-bold"><span className="text-slate-700">{modo==="confianca"?"Total":"Líquido do mês"}</span><span className="tabular-nums text-slate-900">{fmtBRL(l.total)}</span></div>
@@ -2806,7 +2813,7 @@ function LinksQR() {
 
 /* ============================ RELATÓRIOS FINANCEIROS ============================ */
 function Financeiro() {
-  const { freelasComPagamentos:freelas, clts, unidades, registros, pontoHist, getDossie, cltExtraAjuste, setCltExtra, acesso, escala, escalaOv, atestados, faltaDescontoDesde } = useStore();
+  const { freelasComPagamentos:freelas, clts, unidades, registros, pontoHist, getDossie, cltExtraAjuste, setCltExtra, acesso, escala, escalaOv, atestados, faltaDescontoDesde, vtDiaPagamento } = useStore();
   const podeSigilo = !acesso || acesso.podeSigilo;   // sem contexto (offline) → mostra tudo
   const _clock=useClock();
   const toast=useContext(ToastCtx);
@@ -2836,6 +2843,7 @@ function Financeiro() {
   const cltFolha=linhasCLT.reduce((s,l)=>s+l.liquido,0);
   const cltExtras=linhasCLT.reduce((s,l)=>s+l.extrasVal,0);
   const cltSalarios=linhasCLT.reduce((s,l)=>s+l.salario,0);
+  const cltVT=linhasCLT.reduce((s,l)=>s+(l.vt||0),0);
 
   /* ===================== GERÊNCIA & DIRETORIA (cargo de confiança, sem ponto) ===================== */
   // Salário mensal fixo, sem apuração de ponto. Filtro por casa considera "todas as casas".
@@ -2860,7 +2868,7 @@ function Financeiro() {
 
   /* ===================== WhatsApp ===================== */
   const rotuloFolha = aba==="fixo"?"Freela Fixo":"CLT";
-  const whatsCLT=(l)=>`*${l.nome}* (${rotuloFolha})\nSalário base: ${fmtBRL(l.salario)}\nHoras extras: ${fmtHoras(l.extrasHoras)} = ${fmtBRL(l.extrasVal)}${l.notVal?`\nAdic. noturno: ${fmtBRL(l.notVal)}`:""}${l.faltasQtd?`\nFaltas: ${l.faltasQtd} = -${fmtBRL(l.descFaltas)}`:""}${l.dsrQtd?`\nDSR perdido (${l.dsrQtd} sem.): -${fmtBRL(l.descDSR)}`:""}${l.descontos?`\nDescontos totais: -${fmtBRL(l.descontos)}`:""}\n*Líquido a pagar: ${fmtBRL(l.liquido)}*\nPix: ${l.pix||"—"}`;
+  const whatsCLT=(l)=>`*${l.nome}* (${rotuloFolha})\nSalário base: ${fmtBRL(l.salario)}\nHoras extras: ${fmtHoras(l.extrasHoras)} = ${fmtBRL(l.extrasVal)}${l.notVal?`\nAdic. noturno: ${fmtBRL(l.notVal)}`:""}${l.vt?`\nVale Transporte: ${fmtBRL(l.vt)} (desconto 6%: -${fmtBRL(l.vtDesconto)})`:""}${l.faltasQtd?`\nFaltas: ${l.faltasQtd} = -${fmtBRL(l.descFaltas)}`:""}${l.dsrQtd?`\nDSR perdido (${l.dsrQtd} sem.): -${fmtBRL(l.descDSR)}`:""}${l.descontos?`\nDescontos totais: -${fmtBRL(l.descontos)}`:""}\n*Líquido a pagar: ${fmtBRL(l.liquido)}*\nPix: ${l.pix||"—"}`;
   const whatsFree=(l)=>`*${l.nome}*\nValor acumulado: ${fmtBRL(l.total)}\nDias trabalhados: ${l.dias}\nDatas: ${fmtD(l.datas)}\nPix: ${l.pix||"—"}`;
   const whatsConf=(l)=>`*${l.nome}* (${l.cargo})\nSalário mensal: ${fmtBRL(l.salario)}\nPix: ${l.pix||"—"}`;
   const copiarUm=(txt)=>{ copyText(txt); toast("Copiado para enviar no WhatsApp"); };
@@ -2944,7 +2952,7 @@ function Financeiro() {
         <StatCard icon={I.user} label={aba==="fixo"?"Freelas fixos":"Colaboradores CLT"} value={linhasCLT.length} tone="green"/>
       </div>
       <Card className="overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm min-w-[860px]">
-        <thead><tr className="text-left text-slate-400 border-b border-slate-100">{["Colaborador","Salário base","Horas extras","Adic. noturno","Descontos","Líquido a pagar","Pix","WhatsApp"].map(h=><th key={h} className="px-4 py-3 font-semibold">{h}</th>)}</tr></thead>
+        <thead><tr className="text-left text-slate-400 border-b border-slate-100">{["Colaborador","Salário base","Horas extras","Adic. noturno","VT","Descontos","Líquido a pagar","Pix","WhatsApp"].map(h=><th key={h} className="px-4 py-3 font-semibold">{h}</th>)}</tr></thead>
         <tbody className="divide-y divide-slate-50">
           {linhasCLT.map(l=><tr key={l.id} className="hover:bg-slate-50/70">
             <td className="px-4 py-3"><div className="flex items-center gap-2"><Avatar name={l.nome} src={l.foto} tone="brand" size="w-7 h-7"/><div><div className="font-semibold text-slate-800">{l.nome}</div>{l.semSalario && <div className="text-[11px] text-amber-600">defina o salário no cadastro</div>}</div></div></td>
@@ -2956,22 +2964,25 @@ function Financeiro() {
                 {l.extrasEditado && <span className="text-[10px] text-amber-600" title="Ajustado manualmente">editado</span>}
               </div></td>
             <td className="px-4 py-3 tabular-nums text-slate-600">{l.notVal>0?fmtBRL(l.notVal):"—"}</td>
-            <td className={cx("px-4 py-3 tabular-nums",l.descontos>0?"text-rose-600 font-semibold":"text-slate-400")} title={l.descontos>0?`${l.faltasQtd} falta(s) = -${fmtBRL(l.descFaltas)} · DSR ${l.dsrQtd} sem. = -${fmtBRL(l.descDSR)}`:""}>
+            <td className="px-4 py-3 tabular-nums text-slate-600">{l.vt>0?<div><span className="text-slate-700 font-semibold">{fmtBRL(l.vt)}</span><div className="text-[10px] font-normal text-slate-400">−6% = {fmtBRL(l.vtDesconto)}</div></div>:"—"}</td>
+            <td className={cx("px-4 py-3 tabular-nums",l.descontos>0?"text-rose-600 font-semibold":"text-slate-400")} title={l.descontos>0?`${l.faltasQtd} falta(s)=-${fmtBRL(l.descFaltas)} · DSR ${l.dsrQtd} sem.=-${fmtBRL(l.descDSR)}${l.vtDesconto>0?` · VT 6%=-${fmtBRL(l.vtDesconto)}`:""}`:""}>
               {l.descontos>0?"-"+fmtBRL(l.descontos):"—"}
-              {(l.faltasQtd>0||l.dsrQtd>0) && <div className="text-[10px] font-normal text-rose-400">{l.faltasQtd>0?`${l.faltasQtd} falta`:""}{l.dsrQtd>0?` +${l.dsrQtd} DSR`:""}</div>}
+              {(l.faltasQtd>0||l.dsrQtd>0||l.vtDesconto>0) && <div className="text-[10px] font-normal text-rose-400">{l.faltasQtd>0?`${l.faltasQtd} falta`:""}{l.dsrQtd>0?` +${l.dsrQtd} DSR`:""}{l.vtDesconto>0?`${l.faltasQtd>0||l.dsrQtd>0?" +":""}VT`:""}</div>}
             </td>
             <td className="px-4 py-3 font-extrabold text-slate-900 tabular-nums">{fmtBRL(l.liquido)}</td>
             <td className="px-4 py-3 font-mono text-xs text-slate-500">{l.pix||"—"}</td>
             <td className="px-4 py-3"><Btn size="sm" variant="soft" icon={I.copy} onClick={()=>copiarUm(whatsCLT(l))}>Copiar</Btn></td>
           </tr>)}
-          {linhasCLT.length===0 && <tr><td colSpan="8" className="px-4 py-8 text-center text-slate-400">Nenhum {aba==="fixo"?"freela fixo":"colaborador CLT"} nesta casa.</td></tr>}
+          {linhasCLT.length===0 && <tr><td colSpan="9" className="px-4 py-8 text-center text-slate-400">Nenhum {aba==="fixo"?"freela fixo":"colaborador CLT"} nesta casa.</td></tr>}
         </tbody>
         {linhasCLT.length>0 && <tfoot><tr className="border-t-2 border-slate-100 bg-slate-50/60">
           <td className="px-4 py-3 font-bold">Total</td><td className="px-4 py-3 font-bold tabular-nums">{fmtBRL(cltSalarios)}</td>
           <td className="px-4 py-3 font-bold text-emerald-700 tabular-nums">{fmtBRL(cltExtras)}</td><td/>
+          <td className="px-4 py-3 font-bold text-slate-600 tabular-nums">{cltVT>0?fmtBRL(cltVT):""}</td>
           <td/><td className="px-4 py-3 font-extrabold text-brand-700 tabular-nums">{fmtBRL(cltFolha)}</td><td colSpan="2"/></tr></tfoot>}
       </table></div></Card>
       <p className="text-xs text-slate-400 mt-3">{aba==="fixo"?"Freela Fixo: salário mensal definido pelo gerente + extras (50% dia útil, 100% folga) e adicional noturno 20%. ":"Extras: 50% em dia útil e 100% em folga trabalhada (Art. 59) · adicional noturno 20% entre 22h e 5h (Art. 73) · base da hora = salário ÷ 220. "}O valor das horas extras é editável. Cadastre em “Colaboradores CLT & Freela Fixo”.</p>
+      {cltVT>0 && <div className="mt-2 p-3 rounded-xl bg-brand-50 text-brand-700 text-xs flex items-center gap-2"><Icon d={I.wallet} className="w-4 h-4"/> Vale Transporte: total de {fmtBRL(cltVT)} no período · desconto legal de 6% já aplicado no líquido · <b>pagamento no dia {vtDiaPagamento} de cada mês</b> (ajuste em Configurações).</div>}
     </> : aba==="confianca" ? <>
       <div className="grid sm:grid-cols-3 gap-3 mb-4">
         <StatCard icon={I.wallet} label="Folha da diretoria/gerência" value={fmtBRL(confFolhaVisivel)} tone="brand"/>
@@ -3423,7 +3434,7 @@ function MembroCriar({onClose}) {
 /* ============================ CONFIGURAÇÕES ============================ */
 function Configuracoes() {
   const [tol,setTol]=useState(true),[banco,setBanco]=useState(true),[facial,setFacial]=useState(true),[not,setNot]=useState(false);
-  const { faltaDescontoDesde, setFaltaDescontoDesde } = useStore();
+  const { faltaDescontoDesde, setFaltaDescontoDesde, vtDiaPagamento, setVtDiaPagamento } = useStore();
   const toast=useContext(ToastCtx);
   return <div className="fade-in">
     <PageHeader title="Configurações" sub="Regras de ponto, termos LGPD e identidade da marca"/>
@@ -3439,6 +3450,17 @@ function Configuracoes() {
           <div className="flex items-center gap-2">
             <input type="date" value={faltaDescontoDesde||""} onChange={e=>{ setFaltaDescontoDesde(e.target.value); toast("Data de início do desconto de faltas atualizada"); }} className="px-3 py-2 rounded-lg border border-slate-200 text-sm outline-none focus:ring-2 focus:ring-brand-400"/>
             {faltaDescontoDesde && <button onClick={()=>{ setFaltaDescontoDesde(hojeStr()); toast("Definido para hoje"); }} className="text-xs font-semibold text-brand-600 hover:underline">Usar hoje</button>}
+          </div>
+        </div>
+        <div className="mt-4 pt-4 border-t border-slate-100">
+          <div className="text-sm font-semibold text-slate-700 mb-1">Dia de pagamento do Vale Transporte (VT)</div>
+          <p className="text-xs text-slate-500 mb-2">Dia do mês em que o VT é pago a todos os CLTs. O valor do VT é definido no cadastro de cada colaborador; o desconto legal de 6% do salário é aplicado automaticamente no líquido da folha.</p>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-slate-500">Todo dia</span>
+            <Select value={vtDiaPagamento} onChange={e=>{ setVtDiaPagamento(Number(e.target.value)); toast("Dia de pagamento do VT atualizado"); }}>
+              {Array.from({length:28},(_,i)=>i+1).map(d=><option key={d} value={d}>{d}</option>)}
+            </Select>
+            <span className="text-sm text-slate-500">de cada mês</span>
           </div>
         </div>
       </Card>
