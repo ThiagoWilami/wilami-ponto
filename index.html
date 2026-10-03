@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- build: Vale Transporte (VT) para CLT - valor mensal no cadastro + desconto legal 6% no liquido + dia de pagamento global em Configuracoes (aditivo, sem afetar dados existentes) 2026-08-06h -->
+<!-- build: Marca WILAMI (verde/dourado) + Arquivos & pastas por pessoa + Holerites no app (CPF+PIN) + Prestadores PJ + assinatura DocuSign 2026-10-03 -->
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8" />
@@ -10,7 +10,7 @@
 <meta http-equiv="Expires" content="0" />
 <title>Wilami Ponto — Registro de Ponto Digital para Restaurantes</title>
 <!-- PWA: instalável como app "Wilami Ponto" (Adicionar à tela inicial → abre em tela cheia) -->
-<meta name="theme-color" content="#4f46e5" />
+<meta name="theme-color" content="#2f6f2a" />
 <meta name="mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -20,8 +20,8 @@
 <script>
 (function(){
   try{
-    var icon="data:image/svg+xml,"+encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' width='512' height='512'><rect width='512' height='512' rx='96' fill='#4f46e5'/><g fill='none' stroke='#fff' stroke-width='34' stroke-linecap='round'><circle cx='256' cy='256' r='150'/><path d='M256 168V256l64 44'/></g></svg>");
-    var m={name:"Wilami Ponto",short_name:"Wilami Ponto",description:"Registro de ponto digital para restaurantes (CLT e Freelancer).",start_url:".",scope:".",display:"standalone",orientation:"portrait",background_color:"#0f172a",theme_color:"#4f46e5",icons:[{src:icon,sizes:"192x192",type:"image/svg+xml",purpose:"any"},{src:icon,sizes:"512x512",type:"image/svg+xml",purpose:"any maskable"}]};
+    var icon="data:image/svg+xml,"+encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' width='512' height='512'><rect width='512' height='512' rx='96' fill='#2f6f2a'/><g fill='none' stroke='#fff' stroke-width='34' stroke-linecap='round'><circle cx='256' cy='256' r='150'/><path d='M256 168V256l64 44'/></g></svg>");
+    var m={name:"Wilami Ponto",short_name:"Wilami Ponto",description:"Registro de ponto digital para restaurantes (CLT e Freelancer).",start_url:".",scope:".",display:"standalone",orientation:"portrait",background_color:"#0b1a10",theme_color:"#2f6f2a",icons:[{src:icon,sizes:"192x192",type:"image/svg+xml",purpose:"any"},{src:icon,sizes:"512x512",type:"image/svg+xml",purpose:"any maskable"}]};
     var blob=new Blob([JSON.stringify(m)],{type:"application/manifest+json"});
     document.getElementById("wp-manifest").href=URL.createObjectURL(blob);
   }catch(e){}
@@ -58,13 +58,13 @@
       extend: {
         fontFamily: { sans: ['Inter', 'ui-sans-serif', 'system-ui', 'sans-serif'] },
         colors: {
-          brand: { 50:'#eef2ff',100:'#e0e7ff',200:'#c7d2fe',300:'#a5b4fc',400:'#818cf8',500:'#6366f1',600:'#4f46e5',700:'#4338ca',800:'#3730a3',900:'#312e81',950:'#1e1b4b' },
-          free:  { 50:'#fff7ed',100:'#ffedd5',200:'#fed7aa',300:'#fdba74',400:'#fb923c',500:'#f97316',600:'#ea580c',700:'#c2410c' },
-          ink:   { 900:'#0b1020',800:'#111834',700:'#1c2547' },
+          brand: { 50:'#f1f7ef',100:'#dfeed9',200:'#bfdcb5',300:'#93c386',400:'#66a659',500:'#438b38',600:'#2f6f2a',700:'#285b25',800:'#234a21',900:'#1e3e1d',950:'#0e220d' },
+          free:  { 50:'#fdf8ea',100:'#faeec6',200:'#f4dc8c',300:'#eec552',400:'#e7b136',500:'#d39520',600:'#b47517',700:'#8f5715' },
+          ink:   { 900:'#0b1a10',800:'#12261a',700:'#1b3524' },
         },
         boxShadow: {
           soft: '0 1px 2px rgba(16,24,40,.04), 0 8px 24px -12px rgba(16,24,40,.18)',
-          glow: '0 10px 40px -12px rgba(99,102,241,.55)',
+          glow: '0 10px 40px -12px rgba(47,111,42,.45)',
         },
         borderRadius: { '2xl':'1.1rem', '3xl':'1.6rem' },
       }
@@ -72,15 +72,17 @@
   }
 </script>
 <style>
-  html,body{ background:#f6f7fb; }
+  html,body{ background:#f5f7f3; }
   ::-webkit-scrollbar{ width:10px; height:10px; }
-  ::-webkit-scrollbar-thumb{ background:#cdd3e4; border-radius:10px; }
-  ::-webkit-scrollbar-thumb:hover{ background:#b6bdd6; }
+  ::-webkit-scrollbar-thumb{ background:#cfd8cb; border-radius:10px; }
+  ::-webkit-scrollbar-thumb:hover{ background:#b3c2ad; }
   .glass{ background:rgba(255,255,255,.72); backdrop-filter:blur(12px); }
-  .grad-brand{ background-image:linear-gradient(135deg,#6366f1 0%,#8b5cf6 45%,#4f46e5 100%); }
-  .grad-ink{ background-image:linear-gradient(180deg,#111834 0%,#0b1020 100%); }
-  .grad-hero{ background-image:radial-gradient(1200px 500px at 10% -10%, rgba(129,140,248,.35), transparent 60%), radial-gradient(1000px 500px at 110% 10%, rgba(249,115,22,.18), transparent 55%); }
-  .drag-over{ outline:2px dashed #818cf8; outline-offset:-6px; background:rgba(129,140,248,.08); }
+  .grad-brand{ background-image:linear-gradient(135deg,#4c9a3f 0%,#2f6f2a 55%,#22521f 100%); }
+  .grad-gold{ background-image:linear-gradient(135deg,#f3cf5a 0%,#e1aa2e 50%,#b97a18 100%); }
+  .grad-ink{ background-image:linear-gradient(180deg,#14291b 0%,#0b1a10 100%); }
+  .grad-hero{ background-image:radial-gradient(1200px 500px at 10% -10%, rgba(76,154,63,.35), transparent 60%), radial-gradient(1000px 500px at 110% 10%, rgba(231,177,54,.20), transparent 55%); }
+  .grad-ink.grad-hero{ background-image:radial-gradient(1200px 500px at 10% -10%, rgba(76,154,63,.35), transparent 60%), radial-gradient(1000px 500px at 110% 10%, rgba(231,177,54,.20), transparent 55%), linear-gradient(180deg,#14291b 0%,#0b1a10 100%); }
+  .drag-over{ outline:2px dashed #66a659; outline-offset:-6px; background:rgba(102,166,89,.08); }
   .fade-in{ animation:fade .35s ease both; }
   @keyframes fade{ from{opacity:0; transform:translateY(6px);} to{opacity:1; transform:none;} }
   .tick{ animation:pulse 2s ease-in-out infinite; }
@@ -134,6 +136,15 @@ const I = {
   filter:"M22 3H2l8 9.46V19l4 2v-8.54L22 3z",
   pix:"M12 2l3.5 3.5L12 9 8.5 5.5zM2 12l3.5-3.5L9 12l-3.5 3.5zM22 12l-3.5-3.5L15 12l3.5 3.5zM12 15l3.5 3.5L12 22l-3.5-3.5z",
   broadcast:"M4.93 4.93a10 10 0 0 0 0 14.14M19.07 4.93a10 10 0 0 1 0 14.14M7.76 7.76a6 6 0 0 0 0 8.48M16.24 7.76a6 6 0 0 1 0 8.48M12 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4z",
+  folder:"M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z",
+  lock:"M5 11h14a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2zM7 11V7a5 5 0 0 1 10 0v4",
+  eye:"M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z",
+  eyeOff:"M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19M1 1l22 22",
+  sign:"M3 21c3-1 5-4 7-7s4-6 6-6 1 3-1 5-6 5-4 6 4-2 6-2 3 1 3 1M15 3l6 6",
+  briefcase:"M20 7H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2zM16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16",
+  receipt:"M4 2v20l3-2 3 2 3-2 3 2 3-2 1 .7V2l-3 2-3-2-3 2-3-2-3 2zM8 8h8M8 12h8M8 16h5",
+  refresh:"M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15",
+  key:"M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.78 7.78 5.5 5.5 0 0 1 7.78-7.78zM15.5 7.5l3 3L22 7l-3-3",
   link:"M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71",
 };
 const Icon = ({d, className="w-5 h-5", stroke=2}) =>
@@ -198,7 +209,7 @@ const Field = ({label, children}) =>
 const Input = (p) => <input {...p} className={cx("w-full px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-brand-400 text-sm", p.className)}/>;
 const Select = ({children, ...p}) => <select {...p} className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-brand-400 text-sm bg-white">{children}</select>;
 
-const BarChart = ({data, height=120, color="#6366f1"}) => {
+const BarChart = ({data, height=120, color="#2f6f2a"}) => {
   const max=Math.max(...data.map(d=>d.v),1); const w=100/data.length;
   return <svg viewBox={`0 0 100 ${height/2}`} preserveAspectRatio="none" className="w-full" style={{height}}>
     {data.map((d,i)=>{ const h=(d.v/max)*(height/2-14);
@@ -564,6 +575,174 @@ const escalaInicial = () => {
   return esc;
 };
 
+/* ============================ ARQUIVOS (pastas, holerites, contratos) ============================ */
+// Cada arquivo = 1 documento de METADADOS em "arquivos" + N "partes" (base64 fatiado) em "arquivos_partes".
+// O fatiamento contorna o limite de 1 MB por documento do Firestore (aceita PDFs de até ~12 MB).
+const ARQ_PARTE = 700000;                  // caracteres base64 por parte (~525 KB)
+const ARQ_MAX_BYTES = 12*1024*1024;        // limite por arquivo
+// Pastas padrão por tipo de vínculo (o gestor pode criar outras)
+const PASTAS_PADRAO = {
+  clt:  ["Documentos pessoais","Holerites","Contratos","Atestados","Advertências","Outros"],
+  free: ["Documentos pessoais","Recibos","Contratos","Outros"],
+  pj:   ["Contrato de prestação de serviço","Notas fiscais","Documentos da empresa","Outros"],
+};
+const TIPO_ROTULO = { clt:"CLT", free:"Freelancer", pj:"PJ" };
+const HOLERITE_TIPOS = [["mensal","Folha mensal"],["adiantamento","Adiantamento"],["ferias","Férias"],["13_1","13º — 1ª parcela"],["13_2","13º — 2ª parcela"],["plr","PLR"],["rescisao","Rescisão"]];
+const MESES_LONGO=["janeiro","fevereiro","março","abril","maio","junho","julho","agosto","setembro","outubro","novembro","dezembro"];
+const fmtCompetencia=(c)=>{ const m=/^(\d{4})-(\d{2})/.exec(String(c||"")); return m? (MESES_LONGO[Number(m[2])-1]+"/"+m[1]) : (c||"—"); };
+const fmtBytes=(n)=>{ n=Number(n)||0; return n<1024? n+" B" : n<1048576? (n/1024).toFixed(0)+" KB" : (n/1048576).toFixed(1)+" MB"; };
+const donoKeyDe=(tipo,id)=> tipo+"-"+id;
+// Normaliza texto p/ comparar nomes (sem acento, maiúsculo, espaços simples)
+const normTxt=(s)=> String(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toUpperCase().replace(/[^A-Z0-9 ]/g," ").replace(/\s+/g," ").trim();
+
+function lerArquivoDataUrl(file){
+  return new Promise(function(res,rej){ const rd=new FileReader(); rd.onload=function(){ res(rd.result); }; rd.onerror=function(){ rej(rd.error); }; rd.readAsDataURL(file); });
+}
+function bytesParaDataUrl(bytes, mime){
+  let bin=""; const CH=0x8000;
+  for(let i=0;i<bytes.length;i+=CH){ bin+=String.fromCharCode.apply(null, bytes.subarray(i,i+CH)); }
+  return "data:"+(mime||"application/pdf")+";base64,"+btoa(bin);
+}
+// Grava um arquivo (dataURL) com seus metadados. Retorna o id.
+async function arqSalvar(meta, dataUrl){
+  const db=window.__WPDB; if(!db) throw new Error("Sem conexão com o banco de dados.");
+  const m=/^data:([^;,]*)(;base64)?,/.exec(dataUrl||""); if(!m) throw new Error("Arquivo inválido.");
+  const b64=dataUrl.slice(m[0].length);
+  const tamanho=Math.round(b64.length*3/4);
+  if(tamanho>ARQ_MAX_BYTES) throw new Error("Arquivo maior que "+fmtBytes(ARQ_MAX_BYTES)+".");
+  const ref=tCol("arquivos").doc();
+  const partes=[]; for(let i=0;i<b64.length;i+=ARQ_PARTE) partes.push(b64.slice(i,i+ARQ_PARTE));
+  // partes primeiro; o metadado só aparece quando o conteúdo já está completo
+  await Promise.all(partes.map((d,i)=>tCol("arquivos_partes").doc(ref.id+"_"+i).set({f:ref.id,i,d})));
+  const user=window.__WPAUTH&&window.__WPAUTH.currentUser;
+  await ref.set({ ...meta, mime:m[1]||"application/octet-stream", tamanho, partes:partes.length, ts:Date.now(), autor:(user&&user.email)||meta.autor||"" });
+  return ref.id;
+}
+async function arqConteudo(meta){
+  const db=window.__WPDB; if(!db) throw new Error("Sem conexão com o banco de dados.");
+  const n=Number(meta.partes)||0; const ids=Array.from({length:n},(_,i)=>meta.id+"_"+i);
+  const snaps=await Promise.all(ids.map(id=>tCol("arquivos_partes").doc(id).get()));
+  const b64=snaps.map(s=>(s.exists&&s.data().d)||"").join("");
+  return "data:"+(meta.mime||"application/octet-stream")+";base64,"+b64;
+}
+async function arqBlob(meta){ const du=await arqConteudo(meta); const bytes=b64ToBytes(du); return new Blob([bytes],{type:meta.mime||"application/octet-stream"}); }
+// Abre numa nova aba (a janela é aberta ANTES do download p/ não ser bloqueada como pop-up)
+async function arqAbrir(meta){
+  const w=window.open("","_blank");
+  try{ if(w) w.document.write("<p style='font-family:system-ui;padding:24px;color:#475569'>Carregando "+String(meta.nome||"arquivo").replace(/</g,"&lt;")+"…</p>");
+    const url=URL.createObjectURL(await arqBlob(meta));
+    if(w) w.location.href=url; else window.location.href=url;
+  }catch(e){ if(w) w.close(); throw e; }
+}
+async function arqBaixar(meta){
+  const url=URL.createObjectURL(await arqBlob(meta));
+  const a=document.createElement("a"); a.href=url; a.download=meta.nome||"arquivo"; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),4000);
+}
+async function arqRemover(meta){
+  const n=Number(meta.partes)||0;
+  await tCol("arquivos").doc(meta.id).delete();
+  await Promise.all(Array.from({length:n},(_,i)=>tCol("arquivos_partes").doc(meta.id+"_"+i).delete().catch(()=>{})));
+}
+function arqAtualizar(id,patch){ return tCol("arquivos").doc(id).set(patch,{merge:true}); }
+// Metadados de TODOS os arquivos do cliente (só carrega no painel logado)
+function useArquivosMeta(ativo){
+  const [items,setItems]=useState([]);
+  useEffect(()=>{ const db=window.__WPDB; if(!db||!ativo) return;
+    try{ return tCol("arquivos").onSnapshot(function(snap){ const arr=[]; snap.forEach(function(d){ arr.push({...(d.data()||{}), id:d.id}); }); arr.sort((a,b)=>(b.ts||0)-(a.ts||0)); setItems(arr); }, function(){}); }catch(e){}
+  },[ativo]);
+  return [items];
+}
+// ---- Acesso do colaborador ao app (CPF + PIN) ----
+function useAcessosColab(ativo){
+  const [items,setItems]=useState({});
+  useEffect(()=>{ const db=window.__WPDB; if(!db||!ativo) return;
+    try{ return tCol("acessosColab").onSnapshot(function(snap){ const o={}; snap.forEach(function(d){ o[d.id]=d.data()||{}; }); setItems(o); }, function(){}); }catch(e){}
+  },[ativo]);
+  return [items];
+}
+async function pinHash(cpf,pin){
+  const txt="wilami|"+(WP_TENANT||"")+"|"+soDigitos(cpf)+"|"+String(pin||"").trim();
+  const buf=await crypto.subtle.digest("SHA-256", new TextEncoder().encode(txt));
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");
+}
+function gerarPin(){ const a=new Uint32Array(1); crypto.getRandomValues(a); return String(a[0]%1000000).padStart(6,"0"); }
+async function definirPinColab(donoKey,cpf,pin,extra){
+  const hash=await pinHash(cpf,pin);
+  return tCol("acessosColab").doc(donoKey).set({ hash, cpf:soDigitos(cpf), atualizadoEm:Date.now(), ...(extra||{}) },{merge:true});
+}
+// ---- Bibliotecas de PDF carregadas sob demanda (só quando o gestor usa holerites/assinatura) ----
+const _scripts={};
+function carregarScript(src){
+  if(_scripts[src]) return _scripts[src];
+  _scripts[src]=new Promise(function(res,rej){ const s=document.createElement("script"); s.src=src; s.onload=res; s.onerror=function(){ delete _scripts[src]; rej(new Error("Falha ao carregar "+src)); }; document.head.appendChild(s); });
+  return _scripts[src];
+}
+async function carregarPdfJs(){
+  await carregarScript("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js");
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  return window.pdfjsLib;
+}
+async function carregarPdfLib(){ await carregarScript("https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"); return window.PDFLib; }
+// Texto de cada página de um PDF
+async function textoPaginasPdf(bytes){
+  const pdfjs=await carregarPdfJs();
+  const doc=await pdfjs.getDocument({data:bytes.slice()}).promise;
+  const out=[];
+  for(let i=1;i<=doc.numPages;i++){ const pg=await doc.getPage(i); const tc=await pg.getTextContent(); out.push(tc.items.map(it=>it.str).join(" ")); }
+  return out;
+}
+// Novo PDF só com as páginas indicadas (índices 0-based)
+async function extrairPaginasPdf(bytes, paginas){
+  const PDFLib=await carregarPdfLib();
+  const src=await PDFLib.PDFDocument.load(bytes.slice(),{ignoreEncryption:true});
+  const out=await PDFLib.PDFDocument.create();
+  const cop=await out.copyPages(src, paginas); cop.forEach(p=>out.addPage(p));
+  return await out.save();
+}
+// Identifica o colaborador num texto (CPF tem prioridade; depois nome completo)
+function acharPessoaNoTexto(texto, pessoas){
+  const dig=soDigitos(texto); const nt=" "+normTxt(texto)+" ";
+  const porCpf=pessoas.filter(p=>{ const c=soDigitos(p.cpf); return c.length===11 && dig.indexOf(c)>=0; });
+  if(porCpf.length===1) return {pessoa:porCpf[0], por:"CPF"};
+  const porNome=pessoas.filter(p=>{ const n=normTxt(p.nome); return n.split(" ").length>=2 && nt.indexOf(" "+n+" ")>=0; });
+  if(porNome.length===1) return {pessoa:porNome[0], por:"nome"};
+  return null;
+}
+// Acrescenta uma página de assinaturas (com âncoras /assinaturaN/ usadas pelo DocuSign)
+async function pdfComPaginaAssinaturas(dataUrl, titulo, signatarios){
+  const PDFLib=await carregarPdfLib();
+  const doc=await PDFLib.PDFDocument.load(b64ToBytes(dataUrl),{ignoreEncryption:true});
+  const font=await doc.embedFont(PDFLib.StandardFonts.Helvetica); const bold=await doc.embedFont(PDFLib.StandardFonts.HelveticaBold);
+  const semAcento=(t)=>String(t||"").normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/[^\x20-\x7E]/g,"");
+  let pg=doc.addPage([595,842]); let y=780;
+  pg.drawText("PAGINA DE ASSINATURAS",{x:60,y,size:15,font:bold,color:PDFLib.rgb(0.12,0.3,0.12)}); y-=22;
+  pg.drawText(semAcento(titulo).slice(0,90),{x:60,y,size:10,font,color:PDFLib.rgb(0.35,0.4,0.45)}); y-=40;
+  signatarios.forEach((sg,i)=>{
+    if(y<120){ pg=doc.addPage([595,842]); y=780; }
+    pg.drawText("/assinatura"+(i+1)+"/",{x:60,y:y+4,size:8,font,color:PDFLib.rgb(1,1,1)}); // âncora invisível
+    pg.drawLine({start:{x:60,y:y-8},end:{x:330,y:y-8},thickness:0.8,color:PDFLib.rgb(0.2,0.2,0.2)});
+    pg.drawText(semAcento(sg.nome),{x:60,y:y-22,size:10,font:bold});
+    pg.drawText(semAcento(sg.email)+(sg.papel?("  ·  "+semAcento(sg.papel)):""),{x:60,y:y-35,size:9,font,color:PDFLib.rgb(0.4,0.45,0.5)});
+    y-=95;
+  });
+  return bytesParaDataUrl(await doc.save(),"application/pdf");
+}
+// ---- DocuSign: chamadas ao backend (função serverless /api/docusign na Vercel) ----
+async function docusignApi(acao, opts){
+  opts=opts||{};
+  const user=window.__WPAUTH&&window.__WPAUTH.currentUser;
+  const token=user? await user.getIdToken() : "";
+  const qs=new URLSearchParams({acao, ...(opts.params||{})}).toString();
+  let r;
+  try{ r=await fetch("/api/docusign?"+qs,{ method:opts.body?"POST":"GET", headers:{"Content-Type":"application/json", ...(token?{Authorization:"Bearer "+token}:{})}, body:opts.body?JSON.stringify(opts.body):undefined }); }
+  catch(e){ throw new Error("Não foi possível falar com o servidor de assinaturas."); }
+  let j=null; try{ j=await r.json(); }catch(e){}
+  if(!r.ok){ const err=new Error((j&&j.erro)||("Erro "+r.status+" no servidor de assinaturas.")); err.info=j; err.status=r.status; throw err; }
+  return j||{};
+}
+const ASSIN_STATUS = { sent:["Enviado","amber"], delivered:["Visualizado","blue"], completed:["Assinado por todos","green"], declined:["Recusado","red"], voided:["Cancelado","slate"], created:["Rascunho","slate"], manual:["Assinado (manual)","green"] };
+
 /* ============================ STORE (estado global) ============================ */
 const StoreCtx = createContext(null);
 const useStore = () => useContext(StoreCtx);
@@ -618,7 +797,7 @@ function imprimirDoc(titulo, corpoHTML){
     th{background:#f1f5f9} tr:nth-child(even) td{background:#fafafa}
     .sign{margin-top:56px;display:flex;gap:56px} .sign div{flex:1;border-top:1px solid #0f172a;padding-top:6px;font-size:12px;text-align:center;color:#475569}
     .foot{margin-top:24px;color:#94a3b8;font-size:10px} @media print{.noprint{display:none}}
-    .btn{background:#6366f1;color:#fff;border:0;padding:10px 18px;border-radius:8px;cursor:pointer;font-weight:700;font-size:13px}</style></head>
+    .btn{background:#2f6f2a;color:#fff;border:0;padding:10px 18px;border-radius:8px;cursor:pointer;font-weight:700;font-size:13px}</style></head>
     <body>${corpoHTML}
     <div class="foot">Wilami Ponto · documento gerado em ${new Date().toLocaleString("pt-BR")} · conforme Portaria 671/2021</div>
     <div class="noprint" style="margin-top:20px"><button class="btn" onclick="window.print()">Imprimir / Salvar PDF</button></div>
@@ -758,6 +937,18 @@ function StoreProvider({children}) {
   const [pontoHist,setPontoHist]=usePersist("pontoHist",INIT_PONTOHIST);// histórico p/ apuração
   const [cargosFreela,setCargosFreela]=usePersist("cargos",INIT_CARGOS_FREELA);
   const [dossie,setDossie]=usePersist("dossie",{});          // { "clt-1": {faltas:[],feedbacks:[]} }
+  // ---- Marca (logo da empresa), Prestadores PJ, pastas personalizadas e assinatura eletrônica ----
+  const [marca,setMarca]=usePersist("marca",{});                       // {logo:dataURL, nome, mostrarNome}
+  const [pjsBase,setPjs]=usePersist("pjs",[]);                         // prestadores de serviço (não batem ponto)
+  const [pastasExtra,setPastasExtra]=usePersist("pastasExtra",{});     // { "clt-1": ["Minha pasta", …] }
+  const [assinaturaCfg,setAssinaturaCfg]=usePersist("assinaturaCfg",{signatarios:[]}); // signatários padrão da empresa
+  const logado = !!authUser || !window.__WPAUTH;
+  const [arquivos]=useArquivosMeta(logado);                            // metadados dos arquivos (só no painel)
+  const [acessosColab]=useAcessosColab(logado);                        // PINs do app do colaborador (hash)
+  const salvarPj=(pj)=>setPjs(prev=> pj.id ? prev.map(x=>x.id===pj.id?{...x,...pj}:x) : [...prev,{...pj,id:(prev.reduce((m,x)=>Math.max(m,x.id),500))+1,status:pj.status||"ativo",criadoEm:Date.now()}]);
+  const excluirPj=(id)=>setPjs(prev=>prev.filter(x=>x.id!==id));
+  const criarPasta=(donoKey,nome)=>setPastasExtra(prev=>{ const arr=prev[donoKey]||[]; if(arr.includes(nome)) return prev; return {...prev,[donoKey]:[...arr,nome]}; });
+  const removerPasta=(donoKey,nome)=>setPastasExtra(prev=>({...prev,[donoKey]:(prev[donoKey]||[]).filter(x=>x!==nome)}));
   const [perfil,setPerfil]=useState("proprietario");         // papel simulado
   const [perms,setPerms]=useState(PERMS_INIT);
   const can=(cap)=> perfil==="proprietario" ? true : !!(perms[perfil] && perms[perfil][cap]);
@@ -928,7 +1119,9 @@ function StoreProvider({children}) {
     cargosFreela,salvarCargoFreela,excluirCargoFreela, atestados,enviarAtestado, ajustes,enviarAjuste,resolverAjuste,
     dossie,getDossie,addFalta,addFeedback,addAnexo, perfil,setPerfil, perms,setPerms, can,
     clientes,clienteAtivo,tenantAtual,criarCliente,trocarCliente,
-    acesso,donos,setDonos,acessos,acessosOps };
+    acesso,donos,setDonos,acessos,acessosOps,
+    marca,setMarca, pjs:(casaRestrita!=null?pjsBase.filter(x=>x.unidade==null||x.unidade==="todas"||_mesmaCasa(x.unidade)):pjsBase), salvarPj,excluirPj,
+    pastasExtra,criarPasta,removerPasta, assinaturaCfg,setAssinaturaCfg, arquivos, acessosColab };
   return <StoreCtx.Provider value={value}>{children}</StoreCtx.Provider>;
 }
 const pessoaNome = (pid,tipo,clts,freelas)=> (tipo==="clt"?clts:freelas).find(p=>p.id===pid)?.nome || "—";
@@ -948,15 +1141,35 @@ const FiltroCasa = ({casa,setCasa,unidades,className}) =>
         <span className="w-2 h-2 rounded-full" style={{background:casa===u.id?"#fff":u.cor}}/>{u.nome}</button>)}
   </div>;
 
-const Logo = ({light, size="text-xl"}) =>
-  <div className="flex items-center gap-2.5 select-none">
-    <div className="w-9 h-9 grad-brand rounded-xl grid place-items-center shadow-glow shrink-0">
-      <Icon d={I.clock} className="w-5 h-5 text-white" stroke={2.4}/>
-    </div>
-    <div className={cx("font-extrabold tracking-tight leading-none", size, light?"text-white":"text-slate-900")}>
-      Wilami<span className="text-brand-400"> Ponto</span>
+// Símbolo da marca WILAMI (W dourado + seta verde de crescimento) — vetor, nítido em qualquer tamanho.
+const LogoMark = ({className="w-10 h-8"}) =>
+  <svg className={className} viewBox="0 0 124 96" aria-hidden="true">
+    <defs>
+      <linearGradient id="wlG1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#f6d35c"/><stop offset=".55" stopColor="#e3ad30"/><stop offset="1" stopColor="#b47517"/></linearGradient>
+      <linearGradient id="wlG2" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stopColor="#22521f"/><stop offset=".6" stopColor="#2f6f2a"/><stop offset="1" stopColor="#4c9a3f"/></linearGradient>
+      <linearGradient id="wlG3" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#5a8a3c"/><stop offset="1" stopColor="#2a5a25"/></linearGradient>
+    </defs>
+    <path d="M2 36h17l15 34-8 10z" fill="url(#wlG3)"/>
+    <path d="M41 34h18L29 88c-1.6 2.6-5.6 2.4-6.8-.4L20 82z" fill="url(#wlG1)"/>
+    <path d="M71 26h18L51 89c-1.5 2.5-5.3 2.4-6.6-.2L42 84z" fill="url(#wlG1)"/>
+    <path d="M56 62l8 11-9 12z" fill="#6f7f30"/>
+    <path d="M53.2 82.4L100 19.4L94.2 17.2L119.4 3.4L113.4 31.6L109.6 26.6L62.8 89.6C60.6 92.4 55.4 91.2 53.2 82.4z" fill="url(#wlG2)"/>
+  </svg>;
+// Logo da empresa: usa a imagem enviada em Configurações → Marca (se houver); senão o símbolo WILAMI.
+const Logo = ({light, size="text-xl"}) => {
+  const st=useStore(); const marca=(st&&st.marca)||{};
+  if(marca.logo) return <div className="flex items-center gap-2.5 select-none">
+    <div className={cx("rounded-xl shrink-0 grid place-items-center", light?"bg-white/95 px-2 py-1":"")}><img src={marca.logo} alt={marca.nome||"Logo"} className="h-9 max-w-[150px] object-contain"/></div>
+    {marca.mostrarNome!==false && <div className={cx("font-extrabold tracking-tight leading-none", size, light?"text-white":"text-slate-900")}>{marca.nome||"Wilami"}<span className="block text-[10px] tracking-[.25em] font-bold text-free-400 mt-1">PONTO & RH</span></div>}
+  </div>;
+  return <div className="flex items-center gap-2.5 select-none">
+    <div className={cx("w-11 h-10 rounded-xl grid place-items-center shrink-0", light?"bg-white/95 shadow-glow":"bg-white border border-slate-100 shadow-soft")}><LogoMark className="w-8 h-7"/></div>
+    <div className="leading-none">
+      <div className={cx("font-extrabold tracking-[.06em]", size, light?"text-white":"text-brand-700")}>{(marca.nome||"WILAMI").toUpperCase()}</div>
+      <div className={cx("text-[10px] tracking-[.28em] font-bold mt-1", light?"text-free-300":"text-free-600")}>PONTO & RH</div>
     </div>
   </div>;
+};
 
 const PageHeader = ({title, sub, children}) =>
   <div className="flex flex-wrap items-end justify-between gap-4 mb-6">
@@ -1008,10 +1221,10 @@ function LoginScreen({ onLogin }) {
     <div className="hidden lg:flex flex-col justify-between p-12 text-white">
       <Logo light size="text-2xl"/>
       <div className="max-w-md">
-        <h1 className="text-4xl font-extrabold leading-tight">Registro de ponto digital feito para <span className="text-brand-300">restaurantes</span>.</h1>
-        <p className="mt-4 text-white/70 text-lg">Selfie com validação facial, geolocalização com cerca eletrônica, escala visual e cálculo de horas conforme a CLT e a Portaria 671/2021.</p>
+        <h1 className="text-4xl font-extrabold leading-tight">Ponto, escala e RH digital feitos para <span className="text-free-300">restaurantes</span>.</h1>
+        <p className="mt-4 text-white/70 text-lg">Selfie com validação facial, cerca eletrônica, escala visual, holerites no celular do colaborador e contratos com assinatura eletrônica — conforme a CLT e a Portaria 671/2021.</p>
         <div className="mt-8 grid grid-cols-2 gap-3">
-          {[["Selfie + facial",I.camera],["GPS + cerca",I.gps],["Escala visual",I.calendar],["Ponto ao vivo",I.broadcast]].map(([t,d])=>
+          {[["Selfie + GPS",I.camera],["Escala visual",I.calendar],["Holerites no app",I.receipt],["Assinatura digital",I.sign]].map(([t,d])=>
             <div key={t} className="glass rounded-2xl p-4 flex items-center gap-3 text-slate-800">
               <div className="w-9 h-9 rounded-xl grad-brand grid place-items-center text-white"><Icon d={d} className="w-4 h-4"/></div>
               <span className="text-sm font-semibold">{t}</span>
@@ -1052,6 +1265,11 @@ function LoginScreen({ onLogin }) {
               <div><div className="font-bold text-slate-900">Sou Freelancer</div><div className="text-sm text-slate-500">Check-in/checkout · exige escala + cerca</div></div>
               <Icon d={I.arrow} className="w-4 h-4 ml-auto text-slate-400"/>
             </button>
+            <button onClick={()=>{ window.location.hash="meus-docs"; window.dispatchEvent(new HashChangeEvent("hashchange")); }} className="w-full p-4 rounded-2xl border border-slate-200 hover:border-free-400 hover:bg-free-50/40 flex items-center gap-4 text-left transition">
+              <div className="w-11 h-11 grad-gold rounded-xl grid place-items-center text-white"><Icon d={I.receipt}/></div>
+              <div><div className="font-bold text-slate-900">Meus holerites e documentos</div><div className="text-sm text-slate-500">CLT, freelancer ou PJ · CPF/CNPJ + PIN</div></div>
+              <Icon d={I.arrow} className="w-4 h-4 ml-auto text-slate-400"/>
+            </button>
           </div>
         </>}
       </Card>
@@ -1089,7 +1307,7 @@ function Dashboard({go}) {
         <h3 className="font-bold text-slate-900 mb-1">Composição de hoje</h3>
         <p className="text-sm text-slate-500 mb-2">Quem está escalado</p>
         <div className="flex items-center gap-4">
-          <Donut segments={[{v:cltAtivos,c:"#6366f1"},{v:freelas.length,c:"#f97316"}]}/>
+          <Donut segments={[{v:cltAtivos,c:"#2f6f2a"},{v:freelas.length,c:"#d39520"}]}/>
           <div className="space-y-2 text-sm">
             <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-brand-500"/>{cltAtivos} CLT</div>
             <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-free-500"/>{freelas.length} Freelancers</div>
@@ -1814,6 +2032,9 @@ function PontoKiosk({ mode, onClose }) {
               <button onClick={()=>{setFluxo("ajuste");setAjStatus("");}} className="w-full p-4 rounded-2xl border border-slate-200 hover:border-amber-400 hover:bg-amber-50/40 flex items-center gap-4 text-left transition">
                 <div className="w-11 h-11 rounded-xl bg-amber-500 grid place-items-center text-white"><Icon d={I.edit}/></div>
                 <div className="flex-1"><div className="font-bold text-slate-900">Solicitar ajuste de ponto</div><div className="text-sm text-slate-500">Esqueceu de bater? Peça a correção ao gestor</div></div><Icon d={I.arrow} className="w-4 h-4 text-slate-400"/></button>
+              <button onClick={()=>{ window.location.hash="meus-docs"; }} className="w-full p-4 rounded-2xl border border-slate-200 hover:border-brand-400 hover:bg-brand-50/40 flex items-center gap-4 text-left transition">
+                <div className="w-11 h-11 rounded-xl grad-gold grid place-items-center text-white"><Icon d={I.receipt}/></div>
+                <div className="flex-1"><div className="font-bold text-slate-900">Meus holerites e documentos</div><div className="text-sm text-slate-500">Entrar com CPF + PIN para ver seus arquivos</div></div><Icon d={I.arrow} className="w-4 h-4 text-slate-400"/></button>
             </div>
             <Btn variant="ghost" className="w-full mt-4" onClick={onClose}>Cancelar</Btn>
           </div>
@@ -2765,21 +2986,23 @@ function Unidades() {
 function LinksQR() {
   const { unidades } = useStore();
   const [uni,setUni]=useState(unidades[0]?.id);
-  const cltRef=useRef(null), freeRef=useRef(null);
+  const cltRef=useRef(null), freeRef=useRef(null), docsRef=useRef(null);
   const toast=useContext(ToastCtx);
   // Link REAL para o próprio app (roteamento por hash): abre o quiosque de fato.
   const base = (typeof window!=="undefined" ? window.location.href.split("#")[0] : "");
   const cltUrl=comTenantUrl(base,"ponto-clt");
   const freeUrl=comTenantUrl(base,"ponto-free");
+  const docsUrl=comTenantUrl(base,"meus-docs");
   useEffect(()=>{
     const mk=(el,url,color)=>{ if(el){ el.innerHTML=""; try{ new QRCode(el,{text:url,width:150,height:150,colorDark:color,colorLight:"#ffffff",correctLevel:QRCode.CorrectLevel.M}); }catch(e){} } };
-    mk(cltRef.current,cltUrl,"#4f46e5"); mk(freeRef.current,freeUrl,"#ea580c");
+    mk(cltRef.current,cltUrl,"#2f6f2a"); mk(freeRef.current,freeUrl,"#b47517"); mk(docsRef.current,docsUrl,"#1e3e1d");
   },[uni]);
   const copiar=(t)=>{ copyText(t); toast("Link copiado"); };
   const abrir=(m)=>{ window.location.hash = m; }; // dispara o roteamento por hash
   const cards=[
     {ref:cltRef,url:cltUrl,mode:"ponto-clt",titulo:"Registro de Jornada — CLT",desc:"Abre o formulário CLT e permite registrar a jornada (selfie + cerca).",tone:"brand",icon:I.user},
     {ref:freeRef,url:freeUrl,mode:"ponto-free",titulo:"Check-in / Checkout — Freelancer",desc:"Abre o formulário Freelancer e permite check-in/checkout (exige escala + cerca).",tone:"free",icon:I.coffee},
+    {ref:docsRef,url:docsUrl,mode:"meus-docs",titulo:"Meus holerites e documentos",desc:"CLT, freelancer ou PJ entram com CPF/CNPJ + PIN e veem holerites e contratos liberados.",tone:"brand",icon:I.receipt},
   ];
   return <div className="fade-in">
     <PageHeader title="Links & QR Code" sub="Links SEPARADOS por vínculo · abrem o cadastro e o registro de fato (teste no botão Abrir)">
@@ -3165,7 +3388,7 @@ function Dossie() {
           </div>
         </div>
         <div className="px-6 pt-4 flex gap-1 border-b border-slate-100 overflow-x-auto">
-          {[["docs","Documentos"],["faltas","Faltas & Atestados"],["fb","Feedbacks"],["hist","Histórico"]].map(([k,l])=>
+          {[["docs","Documentos"],["pastas","Pastas & holerites"],["faltas","Faltas & Atestados"],["fb","Feedbacks"],["hist","Histórico"]].map(([k,l])=>
             <button key={k} onClick={()=>setTab(k)} className={cx("px-4 py-2.5 text-sm font-semibold border-b-2 -mb-px whitespace-nowrap", tab===k?"border-brand-500 text-brand-700":"border-transparent text-slate-400 hover:text-slate-600")}>{l}</button>)}
         </div>
         <div className="p-6">
@@ -3211,6 +3434,11 @@ function Dossie() {
                   </div>)}
               </div>
             </div>
+          </div>}
+
+          {tab==="pastas" && pAtual && <div className="space-y-4">
+            <AcessoAppColab tipo={sel.tipo} pessoa={pAtual}/>
+            <PastasPessoa key={sel.tipo+pAtual.id} tipo={sel.tipo} pessoa={pAtual}/>
           </div>}
 
           {tab==="faltas" && <div>
@@ -3470,13 +3698,9 @@ function Configuracoes() {
           <div className="p-3 rounded-xl bg-emerald-50 flex items-start gap-2"><Icon d={I.check} className="w-4 h-4 text-emerald-600 mt-0.5"/><span>Consentimento de biometria e geolocalização aceito no 1º acesso.</span></div>
           <div className="p-3 rounded-xl bg-slate-50 flex items-start gap-2"><Icon d={I.shield} className="w-4 h-4 text-slate-500 mt-0.5"/><span>Selfies e coordenadas criptografadas (AES-256) e retidas pelo prazo legal.</span></div>
         </div>
-        <h3 className="font-bold text-slate-900 mt-6 mb-3 flex items-center gap-2"><Icon d={I.edit} className="w-4 h-4 text-brand-600"/>Marca</h3>
-        <div className="flex items-center gap-3">
-          <div className="w-12 h-12 grad-brand rounded-xl grid place-items-center text-white"><Icon d={I.clock}/></div>
-          <div className="flex-1"><span className="text-xs text-slate-400 font-semibold">Cor primária</span>
-            <div className="flex gap-2 mt-1">{["#6366f1","#f97316","#10b981","#0ea5e9","#e11d48"].map(c=><button key={c} className="w-7 h-7 rounded-lg ring-2 ring-white shadow" style={{background:c}}/>)}</div></div>
-        </div>
       </Card>
+      <ConfigMarca/>
+      <ConfigAssinatura/>
     </div>
   </div>;
 }
@@ -3502,6 +3726,741 @@ function Ajuda() {
         </div>)}
     </Card>
   </div>;
+}
+
+/* ============================ PASTAS DE ARQUIVOS (por colaborador / PJ) ============================ */
+// Sincroniza o status de um envelope DocuSign; quando todos assinam, salva o PDF assinado na mesma pasta.
+async function sincronizarAssinatura(arq){
+  const env=arq.assinatura&&arq.assinatura.envelopeId; if(!env) return null;
+  const j=await docusignApi("envelope",{params:{id:env}});
+  const patch={...arq.assinatura, status:j.status||arq.assinatura.status, signatarios:j.signatarios||arq.assinatura.signatarios, atualizadoEm:Date.now()};
+  if(j.status==="completed" && !arq.assinatura.assinadoArquivoId){
+    const d=await docusignApi("documento",{params:{id:env}});
+    const base=String(arq.nome||"documento").replace(/\.pdf$/i,"");
+    patch.assinadoArquivoId=await arqSalvar({ nome:base+" (assinado).pdf", donoKey:arq.donoKey, donoTipo:arq.donoTipo, donoId:arq.donoId, donoNome:arq.donoNome, cpf:arq.cpf||"",
+      pasta:arq.pasta, categoria:"contrato_assinado", visivelColab:true, origemId:arq.id }, "data:application/pdf;base64,"+d.base64);
+    patch.concluidoEm=Date.now();
+  }
+  await arqAtualizar(arq.id,{assinatura:patch});
+  return patch;
+}
+const ehPdf=(a)=> /pdf/i.test(a.mime||"") || /\.pdf$/i.test(a.nome||"");
+const ehImg=(a)=> /^image\//i.test(a.mime||"");
+
+function AssinaturaBadge({a}){
+  if(!a) return null;
+  const [l,t]=ASSIN_STATUS[a.status]||[a.status||"—","slate"];
+  return <Badge tone={t}><Icon d={I.sign} className="w-3 h-3"/>{l}</Badge>;
+}
+
+function PastasPessoa({tipo, pessoa}){
+  const { arquivos, pastasExtra, criarPasta, removerPasta, can } = useStore();
+  const toast=useContext(ToastCtx);
+  const key=donoKeyDe(tipo,pessoa.id);
+  const meus=arquivos.filter(a=>a.donoKey===key);
+  const pastas=[...new Set([...(PASTAS_PADRAO[tipo]||PASTAS_PADRAO.clt), ...(pastasExtra[key]||[]), ...meus.map(a=>a.pasta).filter(Boolean)])];
+  const [pasta,setPasta]=useState(null);
+  const [enviando,setEnviando]=useState(0);
+  const [nova,setNova]=useState(null);       // nome da nova pasta (null = fechado)
+  const [assinar,setAssinar]=useState(null); // arquivo a enviar p/ assinatura
+  const [ocupado,setOcupado]=useState("");   // id do arquivo em operação
+  const [drag,setDrag]=useState(false);
+  const editavel=can("documentos"), podeExcluir=can("excluir");
+  const semBanco=!window.__WPDB;
+  const doPasta=meus.filter(a=>a.pasta===pasta);
+  const enviar=async(lista)=>{
+    const files=Array.from(lista||[]); if(!files.length||!pasta) return;
+    setEnviando(files.length); let ok=0;
+    for(const f of files){
+      try{
+        let du=await lerArquivoDataUrl(f);
+        if(f.type && f.type.indexOf("image/")===0 && f.size>900*1024) du=await compressImg(du,1800,0.82);
+        await arqSalvar({ nome:f.name, donoKey:key, donoTipo:tipo, donoId:String(pessoa.id), donoNome:pessoa.nome, cpf:soDigitos(pessoa.cpf||pessoa.cnpj),
+          pasta, categoria:pasta==="Holerites"?"holerite":"documento", visivelColab:pasta==="Holerites" }, du);
+        ok++;
+      }catch(e){ toast("Não foi possível enviar "+f.name+": "+(e.message||e)); }
+      setEnviando(n=>n-1);
+    }
+    if(ok) toast(ok===1?"Arquivo salvo na pasta "+pasta:ok+" arquivos salvos na pasta "+pasta);
+  };
+  const acao=async(a,fn,msg)=>{ setOcupado(a.id); try{ await fn(); if(msg) toast(msg); }catch(e){ toast(e.message||"Falha na operação"); } setOcupado(""); };
+  const excluir=(a)=>{ if(!confirm("Excluir “"+a.nome+"” definitivamente?")) return; acao(a,()=>arqRemover(a),"Arquivo excluído"); };
+  const contar=(p)=>meus.filter(a=>a.pasta===p).length;
+
+  if(semBanco) return <div className="p-4 rounded-xl bg-amber-50 text-amber-700 text-sm">As pastas de arquivos precisam da conexão com o banco central (Firebase).</div>;
+
+  if(!pasta) return <div>
+    <div className="flex items-center justify-between mb-3">
+      <p className="text-sm text-slate-500 flex items-center gap-1.5"><Icon d={I.folder} className="w-4 h-4 text-brand-600"/>{meus.length} arquivo(s) em {pastas.length} pastas</p>
+      {editavel && (nova==null
+        ? <Btn size="sm" variant="ghost" icon={I.plus} onClick={()=>setNova("")}>Nova pasta</Btn>
+        : <div className="flex gap-1.5"><Input autoFocus value={nova} onChange={e=>setNova(e.target.value)} placeholder="Nome da pasta" className="!py-1.5 w-44"
+              onKeyDown={e=>{ if(e.key==="Enter"&&nova.trim()){ criarPasta(key,nova.trim()); setNova(null); toast("Pasta criada"); } if(e.key==="Escape") setNova(null); }}/>
+            <Btn size="sm" onClick={()=>{ if(nova.trim()){ criarPasta(key,nova.trim()); toast("Pasta criada"); } setNova(null); }}>Criar</Btn></div>)}
+    </div>
+    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+      {pastas.map(p=>{ const n=contar(p); const custom=(pastasExtra[key]||[]).includes(p);
+        return <div key={p} className="relative group">
+          <button onClick={()=>setPasta(p)} className="w-full text-left p-3.5 rounded-2xl border border-slate-200 hover:border-brand-300 hover:bg-brand-50/40 transition">
+            <div className={cx("w-10 h-10 rounded-xl grid place-items-center mb-2", n?"grad-gold text-white":"bg-slate-100 text-slate-400")}><Icon d={I.folder} className="w-5 h-5"/></div>
+            <div className="font-semibold text-slate-800 text-sm leading-tight">{p}</div>
+            <div className="text-xs text-slate-400 mt-0.5">{n} arquivo(s){p==="Holerites"&&" · visível no app"}</div>
+          </button>
+          {custom && n===0 && podeExcluir && <button onClick={()=>removerPasta(key,p)} title="Remover pasta vazia" className="absolute top-2 right-2 w-7 h-7 rounded-lg text-slate-300 hover:text-rose-500 hover:bg-rose-50 hidden group-hover:grid place-items-center"><Icon d={I.trash} className="w-3.5 h-3.5"/></button>}
+        </div>; })}
+    </div>
+  </div>;
+
+  return <div>
+    <div className="flex items-center gap-2 mb-3 flex-wrap">
+      <button onClick={()=>setPasta(null)} className="flex items-center gap-1 text-sm font-semibold text-slate-500 hover:text-slate-800"><Icon d={I.arrow} className="w-4 h-4 rotate-180"/>Pastas</button>
+      <span className="text-slate-300">/</span>
+      <span className="font-bold text-slate-900 flex items-center gap-1.5"><Icon d={I.folder} className="w-4 h-4 text-free-500"/>{pasta}</span>
+      {editavel && <label className="ml-auto cursor-pointer">
+        <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-white grad-brand px-3.5 py-2 rounded-xl shadow-glow"><Icon d={I.upload} className="w-4 h-4"/>Enviar arquivos</span>
+        <input type="file" multiple className="hidden" onChange={e=>{ enviar(e.target.files); e.target.value=""; }}/>
+      </label>}
+    </div>
+    {editavel && <div onDragOver={e=>{e.preventDefault();setDrag(true);}} onDragLeave={()=>setDrag(false)} onDrop={e=>{e.preventDefault();setDrag(false);enviar(e.dataTransfer.files);}}
+      className={cx("mb-3 p-4 rounded-2xl border-2 border-dashed text-center text-sm transition", drag?"drag-over border-brand-300":"border-slate-200 text-slate-400")}>
+      {enviando>0 ? <span className="text-brand-700 font-semibold">Enviando {enviando} arquivo(s)…</span> : <>Arraste arquivos para cá (PDF, imagens, Word…) — até {fmtBytes(ARQ_MAX_BYTES)} cada</>}
+    </div>}
+    <div className="space-y-2">
+      {doPasta.length===0 && <p className="text-sm text-slate-400 text-center py-6">Pasta vazia.</p>}
+      {doPasta.map(a=>{ const ass=a.assinatura; const pend=ass&&ass.envelopeId&&!["completed","declined","voided"].includes(ass.status);
+        return <div key={a.id} className={cx("p-3 rounded-xl border flex flex-wrap items-center gap-2.5", ocupado===a.id?"opacity-60":"", "border-slate-200")}>
+          <div className={cx("w-9 h-9 rounded-lg grid place-items-center shrink-0", ehPdf(a)?"bg-rose-50 text-rose-500":ehImg(a)?"bg-sky-50 text-sky-500":"bg-slate-100 text-slate-500")}><Icon d={I.doc} className="w-4 h-4"/></div>
+          <div className="flex-1 min-w-[160px]">
+            <div className="text-sm font-semibold text-slate-800 break-all">{a.nome}</div>
+            <div className="text-xs text-slate-400 flex flex-wrap gap-x-2">{fmtBytes(a.tamanho)} · {new Date(a.ts||0).toLocaleDateString("pt-BR")}{a.competencia&&<span>· {fmtCompetencia(a.competencia)}</span>}{a.vistoEm&&<span className="text-emerald-600">· visto pelo colaborador {new Date(a.vistoEm).toLocaleDateString("pt-BR")}</span>}</div>
+            <div className="flex flex-wrap gap-1 mt-1">
+              {a.visivelColab && <Badge tone="green"><Icon d={I.eye} className="w-3 h-3"/>No app</Badge>}
+              <AssinaturaBadge a={ass}/>
+              {a.categoria==="contrato_assinado" && <Badge tone="green"><Icon d={I.check} className="w-3 h-3"/>Via assinada</Badge>}
+            </div>
+          </div>
+          <div className="flex items-center gap-1">
+            <button title="Visualizar" onClick={()=>acao(a,()=>arqAbrir(a))} className="w-8 h-8 rounded-lg grid place-items-center text-slate-500 hover:bg-slate-100"><Icon d={I.eye} className="w-4 h-4"/></button>
+            <button title="Baixar" onClick={()=>acao(a,()=>arqBaixar(a))} className="w-8 h-8 rounded-lg grid place-items-center text-slate-500 hover:bg-slate-100"><Icon d={I.download} className="w-4 h-4"/></button>
+            {editavel && <button title={a.visivelColab?"Ocultar do app do colaborador":"Liberar no app do colaborador"} onClick={()=>acao(a,()=>arqAtualizar(a.id,{visivelColab:!a.visivelColab}),a.visivelColab?"Ocultado do app":"Liberado no app do colaborador")}
+              className={cx("w-8 h-8 rounded-lg grid place-items-center hover:bg-slate-100", a.visivelColab?"text-emerald-600":"text-slate-400")}><Icon d={a.visivelColab?I.eye:I.eyeOff} className="w-4 h-4"/></button>}
+            {editavel && ehPdf(a) && !ass && a.categoria!=="contrato_assinado" && <Btn size="sm" variant="soft" icon={I.sign} onClick={()=>setAssinar(a)}>Assinar</Btn>}
+            {editavel && pend && <button title="Atualizar status da assinatura" onClick={()=>acao(a,()=>sincronizarAssinatura(a),"Status da assinatura atualizado")} className="w-8 h-8 rounded-lg grid place-items-center text-brand-600 hover:bg-brand-50"><Icon d={I.refresh} className="w-4 h-4"/></button>}
+            {podeExcluir && <button title="Excluir" onClick={()=>excluir(a)} className="w-8 h-8 rounded-lg grid place-items-center text-slate-400 hover:text-rose-500 hover:bg-rose-50"><Icon d={I.trash} className="w-4 h-4"/></button>}
+          </div>
+          {ass && ass.signatarios && ass.signatarios.length>0 && <div className="w-full pl-11 flex flex-wrap gap-1.5">
+            {ass.signatarios.map((sg,i)=><span key={i} className={cx("text-[11px] px-2 py-0.5 rounded-full border", sg.status==="completed"?"border-emerald-200 bg-emerald-50 text-emerald-700":sg.status==="declined"?"border-rose-200 bg-rose-50 text-rose-700":"border-slate-200 text-slate-500")}>
+              {sg.status==="completed"?"✓ ":""}{sg.nome}{sg.status==="completed"?"":sg.status==="declined"?" · recusou":" · pendente"}</span>)}
+          </div>}
+        </div>; })}
+    </div>
+    {assinar && <AssinaturaModal arq={assinar} pessoa={pessoa} tipo={tipo} onClose={()=>setAssinar(null)}/>}
+  </div>;
+}
+
+/* ============================ ASSINATURA ELETRÔNICA (DocuSign) ============================ */
+function AssinaturaModal({arq, pessoa, tipo, onClose}){
+  const { assinaturaCfg } = useStore();
+  const toast=useContext(ToastCtx);
+  const nomePessoa = tipo==="pj" ? (pessoa.responsavel||pessoa.nome) : pessoa.nome;
+  const [sigs,setSigs]=useState(()=>[
+    { nome:nomePessoa||"", email:pessoa.email||"", papel:tipo==="pj"?"Contratada ("+(pessoa.nome||"PJ")+")":"Colaborador", on:true },
+    ...((assinaturaCfg&&assinaturaCfg.signatarios)||[]).map(s=>({...s, on:true})),
+  ]);
+  const [assunto,setAssunto]=useState("Assinatura: "+String(arq.nome||"").replace(/\.pdf$/i,""));
+  const [mensagem,setMensagem]=useState("Olá! Segue o documento para assinatura eletrônica. Qualquer dúvida, estamos à disposição.");
+  const [pagina,setPagina]=useState(true);
+  const [status,setStatus]=useState(""); // "" | enviando | erro
+  const [erro,setErro]=useState(null);
+  const setSig=(i,k,v)=>setSigs(arr=>arr.map((s,j)=>j===i?{...s,[k]:v}:s));
+  const ativos=sigs.filter(s=>s.on);
+  const emailOk=(e)=>/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e||"").trim());
+  const invalidos=ativos.filter(s=>!s.nome.trim()||!emailOk(s.email));
+  const enviar=async()=>{
+    if(!ativos.length||invalidos.length) return;
+    setStatus("enviando"); setErro(null);
+    try{
+      let du=await arqConteudo(arq);
+      const lista=ativos.map(s=>({nome:s.nome.trim(), email:s.email.trim().toLowerCase(), papel:s.papel||""}));
+      if(pagina) du=await pdfComPaginaAssinaturas(du, arq.nome, lista);
+      const j=await docusignApi("enviar",{ body:{ nome:arq.nome, base64:du.split(",")[1], signatarios:lista, assunto, mensagem } });
+      await arqAtualizar(arq.id,{ assinatura:{ provedor:"docusign", envelopeId:j.envelopeId, status:j.status||"sent", enviadoEm:Date.now(), signatarios:lista.map(s=>({...s,status:"sent"})) } });
+      toast("Enviado para assinatura — cada signatário recebe um e-mail do DocuSign");
+      onClose();
+    }catch(e){ setErro(e); setStatus("erro"); }
+  };
+  const marcarManual=async()=>{
+    try{ await arqAtualizar(arq.id,{ assinatura:{ provedor:"manual", status:"manual", concluidoEm:Date.now(), signatarios:ativos.map(s=>({nome:s.nome,email:s.email,status:"completed"})) } }); toast("Marcado como assinado"); onClose(); }
+    catch(e){ toast(e.message||"Falha"); }
+  };
+  return <Modal open onClose={onClose} wide>
+    <div className="p-6">
+      <div className="flex items-start gap-3 mb-4">
+        <div className="w-11 h-11 rounded-xl grad-brand grid place-items-center text-white shrink-0"><Icon d={I.sign}/></div>
+        <div className="flex-1 min-w-0"><h3 className="text-lg font-bold text-slate-900">Solicitar assinatura (DocuSign)</h3>
+          <p className="text-sm text-slate-500 break-all">{arq.nome}</p></div>
+        <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><Icon d={I.x}/></button>
+      </div>
+      <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Signatários (todos assinam o mesmo documento)</div>
+      <div className="space-y-2">
+        {sigs.map((s,i)=><div key={i} className={cx("grid sm:grid-cols-[auto_1fr_1fr_auto] gap-2 items-center p-2.5 rounded-xl border", s.on?"border-slate-200":"border-slate-100 opacity-60")}>
+          <input type="checkbox" checked={s.on} onChange={e=>setSig(i,"on",e.target.checked)} className="w-4 h-4 accent-green-700"/>
+          <Input value={s.nome} onChange={e=>setSig(i,"nome",e.target.value)} placeholder="Nome completo"/>
+          <Input value={s.email} onChange={e=>setSig(i,"email",e.target.value)} placeholder="e-mail" className={s.on&&s.email&&!emailOk(s.email)?"!border-rose-300":""}/>
+          <span className="text-xs text-slate-400 sm:w-36 truncate" title={s.papel}>{s.papel||"—"}</span>
+        </div>)}
+      </div>
+      <button onClick={()=>setSigs(a=>[...a,{nome:"",email:"",papel:"Testemunha",on:true}])} className="mt-2 text-sm font-semibold text-brand-700 hover:underline flex items-center gap-1"><Icon d={I.plus} className="w-4 h-4"/>Adicionar signatário</button>
+      {invalidos.length>0 && <p className="text-xs text-rose-500 mt-2">Preencha nome e e-mail válido de todos os signatários marcados.</p>}
+      <div className="grid gap-3 mt-4">
+        <Field label="Assunto do e-mail"><Input value={assunto} onChange={e=>setAssunto(e.target.value)}/></Field>
+        <Field label="Mensagem"><textarea value={mensagem} onChange={e=>setMensagem(e.target.value)} rows={2} className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-brand-400 text-sm"/></Field>
+        <label className="flex items-start gap-2 text-sm text-slate-600"><input type="checkbox" checked={pagina} onChange={e=>setPagina(e.target.checked)} className="mt-0.5 w-4 h-4 accent-green-700"/>
+          <span>Adicionar <b>página de assinaturas</b> ao final do PDF (recomendado — o DocuSign posiciona a assinatura de cada um automaticamente)</span></label>
+      </div>
+      {status==="erro" && erro && <div className="mt-4 p-3.5 rounded-xl bg-rose-50 text-rose-700 text-sm">
+        <div className="font-semibold">{erro.message}</div>
+        {erro.info && erro.info.consentUrl && <div className="mt-1">É preciso autorizar o app uma única vez: <a className="underline font-semibold" href={erro.info.consentUrl} target="_blank" rel="noreferrer">conceder permissão no DocuSign</a> e depois tentar de novo.</div>}
+        {erro.status===501 && <div className="mt-1 text-rose-600/90">Configure as credenciais do DocuSign na Vercel (veja Configurações → Assinatura eletrônica). Enquanto isso, você pode coletar as assinaturas fora do sistema e marcar como assinado.</div>}
+      </div>}
+      <div className="flex flex-wrap gap-2 mt-5">
+        <Btn variant="ghost" onClick={marcarManual} icon={I.check}>Já foi assinado (marcar manualmente)</Btn>
+        <Btn className="flex-1" icon={status==="enviando"?null:I.sign} disabled={status==="enviando"||!ativos.length||invalidos.length>0} onClick={enviar}>{status==="enviando"?"Enviando…":"Enviar para assinatura"}</Btn>
+      </div>
+    </div>
+  </Modal>;
+}
+
+/* ============================ ACESSO DO COLABORADOR AO APP (PIN) ============================ */
+function AcessoAppColab({tipo, pessoa}){
+  const { acessosColab, can } = useStore();
+  const toast=useContext(ToastCtx);
+  const key=donoKeyDe(tipo,pessoa.id);
+  const ac=acessosColab[key];
+  const docLogin=soDigitos(pessoa.cpf)||soDigitos(pessoa.cnpj);
+  const [pinNovo,setPinNovo]=useState(null);
+  const [gerando,setGerando]=useState(false);
+  const link=comTenantUrl(location.origin+location.pathname,"meus-docs");
+  const gerar=async()=>{
+    if(!(docLogin.length===11||docLogin.length===14)){ toast("Cadastre o CPF"+(tipo==="pj"?" ou CNPJ":"")+" antes de liberar o acesso."); return; }
+    setGerando(true);
+    try{ const pin=gerarPin(); await definirPinColab(key,docLogin,pin,{nome:pessoa.nome,tipo}); setPinNovo(pin); }
+    catch(e){ toast("Não foi possível gerar o PIN: "+(e.message||e)); }
+    setGerando(false);
+  };
+  return <div className="p-3.5 rounded-2xl border border-slate-200 bg-slate-50/60 flex flex-wrap items-center gap-3">
+    <div className={cx("w-10 h-10 rounded-xl grid place-items-center shrink-0", ac?"bg-emerald-100 text-emerald-600":"bg-slate-200 text-slate-500")}><Icon d={I.key} className="w-5 h-5"/></div>
+    <div className="flex-1 min-w-[180px]">
+      <div className="text-sm font-semibold text-slate-800">Acesso ao app “Meus documentos”</div>
+      <div className="text-xs text-slate-500">{ac ? <>Liberado · PIN definido em {new Date(ac.atualizadoEm||0).toLocaleDateString("pt-BR")}</> : "Ainda não liberado — gere um PIN para o colaborador ver holerites e documentos."}</div>
+    </div>
+    {can("documentos") && <Btn size="sm" variant={ac?"ghost":"primary"} icon={I.key} disabled={gerando} onClick={gerar}>{gerando?"Gerando…":ac?"Gerar novo PIN":"Liberar acesso"}</Btn>}
+    {pinNovo && <Modal open onClose={()=>setPinNovo(null)}>
+      <div className="p-6 text-center">
+        <div className="w-14 h-14 mx-auto rounded-2xl grad-brand grid place-items-center text-white mb-3"><Icon d={I.key} className="w-7 h-7"/></div>
+        <h3 className="text-lg font-bold text-slate-900">PIN de {pessoa.nome.split(" ")[0]}</h3>
+        <p className="text-sm text-slate-500 mt-1">Entregue este PIN pessoalmente. Ele aparece só agora — depois, apenas um novo PIN pode ser gerado.</p>
+        <div className="my-5 text-4xl font-extrabold tracking-[.35em] text-brand-700 tabular-nums">{pinNovo}</div>
+        <div className="text-left text-sm bg-slate-50 rounded-xl p-3 space-y-1">
+          <div>1. Acesse: <b className="break-all">{link}</b></div>
+          <div>2. Informe o {docLogin.length===14?"CNPJ":"CPF"} e o PIN acima.</div>
+          <div>3. Holerites e documentos liberados aparecem lá.</div>
+        </div>
+        <div className="flex gap-2 mt-4">
+          <Btn variant="ghost" className="flex-1" icon={I.copy} onClick={()=>{ copyText("Seu acesso aos holerites e documentos:\n"+link+"\n"+(docLogin.length===14?"CNPJ":"CPF")+": o seu\nPIN: "+pinNovo); toast("Instruções copiadas"); }}>Copiar instruções</Btn>
+          <Btn className="flex-1" onClick={()=>setPinNovo(null)}>Pronto</Btn>
+        </div>
+      </div>
+    </Modal>}
+  </div>;
+}
+
+/* ============================ ARQUIVOS & PASTAS (central) ============================ */
+function ArquivosPage(){
+  const { clts, freelas, pjs, arquivos, acessosColab, unidades } = useStore();
+  const [filtro,setFiltro]=useState("todos");
+  const [q,setQ]=useState("");
+  const [sel,setSel]=useState(null); // {tipo,id}
+  const pessoas=[...clts.map(p=>({tipo:"clt",p})), ...freelas.map(p=>({tipo:"free",p})), ...pjs.map(p=>({tipo:"pj",p}))];
+  const contagem={}; arquivos.forEach(a=>{ contagem[a.donoKey]=(contagem[a.donoKey]||0)+1; });
+  const lista=pessoas.filter(x=>(filtro==="todos"||x.tipo===filtro) && normTxt(x.p.nome+" "+(x.p.cpf||"")+" "+(x.p.cnpj||"")).includes(normTxt(q)));
+  const atual=sel && pessoas.find(x=>x.tipo===sel.tipo && String(x.p.id)===String(sel.id));
+  const nHol=arquivos.filter(a=>a.categoria==="holerite").length;
+  const nPend=arquivos.filter(a=>a.assinatura&&a.assinatura.envelopeId&&!["completed","declined","voided"].includes(a.assinatura.status)).length;
+  const nAcesso=Object.keys(acessosColab||{}).length;
+  return <div className="fade-in">
+    <PageHeader title="Arquivos & pastas" sub="Uma pasta para cada colaborador e prestador PJ · documentos, contratos, holerites e recibos"/>
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+      <StatCard icon={I.folder} label="Arquivos guardados" value={arquivos.length}/>
+      <StatCard icon={I.receipt} label="Holerites publicados" value={nHol} tone="green"/>
+      <StatCard icon={I.sign} label="Aguardando assinatura" value={nPend} tone="amber"/>
+      <StatCard icon={I.key} label="Com acesso ao app" value={nAcesso} tone="blue"/>
+    </div>
+    <div className="grid lg:grid-cols-[340px_1fr] gap-4 items-start">
+      <Card className={cx("p-3", atual&&"hidden lg:block")}>
+        <div className="flex items-center gap-2 px-2 py-1.5 mb-2 rounded-xl bg-slate-50"><Icon d={I.search} className="w-4 h-4 text-slate-400"/><input value={q} onChange={e=>setQ(e.target.value)} placeholder="Buscar nome, CPF ou CNPJ…" className="flex-1 outline-none text-sm bg-transparent"/></div>
+        <div className="flex gap-1 mb-2">
+          {[["todos","Todos"],["clt","CLT"],["free","Freelas"],["pj","PJ"]].map(([k,l])=><button key={k} onClick={()=>setFiltro(k)} className={cx("flex-1 py-1.5 rounded-lg text-xs font-semibold", filtro===k?"grad-brand text-white":"bg-slate-100 text-slate-500 hover:bg-slate-200")}>{l}</button>)}
+        </div>
+        <div className="max-h-[65vh] overflow-y-auto space-y-1">
+          {lista.length===0 && <p className="text-sm text-slate-400 text-center py-6">Ninguém encontrado.</p>}
+          {lista.map(({tipo,p})=>{ const k=donoKeyDe(tipo,p.id); const ativo=atual&&atual.tipo===tipo&&String(atual.p.id)===String(p.id);
+            return <button key={k} onClick={()=>setSel({tipo,id:p.id})} className={cx("w-full flex items-center gap-2.5 p-2 rounded-xl text-left transition", ativo?"bg-brand-50 ring-1 ring-brand-200":"hover:bg-slate-50")}>
+              <Avatar name={p.nome} src={p.foto} tone={tipo==="clt"?"brand":tipo==="free"?"free":"slate"} size="w-9 h-9"/>
+              <div className="flex-1 min-w-0"><div className="text-sm font-semibold text-slate-800 truncate">{p.nome}</div>
+                <div className="text-xs text-slate-400 truncate">{TIPO_ROTULO[tipo]} · {tipo==="pj"?(p.servico||"Prestador de serviço"):(p.cargo||"—")}</div></div>
+              <div className="flex flex-col items-end gap-0.5">
+                {contagem[k]>0 && <span className="text-[11px] font-bold text-slate-500 flex items-center gap-0.5"><Icon d={I.folder} className="w-3 h-3"/>{contagem[k]}</span>}
+                {acessosColab[k] && <Icon d={I.key} className="w-3 h-3 text-emerald-500"/>}
+              </div>
+            </button>; })}
+        </div>
+      </Card>
+      {atual ? <Card className="p-5">
+        <button onClick={()=>setSel(null)} className="lg:hidden flex items-center gap-1 text-sm font-semibold text-slate-500 mb-3"><Icon d={I.arrow} className="w-4 h-4 rotate-180"/>Voltar à lista</button>
+        <div className="flex items-center gap-3 mb-4">
+          <Avatar name={atual.p.nome} src={atual.p.foto} tone={atual.tipo==="clt"?"brand":atual.tipo==="free"?"free":"slate"} size="w-12 h-12"/>
+          <div className="flex-1 min-w-0"><h3 className="text-lg font-extrabold text-slate-900 truncate">{atual.p.nome}</h3>
+            <p className="text-sm text-slate-500">{TIPO_ROTULO[atual.tipo]} · {atual.tipo==="pj"?((atual.p.cnpj?"CNPJ "+atual.p.cnpj:"")||"Prestador"):(atual.p.cargo||"")} {atual.p.unidade&&atual.p.unidade!=="todas"?"· "+unidadeNome(atual.p.unidade,unidades):""}</p></div>
+        </div>
+        <div className="mb-4"><AcessoAppColab tipo={atual.tipo} pessoa={atual.p}/></div>
+        <PastasPessoa key={atual.tipo+atual.p.id} tipo={atual.tipo} pessoa={atual.p}/>
+      </Card>
+      : <Card className="p-10 text-center hidden lg:block">
+        <div className="w-16 h-16 mx-auto rounded-2xl grad-gold grid place-items-center text-white mb-3"><Icon d={I.folder} className="w-8 h-8"/></div>
+        <h3 className="font-bold text-slate-900">Selecione um colaborador ou prestador</h3>
+        <p className="text-sm text-slate-500 mt-1">Cada pessoa tem suas pastas: documentos pessoais, contratos, holerites, atestados e outras que você criar.</p>
+      </Card>}
+    </div>
+  </div>;
+}
+
+/* ============================ HOLERITES (upload da contabilidade → app do colaborador) ============================ */
+function HoleritesPage(){
+  const { clts, freelas, arquivos, acessosColab, can } = useStore();
+  const toast=useContext(ToastCtx);
+  const hoje=new Date(); const mesPassado=new Date(hoje.getFullYear(),hoje.getMonth()-1,1);
+  const [comp,setComp]=useState(mesPassado.getFullYear()+"-"+String(mesPassado.getMonth()+1).padStart(2,"0"));
+  const [tipoHol,setTipoHol]=useState("mensal");
+  const [itens,setItens]=useState([]);        // pré-visualização antes de publicar
+  const [proc,setProc]=useState("");          // mensagem de processamento
+  const [pub,setPub]=useState(null);          // {feito,total}
+  const [drag,setDrag]=useState(false);
+  const editavel=can("documentos"), podeExcluir=can("excluir");
+  const pessoas=[...clts.map(p=>({...p,_tipo:"clt"})), ...freelas.map(p=>({...p,_tipo:"free"}))];
+  const keyDe=(p)=>donoKeyDe(p._tipo,p.id);
+  const pessoaPorKey=(k)=>pessoas.find(p=>keyDe(p)===k);
+  const tipoLabel=(HOLERITE_TIPOS.find(t=>t[0]===tipoHol)||[])[1]||"Holerite";
+  const publicados=arquivos.filter(a=>a.categoria==="holerite" && a.competencia===comp);
+  const jaTem=(k)=>publicados.some(a=>a.donoKey===k && (a.holeriteTipo||"mensal")===tipoHol);
+
+  const processar=async(lista)=>{
+    const files=Array.from(lista||[]); if(!files.length) return;
+    const novos=[];
+    for(let fi=0; fi<files.length; fi++){
+      const f=files[fi];
+      setProc("Lendo "+f.name+" ("+(fi+1)+"/"+files.length+")…");
+      const bytes=new Uint8Array(await f.arrayBuffer());
+      const pdf=/pdf/i.test(f.type)||/\.pdf$/i.test(f.name);
+      const porArquivo=acharPessoaNoTexto(f.name.replace(/[_.\-]+/g," "), pessoas);
+      let textos=null;
+      if(pdf){ try{ textos=await textoPaginasPdf(bytes); }catch(e){ textos=null; } }
+      if(textos && textos.length>1){
+        // PDF com vários holerites: separa página a página pelo CPF/nome encontrado
+        let grupo=null;
+        textos.forEach((t,i)=>{
+          const m=acharPessoaNoTexto(t,pessoas); const k=m?keyDe(m.pessoa):"";
+          if(grupo && k && grupo.k===k){ grupo.paginas.push(i); return; }
+          grupo={k, por:m?m.por:"", paginas:[i]}; novos.push({ id:Math.random().toString(36).slice(2), origem:f.name, mime:"application/pdf", bytes, total:textos.length, paginas:grupo.paginas, k:grupo.k, por:grupo.por });
+        });
+      } else {
+        const m=(textos&&textos[0]&&acharPessoaNoTexto(textos[0],pessoas)) || porArquivo;
+        novos.push({ id:Math.random().toString(36).slice(2), origem:f.name, mime:f.type||(pdf?"application/pdf":"application/octet-stream"), bytes, total:textos?textos.length:1, paginas:null,
+          k:m?keyDe(m.pessoa):"", por:m?(m===porArquivo&&!(textos&&textos[0]&&acharPessoaNoTexto(textos[0],pessoas))?"nome do arquivo":m.por):"" });
+      }
+    }
+    setProc(""); setItens(prev=>[...prev,...novos]);
+    const sem=novos.filter(n=>!n.k).length;
+    toast(novos.length+" holerite(s) lidos"+(sem?" · "+sem+" precisam de identificação manual":" · todos identificados"));
+  };
+  const bytesDoItem=async(it)=> (it.paginas && it.paginas.length<it.total) ? await extrairPaginasPdf(it.bytes, it.paginas) : it.bytes;
+  const preview=async(it)=>{ const w=window.open("","_blank"); try{ const b=await bytesDoItem(it); const url=URL.createObjectURL(new Blob([b],{type:it.mime})); if(w) w.location.href=url; }catch(e){ if(w) w.close(); toast("Não foi possível abrir: "+(e.message||e)); } };
+  const publicar=async()=>{
+    const ok=itens.filter(it=>it.k); if(!ok.length) return;
+    setPub({feito:0,total:ok.length}); let feitos=0; const restantes=[];
+    for(const it of itens){
+      if(!it.k){ restantes.push(it); continue; }
+      const p=pessoaPorKey(it.k);
+      try{
+        const b=await bytesDoItem(it);
+        const ext=/pdf/i.test(it.mime)?".pdf":(String(it.origem).match(/\.[a-z0-9]+$/i)||[""])[0];
+        await arqSalvar({ nome:"Holerite "+tipoLabel+" "+fmtCompetencia(comp)+" - "+p.nome+ext, donoKey:it.k, donoTipo:p._tipo, donoId:String(p.id), donoNome:p.nome, cpf:soDigitos(p.cpf),
+          pasta:"Holerites", categoria:"holerite", competencia:comp, holeriteTipo:tipoHol, visivelColab:true, origem:it.origem }, bytesParaDataUrl(b,it.mime));
+        feitos++; setPub({feito:feitos,total:ok.length});
+      }catch(e){ restantes.push(it); toast("Falha em "+p.nome+": "+(e.message||e)); }
+    }
+    setItens(restantes); setPub(null);
+    if(feitos) toast(feitos+" holerite(s) publicados no app dos colaboradores");
+  };
+  const semPin=[...new Set(itens.filter(it=>it.k&&!acessosColab[it.k]).map(it=>it.k))];
+  const semHolerite=clts.filter(c=>!publicados.some(a=>a.donoKey===donoKeyDe("clt",c.id)));
+
+  return <div className="fade-in">
+    <PageHeader title="Holerites" sub="Suba os holerites da contabilidade — o sistema identifica cada colaborador e libera no app dele"/>
+    {editavel && <Card className="p-5 mb-4">
+      <div className="grid sm:grid-cols-3 gap-3 mb-4">
+        <Field label="Competência"><Input type="month" value={comp} onChange={e=>setComp(e.target.value)}/></Field>
+        <Field label="Tipo"><Select value={tipoHol} onChange={e=>setTipoHol(e.target.value)}>{HOLERITE_TIPOS.map(([k,l])=><option key={k} value={k}>{l}</option>)}</Select></Field>
+        <div className="flex items-end"><label className="w-full cursor-pointer">
+          <span className="w-full inline-flex items-center justify-center gap-2 text-sm font-semibold text-white grad-brand px-4 py-2.5 rounded-xl shadow-glow"><Icon d={I.upload} className="w-4 h-4"/>Selecionar PDFs</span>
+          <input type="file" multiple accept="application/pdf,image/*" className="hidden" onChange={e=>{ processar(e.target.files); e.target.value=""; }}/>
+        </label></div>
+      </div>
+      <div onDragOver={e=>{e.preventDefault();setDrag(true);}} onDragLeave={()=>setDrag(false)} onDrop={e=>{e.preventDefault();setDrag(false);processar(e.dataTransfer.files);}}
+        className={cx("p-6 rounded-2xl border-2 border-dashed text-center transition", drag?"drag-over border-brand-300":"border-slate-200")}>
+        {proc ? <div className="text-brand-700 font-semibold text-sm flex items-center justify-center gap-2"><span className="w-4 h-4 rounded-full border-2 border-brand-200 border-t-brand-600 animate-spin"/>{proc}</div>
+        : <><div className="w-12 h-12 mx-auto rounded-2xl grad-gold grid place-items-center text-white mb-2"><Icon d={I.receipt}/></div>
+          <div className="font-semibold text-slate-800">Arraste aqui os holerites enviados pela contabilidade</div>
+          <div className="text-sm text-slate-500 mt-1">Aceita <b>um PDF por colaborador</b> ou <b>um PDF único com todos</b> — o sistema separa as páginas pelo CPF ou nome de cada um.</div></>}
+      </div>
+    </Card>}
+
+    {itens.length>0 && <Card className="p-5 mb-4">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+        <h3 className="font-bold text-slate-900">Conferência antes de publicar · {tipoLabel} {fmtCompetencia(comp)}</h3>
+        <div className="flex gap-2">
+          <Btn size="sm" variant="ghost" onClick={()=>setItens([])}>Descartar</Btn>
+          <Btn size="sm" icon={pub?null:I.check} disabled={!!pub||!itens.some(i=>i.k)} onClick={publicar}>{pub?("Publicando "+pub.feito+"/"+pub.total+"…"):("Publicar "+itens.filter(i=>i.k).length+" no app")}</Btn>
+        </div>
+      </div>
+      {semPin.length>0 && <div className="mb-3 p-3 rounded-xl bg-amber-50 text-amber-800 text-sm flex items-start gap-2"><Icon d={I.key} className="w-4 h-4 mt-0.5 shrink-0"/>
+        <span>{semPin.length} colaborador(es) ainda não têm PIN de acesso ao app: <b>{semPin.map(k=>(pessoaPorKey(k)||{}).nome).join(", ")}</b>. O holerite fica guardado e aparece assim que o acesso for liberado (em Arquivos &amp; pastas).</span></div>}
+      <div className="space-y-2">
+        {itens.map(it=>{ const p=it.k&&pessoaPorKey(it.k);
+          return <div key={it.id} className={cx("p-3 rounded-xl border flex flex-wrap items-center gap-3", it.k?"border-slate-200":"border-rose-200 bg-rose-50/40")}>
+            <div className={cx("w-9 h-9 rounded-lg grid place-items-center shrink-0", it.k?"bg-emerald-50 text-emerald-600":"bg-rose-100 text-rose-500")}><Icon d={it.k?I.check:I.help} className="w-4 h-4"/></div>
+            <div className="flex-1 min-w-[180px]">
+              <div className="text-sm font-semibold text-slate-800 break-all">{it.origem}{it.paginas&&it.total>1&&<span className="text-slate-400 font-normal"> · pág. {it.paginas.map(x=>x+1).join(", ")} de {it.total}</span>}</div>
+              <div className="text-xs mt-0.5">{it.k ? <span className="text-emerald-700">Identificado por {it.por||"seleção manual"}</span> : <span className="text-rose-600 font-semibold">Não identificado — escolha o colaborador</span>}
+                {it.k && jaTem(it.k) && <span className="text-amber-600"> · já existe um holerite desta competência para essa pessoa</span>}</div>
+            </div>
+            <div className="w-full sm:w-64"><Select value={it.k} onChange={e=>setItens(arr=>arr.map(x=>x.id===it.id?{...x,k:e.target.value,por:e.target.value?"seleção manual":""}:x))}>
+              <option value="">— escolher colaborador —</option>
+              {pessoas.map(pp=><option key={keyDe(pp)} value={keyDe(pp)}>{pp.nome} · {TIPO_ROTULO[pp._tipo]}{pp.cpf?" · "+pp.cpf:""}</option>)}
+            </Select></div>
+            <button title="Ver" onClick={()=>preview(it)} className="w-8 h-8 rounded-lg grid place-items-center text-slate-500 hover:bg-slate-100"><Icon d={I.eye} className="w-4 h-4"/></button>
+            <button title="Remover" onClick={()=>setItens(arr=>arr.filter(x=>x.id!==it.id))} className="w-8 h-8 rounded-lg grid place-items-center text-slate-400 hover:text-rose-500 hover:bg-rose-50"><Icon d={I.x} className="w-4 h-4"/></button>
+          </div>; })}
+      </div>
+    </Card>}
+
+    <Card className="p-5">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+        <h3 className="font-bold text-slate-900">Publicados em {fmtCompetencia(comp)} <span className="text-slate-400 font-normal">· {publicados.length}</span></h3>
+        {!editavel && <Input type="month" value={comp} onChange={e=>setComp(e.target.value)} className="!w-44"/>}
+        <span className="text-xs text-slate-500">{publicados.filter(a=>a.vistoEm).length} de {publicados.length} já visualizados pelos colaboradores</span>
+      </div>
+      {publicados.length===0 ? <p className="text-sm text-slate-400 text-center py-6">Nenhum holerite publicado nesta competência.</p>
+      : <div className="overflow-x-auto"><table className="w-full text-sm">
+        <thead><tr className="text-left text-xs text-slate-400 uppercase"><th className="py-2 pr-3">Colaborador</th><th className="py-2 pr-3">Tipo</th><th className="py-2 pr-3">Publicado</th><th className="py-2 pr-3">Status no app</th><th className="py-2"></th></tr></thead>
+        <tbody>{publicados.map(a=><tr key={a.id} className="border-t border-slate-100">
+          <td className="py-2.5 pr-3 font-semibold text-slate-800">{a.donoNome}</td>
+          <td className="py-2.5 pr-3 text-slate-500">{(HOLERITE_TIPOS.find(t=>t[0]===(a.holeriteTipo||"mensal"))||[])[1]}</td>
+          <td className="py-2.5 pr-3 text-slate-500">{new Date(a.ts||0).toLocaleDateString("pt-BR")}</td>
+          <td className="py-2.5 pr-3">{!a.visivelColab ? <Badge>Oculto</Badge> : a.vistoEm ? <Badge tone="green"><Icon d={I.check} className="w-3 h-3"/>Visto em {new Date(a.vistoEm).toLocaleDateString("pt-BR")}</Badge> : acessosColab[a.donoKey] ? <Badge tone="blue">Disponível · não visto</Badge> : <Badge tone="amber">Sem PIN de acesso</Badge>}</td>
+          <td className="py-2.5 text-right whitespace-nowrap">
+            <button title="Visualizar" onClick={()=>arqAbrir(a).catch(e=>toast(e.message))} className="w-8 h-8 rounded-lg inline-grid place-items-center text-slate-500 hover:bg-slate-100"><Icon d={I.eye} className="w-4 h-4"/></button>
+            {podeExcluir && <button title="Excluir" onClick={()=>{ if(confirm("Excluir este holerite?")) arqRemover(a).then(()=>toast("Holerite excluído")).catch(e=>toast(e.message)); }} className="w-8 h-8 rounded-lg inline-grid place-items-center text-slate-400 hover:text-rose-500 hover:bg-rose-50"><Icon d={I.trash} className="w-4 h-4"/></button>}
+          </td></tr>)}</tbody>
+      </table></div>}
+      {publicados.length>0 && semHolerite.length>0 && <p className="text-xs text-slate-400 mt-3">Sem holerite nesta competência: {semHolerite.map(c=>c.nome.split(" ")[0]).join(", ")}</p>}
+    </Card>
+  </div>;
+}
+
+/* ============================ PRESTADORES PJ ============================ */
+function PjForm({inicial,onSalvar,onClose}){
+  const { unidades } = useStore();
+  const [f,setF]=useState(inicial||{ nome:"", cnpj:"", responsavel:"", cpf:"", email:"", tel:"", servico:"", valor:0, unidade:"todas", inicio:"", fim:"", tipoPix:"CNPJ", pix:"", obs:"" });
+  const set=(k,v)=>setF(p=>({...p,[k]:v}));
+  const falta=[]; if(!f.nome.trim()) falta.push("razão social / nome"); if(soDigitos(f.cnpj).length!==14) falta.push("CNPJ (14 dígitos)"); if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email||"")) falta.push("e-mail");
+  return <div className="p-6">
+    <div className="flex items-center gap-2 mb-4"><button onClick={onClose} className="flex items-center gap-1 text-sm font-semibold text-slate-600 hover:text-slate-900"><Icon d={I.arrow} className="w-4 h-4 rotate-180"/>Voltar</button>
+      <h3 className="text-base font-bold text-slate-900 ml-1">{inicial?"Editar prestador PJ":"Novo prestador PJ"}</h3></div>
+    <div className="mb-4 p-3 rounded-xl bg-brand-50 text-brand-800 text-sm flex items-start gap-2"><Icon d={I.briefcase} className="w-4 h-4 mt-0.5 shrink-0"/>Prestador PJ <b className="mx-1">não bate ponto</b> e não entra na escala. Ele tem uma pasta para o contrato de prestação de serviço e notas fiscais.</div>
+    <div className="grid sm:grid-cols-2 gap-3">
+      <Field label="Razão social / nome *"><Input value={f.nome} onChange={e=>set("nome",e.target.value)}/></Field>
+      <Field label="CNPJ *"><Input value={f.cnpj} onChange={e=>set("cnpj",e.target.value)} placeholder="00.000.000/0000-00"/></Field>
+      <Field label="Responsável (quem assina)"><Input value={f.responsavel} onChange={e=>set("responsavel",e.target.value)}/></Field>
+      <Field label="CPF do responsável"><Input value={f.cpf} onChange={e=>set("cpf",e.target.value)} placeholder="000.000.000-00"/></Field>
+      <Field label="E-mail * (recebe o contrato)"><Input type="email" value={f.email} onChange={e=>set("email",e.target.value)}/></Field>
+      <Field label="Telefone"><Input value={f.tel} onChange={e=>set("tel",e.target.value)}/></Field>
+      <Field label="Serviço prestado"><Input value={f.servico} onChange={e=>set("servico",e.target.value)} placeholder="Ex.: consultoria, contabilidade, manutenção"/></Field>
+      <Field label="Valor mensal (R$)"><Input type="number" value={f.valor} onChange={e=>set("valor",Number(e.target.value))}/></Field>
+      <Field label="Unidade"><Select value={f.unidade} onChange={e=>set("unidade",e.target.value==="todas"?"todas":Number(e.target.value))}><option value="todas">Todas as casas</option>{unidades.map(u=><option key={u.id} value={u.id}>{u.nome}</option>)}</Select></Field>
+      <Field label="Status"><Select value={f.status||"ativo"} onChange={e=>set("status",e.target.value)}><option value="ativo">Ativo</option><option value="encerrado">Contrato encerrado</option></Select></Field>
+      <Field label="Início do contrato"><Input type="date" value={f.inicio} onChange={e=>set("inicio",e.target.value)}/></Field>
+      <Field label="Fim do contrato"><Input type="date" value={f.fim} onChange={e=>set("fim",e.target.value)}/></Field>
+      <Field label="Tipo Pix"><Select value={f.tipoPix} onChange={e=>set("tipoPix",e.target.value)}>{PIX_TIPOS.map(t=><option key={t}>{t}</option>)}</Select></Field>
+      <Field label="Chave Pix"><Input value={f.pix} onChange={e=>set("pix",e.target.value)}/></Field>
+    </div>
+    <Field label="Observações"><textarea value={f.obs} onChange={e=>set("obs",e.target.value)} rows={2} className="w-full mt-1 px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-brand-400 text-sm"/></Field>
+    {falta.length>0 && <p className="text-xs text-rose-500 mt-3">Falta: {falta.join(", ")}</p>}
+    <div className="flex gap-2 mt-4"><Btn variant="ghost" onClick={onClose}>Cancelar</Btn><Btn className="flex-1" icon={I.check} disabled={falta.length>0} onClick={()=>onSalvar(f)}>Salvar</Btn></div>
+  </div>;
+}
+function PrestadoresPJ(){
+  const { pjs, salvarPj, excluirPj, arquivos, can, unidades } = useStore();
+  const toast=useContext(ToastCtx);
+  const [form,setForm]=useState(null);   // null | {} (novo) | pj
+  const [sel,setSel]=useState(null);
+  const [q,setQ]=useState("");
+  const pjAtual=sel && pjs.find(x=>x.id===sel);
+  const statusContrato=(pj)=>{ const k=donoKeyDe("pj",pj.id); const docs=arquivos.filter(a=>a.donoKey===k && a.pasta==="Contrato de prestação de serviço");
+    if(docs.some(a=>a.categoria==="contrato_assinado" || (a.assinatura&&["completed","manual"].includes(a.assinatura.status)))) return ["Contrato assinado","green"];
+    if(docs.some(a=>a.assinatura&&["sent","delivered"].includes(a.assinatura.status))) return ["Aguardando assinaturas","amber"];
+    if(docs.length) return ["Contrato enviado à pasta","blue"];
+    return ["Sem contrato","slate"]; };
+  const lista=pjs.filter(p=>normTxt(p.nome+" "+(p.cnpj||"")+" "+(p.responsavel||"")+" "+(p.servico||"")).includes(normTxt(q)));
+  const fmtR$=(v)=>Number(v||0).toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
+  return <div className="fade-in">
+    <PageHeader title="Prestadores PJ" sub="Prestadores de serviço sem ponto — pasta com contrato assinado por todos e notas fiscais">
+      {can("colaboradores") && <Btn icon={I.plus} onClick={()=>setForm({})}>Novo prestador</Btn>}
+    </PageHeader>
+    <Card className="p-2 mb-4"><div className="flex items-center gap-2 px-3 py-2"><Icon d={I.search} className="w-4 h-4 text-slate-400"/><input value={q} onChange={e=>setQ(e.target.value)} placeholder="Buscar por nome, CNPJ, responsável ou serviço…" className="flex-1 outline-none text-sm bg-transparent"/></div></Card>
+    {pjs.length===0 ? <Card className="p-10 text-center">
+        <div className="w-16 h-16 mx-auto rounded-2xl grad-brand grid place-items-center text-white mb-3"><Icon d={I.briefcase} className="w-8 h-8"/></div>
+        <h3 className="font-bold text-slate-900">Nenhum prestador PJ cadastrado</h3>
+        <p className="text-sm text-slate-500 mt-1 mb-4">Cadastre seus prestadores de serviço para guardar o contrato e enviá-lo para assinatura eletrônica.</p>
+        {can("colaboradores") && <Btn icon={I.plus} onClick={()=>setForm({})}>Cadastrar o primeiro</Btn>}
+      </Card>
+    : <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-3">
+      {lista.map(pj=>{ const [st,tone]=statusContrato(pj);
+        return <button key={pj.id} onClick={()=>setSel(pj.id)} className="text-left"><Card className="p-4 hover:border-brand-300 hover:shadow-glow transition h-full">
+          <div className="flex items-start gap-3">
+            <div className="w-11 h-11 rounded-xl grad-brand grid place-items-center text-white shrink-0"><Icon d={I.briefcase} className="w-5 h-5"/></div>
+            <div className="flex-1 min-w-0"><div className="font-bold text-slate-900 truncate">{pj.nome}</div>
+              <div className="text-xs text-slate-500 truncate">{pj.cnpj||"—"} · {pj.servico||"Prestação de serviço"}</div></div>
+            {pj.status==="encerrado" && <Badge>Encerrado</Badge>}
+          </div>
+          <div className="flex items-center justify-between mt-3">
+            <Badge tone={tone}><Icon d={I.sign} className="w-3 h-3"/>{st}</Badge>
+            {Number(pj.valor)>0 && <span className="text-sm font-bold text-slate-700">{fmtR$(pj.valor)}<span className="text-xs text-slate-400 font-normal">/mês</span></span>}
+          </div>
+        </Card></button>; })}
+    </div>}
+
+    <Modal open={!!form} onClose={()=>setForm(null)} wide>
+      {form && <PjForm inicial={form.id?form:null} onClose={()=>setForm(null)} onSalvar={(f)=>{ salvarPj(form.id?{...form,...f}:f); setForm(null); toast(form.id?"Prestador atualizado":"Prestador cadastrado"); }}/>}
+    </Modal>
+    <Modal open={!!pjAtual && !form} onClose={()=>setSel(null)} wide>
+      {pjAtual && <div>
+        <div className="grad-ink grad-hero p-6 text-white rounded-t-3xl relative">
+          <button onClick={()=>setSel(null)} className="absolute top-4 right-4 text-white/80 hover:text-white"><Icon d={I.x}/></button>
+          <div className="flex items-center gap-4">
+            <div className="w-14 h-14 rounded-2xl bg-white/15 grid place-items-center shrink-0"><Icon d={I.briefcase} className="w-7 h-7"/></div>
+            <div className="flex-1 min-w-0"><h3 className="text-xl font-extrabold truncate">{pjAtual.nome}</h3>
+              <p className="text-white/75 text-sm">CNPJ {pjAtual.cnpj||"—"} · {pjAtual.servico||"Prestação de serviço"}</p></div>
+          </div>
+          <div className="grid sm:grid-cols-3 gap-2 mt-4 text-sm">
+            <div className="rounded-xl bg-white/10 px-3 py-2"><div className="text-white/50 text-xs">Responsável</div>{pjAtual.responsavel||"—"}</div>
+            <div className="rounded-xl bg-white/10 px-3 py-2"><div className="text-white/50 text-xs">E-mail</div><span className="break-all">{pjAtual.email||"—"}</span></div>
+            <div className="rounded-xl bg-white/10 px-3 py-2"><div className="text-white/50 text-xs">Vigência</div>{pjAtual.inicio?fmtDataBR(pjAtual.inicio):"—"} {pjAtual.fim?"até "+fmtDataBR(pjAtual.fim):""}</div>
+          </div>
+          <div className="flex gap-2 mt-4">
+            {can("colaboradores") && <Btn size="sm" variant="soft" icon={I.edit} onClick={()=>setForm(pjAtual)}>Editar dados</Btn>}
+            {can("excluir") && <Btn size="sm" variant="danger" icon={I.trash} onClick={()=>{ if(confirm("Excluir o prestador "+pjAtual.nome+"? Os arquivos da pasta continuam guardados.")){ excluirPj(pjAtual.id); setSel(null); toast("Prestador excluído"); } }}>Excluir</Btn>}
+          </div>
+        </div>
+        <div className="p-6 space-y-4">
+          <div className="p-3 rounded-xl bg-slate-50 text-sm text-slate-600 flex items-start gap-2"><Icon d={I.sign} className="w-4 h-4 mt-0.5 text-brand-600 shrink-0"/>
+            <span>Abra a pasta <b>Contrato de prestação de serviço</b>, envie o PDF do contrato e clique em <b>Assinar</b> para mandar ao prestador e aos representantes da empresa pelo DocuSign. Quando todos assinarem, a via assinada é salva na pasta automaticamente.</span></div>
+          <AcessoAppColab tipo="pj" pessoa={pjAtual}/>
+          <PastasPessoa key={"pj"+pjAtual.id} tipo="pj" pessoa={pjAtual}/>
+        </div>
+      </div>}
+    </Modal>
+  </div>;
+}
+
+/* ============================ APP DO COLABORADOR — MEUS DOCUMENTOS (CPF/CNPJ + PIN) ============================ */
+function PortalColab({onClose}){
+  const { clts, freelas, pjs } = useStore();
+  const [doc,setDoc]=useState(""); const [pin,setPin]=useState("");
+  const [erro,setErro]=useState(""); const [entrando,setEntrando]=useState(false);
+  const [sessao,setSessao]=useState(()=>{ try{ return JSON.parse(sessionStorage.getItem(tKey("portal"))||"null"); }catch(e){ return null; } });
+  const [arqs,setArqs]=useState(null);
+  const [abrindo,setAbrindo]=useState("");
+  const [trocar,setTrocar]=useState(false);
+  const [np,setNp]=useState({atual:"",novo:"",conf:""}); const [npMsg,setNpMsg]=useState("");
+  const todos=[...clts.map(p=>({tipo:"clt",p})), ...freelas.map(p=>({tipo:"free",p})), ...pjs.map(p=>({tipo:"pj",p}))];
+  const eu=sessao && todos.find(x=>donoKeyDe(x.tipo,x.p.id)===sessao.key);
+  const bloqKey=tKey("portal_bloq");
+  const entrar=async()=>{
+    setErro(""); const d=soDigitos(doc);
+    if(!(d.length===11||d.length===14)){ setErro("Digite seu CPF (11 números) ou CNPJ (14 números)."); return; }
+    if(!/^\d{4,8}$/.test(pin)){ setErro("Digite o PIN que você recebeu do RH."); return; }
+    let bloq={n:0,ate:0}; try{ bloq=JSON.parse(localStorage.getItem(bloqKey)||'{"n":0,"ate":0}'); }catch(e){}
+    if(bloq.ate>Date.now()){ setErro("Muitas tentativas. Aguarde alguns minutos e tente de novo."); return; }
+    const achado=todos.find(x=>soDigitos(x.p.cpf)===d || (x.tipo==="pj" && soDigitos(x.p.cnpj)===d));
+    if(!achado){ setErro("Documento não encontrado. Confira os números ou fale com o RH."); return; }
+    const key=donoKeyDe(achado.tipo,achado.p.id);
+    if(!window.__WPDB){ setErro("Sem conexão com o sistema. Tente novamente."); return; }
+    setEntrando(true);
+    try{
+      const s=await tCol("acessosColab").doc(key).get();
+      if(!s.exists){ setErro("Seu acesso ainda não foi liberado. Peça seu PIN ao RH."); setEntrando(false); return; }
+      const h=await pinHash(d,pin);
+      if(h!==(s.data()||{}).hash){
+        bloq.n=(bloq.n||0)+1; if(bloq.n>=5){ bloq={n:0,ate:Date.now()+5*60*1000}; }
+        try{ localStorage.setItem(bloqKey,JSON.stringify(bloq)); }catch(e){}
+        setErro("PIN incorreto."); setEntrando(false); return;
+      }
+      try{ localStorage.removeItem(bloqKey); }catch(e){}
+      const ss={key, doc:d}; setSessao(ss); try{ sessionStorage.setItem(tKey("portal"),JSON.stringify(ss)); }catch(e){}
+      setPin("");
+    }catch(e){ setErro("Não foi possível entrar agora. Tente novamente."); }
+    setEntrando(false);
+  };
+  const sair=()=>{ setSessao(null); setArqs(null); try{ sessionStorage.removeItem(tKey("portal")); }catch(e){} };
+  useEffect(()=>{ if(!sessao||!window.__WPDB) return;
+    try{ return tCol("arquivos").where("donoKey","==",sessao.key).onSnapshot(function(snap){ const a=[]; snap.forEach(function(d){ const x={...(d.data()||{}),id:d.id}; if(x.visivelColab) a.push(x); }); setArqs(a); }, function(){ setArqs([]); }); }catch(e){ setArqs([]); }
+  },[sessao&&sessao.key]);
+  const abrir=async(a)=>{ setAbrindo(a.id); try{ await arqAbrir(a); if(!a.vistoEm) arqAtualizar(a.id,{vistoEm:Date.now()}).catch(()=>{}); }catch(e){ alert("Não foi possível abrir o arquivo."); } setAbrindo(""); };
+  const salvarPin=async()=>{
+    setNpMsg("");
+    if(!/^\d{6}$/.test(np.novo)){ setNpMsg("O novo PIN deve ter 6 números."); return; }
+    if(np.novo!==np.conf){ setNpMsg("A confirmação não confere."); return; }
+    try{ const s=await tCol("acessosColab").doc(sessao.key).get(); const h=await pinHash(sessao.doc,np.atual);
+      if(!s.exists||h!==(s.data()||{}).hash){ setNpMsg("PIN atual incorreto."); return; }
+      await definirPinColab(sessao.key,sessao.doc,np.novo,{trocadoPeloColab:true}); setTrocar(false); setNp({atual:"",novo:"",conf:""}); alert("PIN alterado com sucesso.");
+    }catch(e){ setNpMsg("Não foi possível alterar agora."); }
+  };
+  const hol=(arqs||[]).filter(a=>a.categoria==="holerite").sort((a,b)=>String(b.competencia||"").localeCompare(String(a.competencia||""))||(b.ts||0)-(a.ts||0));
+  const outros=(arqs||[]).filter(a=>a.categoria!=="holerite").sort((a,b)=>(b.ts||0)-(a.ts||0));
+  const Linha=({a,destaque})=> <button onClick={()=>abrir(a)} className="w-full flex items-center gap-3 p-3.5 rounded-2xl border border-slate-200 bg-white hover:border-brand-300 hover:bg-brand-50/30 text-left transition">
+    <div className={cx("w-11 h-11 rounded-xl grid place-items-center shrink-0 text-white", destaque?"grad-brand":"grad-gold")}><Icon d={destaque?I.receipt:I.doc} className="w-5 h-5"/></div>
+    <div className="flex-1 min-w-0"><div className="font-semibold text-slate-900 text-sm truncate">{destaque?((HOLERITE_TIPOS.find(t=>t[0]===(a.holeriteTipo||"mensal"))||[])[1]+" · "+fmtCompetencia(a.competencia)):a.nome}</div>
+      <div className="text-xs text-slate-400">{destaque?"Holerite":a.pasta} · {new Date(a.ts||0).toLocaleDateString("pt-BR")}{!a.vistoEm&&<span className="ml-1.5 text-brand-600 font-bold">• novo</span>}</div></div>
+    {abrindo===a.id ? <span className="w-5 h-5 rounded-full border-2 border-slate-200 border-t-brand-600 animate-spin"/> : <Icon d={I.download} className="w-4 h-4 text-slate-400"/>}
+  </button>;
+
+  return <div className="min-h-screen grad-ink grad-hero flex items-start sm:items-center justify-center p-4 py-8">
+    <div className="w-full max-w-md">
+      <div className="flex justify-center mb-5"><Logo light/></div>
+      <Card className="p-6">
+        {!eu ? <>
+          <div className="w-14 h-14 mx-auto rounded-2xl grad-brand grid place-items-center text-white mb-3"><Icon d={I.lock} className="w-7 h-7"/></div>
+          <h2 className="text-xl font-bold text-slate-900 text-center">Meus holerites e documentos</h2>
+          <p className="text-slate-500 text-sm mt-1 text-center">Entre com seu CPF (ou CNPJ, se for PJ) e o PIN que você recebeu do RH.</p>
+          <div className="mt-5 space-y-3">
+            <Input inputMode="numeric" placeholder="CPF ou CNPJ" value={doc} onChange={e=>setDoc(e.target.value)}/>
+            <Input inputMode="numeric" type="password" maxLength={8} placeholder="PIN" value={pin} onChange={e=>setPin(e.target.value.replace(/\D/g,""))} onKeyDown={e=>{ if(e.key==="Enter") entrar(); }}/>
+          </div>
+          {erro && <p className="text-sm text-rose-500 mt-3">{erro}</p>}
+          <Btn className="w-full mt-5" size="lg" icon={entrando?null:I.arrow} disabled={entrando} onClick={entrar}>{entrando?"Verificando…":"Entrar"}</Btn>
+          <Btn variant="ghost" className="w-full mt-2" onClick={onClose}>Voltar</Btn>
+          <p className="text-xs text-slate-400 mt-4 text-center flex items-center justify-center gap-1"><Icon d={I.shield} className="w-3.5 h-3.5"/>Seus documentos só aparecem para você.</p>
+        </> : <>
+          <div className="flex items-center gap-3 mb-5">
+            <Avatar name={eu.p.nome} src={eu.p.foto} size="w-12 h-12"/>
+            <div className="flex-1 min-w-0"><div className="text-xs text-slate-400">Olá,</div><div className="font-extrabold text-slate-900 truncate">{eu.p.nome}</div></div>
+            <button onClick={sair} className="text-sm font-semibold text-slate-500 hover:text-slate-800 flex items-center gap-1"><Icon d={I.logout} className="w-4 h-4"/>Sair</button>
+          </div>
+          {arqs==null ? <div className="py-10 text-center"><div className="w-8 h-8 mx-auto rounded-full border-2 border-slate-200 border-t-brand-600 animate-spin"/></div> : <>
+            {eu.tipo!=="pj" && <><div className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-2">Holerites</div>
+              <div className="space-y-2 mb-5">{hol.length===0 ? <p className="text-sm text-slate-400 text-center py-4 rounded-2xl bg-slate-50">Nenhum holerite disponível ainda.</p> : hol.map(a=><Linha key={a.id} a={a} destaque/>)}</div></>}
+            <div className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-2">{eu.tipo==="pj"?"Contratos e documentos":"Documentos"}</div>
+            <div className="space-y-2">{outros.length===0 ? <p className="text-sm text-slate-400 text-center py-4 rounded-2xl bg-slate-50">Nenhum documento liberado.</p> : outros.map(a=><Linha key={a.id} a={a}/>)}</div>
+          </>}
+          <div className="mt-5 pt-4 border-t border-slate-100">
+            {!trocar ? <button onClick={()=>setTrocar(true)} className="text-sm font-semibold text-brand-700 hover:underline flex items-center gap-1"><Icon d={I.key} className="w-4 h-4"/>Trocar meu PIN</button>
+            : <div className="space-y-2">
+              <Input type="password" inputMode="numeric" placeholder="PIN atual" value={np.atual} onChange={e=>setNp({...np,atual:e.target.value.replace(/\D/g,"")})}/>
+              <Input type="password" inputMode="numeric" maxLength={6} placeholder="Novo PIN (6 números)" value={np.novo} onChange={e=>setNp({...np,novo:e.target.value.replace(/\D/g,"")})}/>
+              <Input type="password" inputMode="numeric" maxLength={6} placeholder="Confirme o novo PIN" value={np.conf} onChange={e=>setNp({...np,conf:e.target.value.replace(/\D/g,"")})}/>
+              {npMsg && <p className="text-xs text-rose-500">{npMsg}</p>}
+              <div className="flex gap-2"><Btn size="sm" variant="ghost" onClick={()=>{setTrocar(false);setNpMsg("");}}>Cancelar</Btn><Btn size="sm" className="flex-1" onClick={salvarPin}>Salvar novo PIN</Btn></div>
+            </div>}
+          </div>
+        </>}
+      </Card>
+    </div>
+  </div>;
+}
+
+/* ============================ CONFIGURAÇÕES: MARCA + ASSINATURA ELETRÔNICA ============================ */
+function ConfigMarca(){
+  const { marca, setMarca } = useStore();
+  const toast=useContext(ToastCtx);
+  const m=marca||{};
+  const upLogo=async(file)=>{
+    if(!file) return;
+    const du=await lerArquivoDataUrl(file);
+    if(/svg/i.test(file.type)){ if(du.length>400000){ toast("SVG muito grande"); return; } setMarca({...m,logo:du}); toast("Logo atualizado"); return; }
+    const img=new Image(); img.onload=()=>{ const max=480, s=Math.min(1,max/Math.max(img.width,img.height)); const c=document.createElement("canvas"); c.width=Math.round(img.width*s); c.height=Math.round(img.height*s);
+      c.getContext("2d").drawImage(img,0,0,c.width,c.height); setMarca({...m,logo:c.toDataURL("image/png")}); toast("Logo atualizado"); };
+    img.src=du;
+  };
+  return <Card className="p-5">
+    <h3 className="font-bold text-slate-900 mb-4 flex items-center gap-2"><Icon d={I.edit} className="w-4 h-4 text-brand-600"/>Marca da empresa</h3>
+    <div className="grid sm:grid-cols-2 gap-3 mb-4">
+      <div className="rounded-2xl border border-slate-100 p-4 grid place-items-center bg-white"><Logo/></div>
+      <div className="rounded-2xl p-4 grid place-items-center grad-ink"><Logo light/></div>
+    </div>
+    <div className="flex flex-wrap gap-2 items-center">
+      <label className="cursor-pointer"><span className="inline-flex items-center gap-1.5 text-sm font-semibold text-white grad-brand px-3.5 py-2 rounded-xl"><Icon d={I.upload} className="w-4 h-4"/>{m.logo?"Trocar logo":"Enviar logo (PNG/SVG)"}</span>
+        <input type="file" accept="image/png,image/jpeg,image/svg+xml,image/webp" className="hidden" onChange={e=>{ upLogo(e.target.files&&e.target.files[0]); e.target.value=""; }}/></label>
+      {m.logo && <Btn size="sm" variant="ghost" onClick={()=>{ setMarca({...m,logo:null}); toast("Voltou ao símbolo WILAMI"); }}>Usar símbolo WILAMI</Btn>}
+    </div>
+    <div className="grid sm:grid-cols-2 gap-3 mt-4 items-end">
+      <Field label="Nome exibido"><Input value={m.nome||""} placeholder="WILAMI" onChange={e=>setMarca({...m,nome:e.target.value})}/></Field>
+      {m.logo && <label className="flex items-center gap-2 text-sm text-slate-600 pb-2.5"><input type="checkbox" checked={m.mostrarNome!==false} onChange={e=>setMarca({...m,mostrarNome:e.target.checked})}/> Mostrar o nome ao lado do logo</label>}
+    </div>
+    <p className="text-xs text-slate-400 mt-3">O logo aparece no painel, na tela de login, no app de ponto e no app “Meus documentos”. Use PNG com fundo transparente para o melhor resultado.</p>
+  </Card>;
+}
+function ConfigAssinatura(){
+  const { assinaturaCfg, setAssinaturaCfg } = useStore();
+  const toast=useContext(ToastCtx);
+  const sigs=(assinaturaCfg&&assinaturaCfg.signatarios)||[];
+  const [n,setN]=useState({nome:"",email:"",papel:"Representante da empresa"});
+  const [teste,setTeste]=useState(null); const [testando,setTestando]=useState(false);
+  const testar=async()=>{ setTestando(true); setTeste(null); try{ setTeste({ok:true,...(await docusignApi("status"))}); }catch(e){ setTeste({ok:false,erro:e.message,info:e.info,status:e.status}); } setTestando(false); };
+  const add=()=>{ if(!n.nome.trim()||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(n.email)) { toast("Informe nome e e-mail válidos"); return; } setAssinaturaCfg({...(assinaturaCfg||{}),signatarios:[...sigs,{nome:n.nome.trim(),email:n.email.trim().toLowerCase(),papel:n.papel.trim()}]}); setN({nome:"",email:"",papel:"Representante da empresa"}); toast("Signatário adicionado"); };
+  return <Card className="p-5 lg:col-span-2">
+    <h3 className="font-bold text-slate-900 mb-1 flex items-center gap-2"><Icon d={I.sign} className="w-4 h-4 text-brand-600"/>Assinatura eletrônica (DocuSign)</h3>
+    <p className="text-sm text-slate-500 mb-4">Contratos enviados pelas pastas vão para o colaborador/prestador <b>e</b> para os signatários da empresa abaixo — todos assinam o mesmo documento.</p>
+    <div className="grid lg:grid-cols-2 gap-5">
+      <div>
+        <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Signatários padrão da empresa</div>
+        <div className="space-y-2 mb-3">
+          {sigs.length===0 && <p className="text-sm text-slate-400 py-2">Nenhum — adicione quem assina pela empresa (sócios, diretor, testemunhas).</p>}
+          {sigs.map((s,i)=><div key={i} className="flex items-center gap-2 p-2.5 rounded-xl border border-slate-200">
+            <Avatar name={s.nome} size="w-8 h-8"/><div className="flex-1 min-w-0"><div className="text-sm font-semibold text-slate-800 truncate">{s.nome}</div><div className="text-xs text-slate-400 truncate">{s.email} · {s.papel}</div></div>
+            <button onClick={()=>setAssinaturaCfg({...(assinaturaCfg||{}),signatarios:sigs.filter((_,j)=>j!==i)})} className="w-8 h-8 rounded-lg grid place-items-center text-slate-400 hover:text-rose-500 hover:bg-rose-50"><Icon d={I.trash} className="w-4 h-4"/></button>
+          </div>)}
+        </div>
+        <div className="grid sm:grid-cols-3 gap-2"><Input placeholder="Nome" value={n.nome} onChange={e=>setN({...n,nome:e.target.value})}/><Input placeholder="E-mail" value={n.email} onChange={e=>setN({...n,email:e.target.value})}/><Input placeholder="Papel" value={n.papel} onChange={e=>setN({...n,papel:e.target.value})}/></div>
+        <Btn size="sm" variant="soft" icon={I.plus} className="mt-2" onClick={add}>Adicionar signatário</Btn>
+      </div>
+      <div>
+        <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Conexão</div>
+        <Btn size="sm" variant="ghost" icon={I.refresh} disabled={testando} onClick={testar}>{testando?"Testando…":"Testar conexão com o DocuSign"}</Btn>
+        {teste && (teste.ok
+          ? <div className="mt-2 p-3 rounded-xl bg-emerald-50 text-emerald-700 text-sm">Conectado ✓ {teste.conta?("· conta "+teste.conta):""} {teste.ambiente?("· "+teste.ambiente):""}</div>
+          : <div className="mt-2 p-3 rounded-xl bg-rose-50 text-rose-700 text-sm">{teste.erro}{teste.info&&teste.info.consentUrl&&<> — <a className="underline font-semibold" href={teste.info.consentUrl} target="_blank" rel="noreferrer">autorizar o app no DocuSign</a></>}</div>)}
+        <details className="mt-3 text-sm text-slate-600"><summary className="cursor-pointer font-semibold text-slate-700">Como configurar (uma vez)</summary>
+          <ol className="list-decimal pl-5 mt-2 space-y-1 text-xs">
+            <li>No DocuSign (Admin → Apps and Keys), crie um app e copie o <b>Integration Key</b>, o <b>User ID</b> e o <b>API Account ID</b>.</li>
+            <li>Em “Authentication”, gere um par de chaves RSA e copie a <b>chave privada</b>.</li>
+            <li>Na Vercel (projeto wilami-ponto → Settings → Environment Variables), crie: <code>DOCUSIGN_INTEGRATION_KEY</code>, <code>DOCUSIGN_USER_ID</code>, <code>DOCUSIGN_ACCOUNT_ID</code>, <code>DOCUSIGN_PRIVATE_KEY</code> e <code>DOCUSIGN_ENV</code> (<code>demo</code> para testes ou <code>production</code>). Faça um novo deploy.</li>
+            <li>Clique em “Testar conexão”. Na primeira vez, o DocuSign pede para autorizar o app — use o link que aparecer.</li>
+          </ol>
+        </details>
+      </div>
+    </div>
+  </Card>;
 }
 
 /* ============================ APP SHELL ============================ */
@@ -3563,8 +4522,13 @@ const NAV = [
   {sec:"Pessoas", items:[
     {k:"clt",l:"Colaboradores CLT",d:I.user},
     {k:"freelas",l:"Freelancers",d:I.coffee},
-    {k:"dossie",l:"Dossiê",d:I.doc},
+    {k:"pjs",l:"Prestadores PJ",d:I.briefcase},
     {k:"equipe",l:"Equipe & permissões",d:I.team,dono:true},
+  ]},
+  {sec:"Documentos", items:[
+    {k:"arquivos",l:"Arquivos & pastas",d:I.folder},
+    {k:"holerites",l:"Holerites",d:I.receipt},
+    {k:"dossie",l:"Dossiê",d:I.doc},
   ]},
   {sec:"Gestão", items:[
     {k:"relatorios",l:"Relatórios",d:I.chart},
@@ -3579,7 +4543,7 @@ const NAV = [
     {k:"ajuda",l:"Ajuda",d:I.help},
   ]},
 ];
-const TITULOS={dashboard:"Painel",escala:"Escala por unidade",ponto:"Ponto ao vivo",ajustes:"Ajustes de ponto",clt:"Colaboradores CLT",freelas:"Freelancers",dossie:"Dossiê do colaborador",equipe:"Equipe & permissões",relatorios:"Relatórios",financeiro:"Financeiro",pagamentos:"Pagamentos",unidades:"Unidades",links:"Links & QR",acessos:"Gerentes & acessos",config:"Configurações",ajuda:"Ajuda"};
+const TITULOS={dashboard:"Painel",escala:"Escala por unidade",ponto:"Ponto ao vivo",ajustes:"Ajustes de ponto",clt:"Colaboradores CLT",freelas:"Freelancers",pjs:"Prestadores PJ",arquivos:"Arquivos & pastas",holerites:"Holerites",dossie:"Dossiê do colaborador",equipe:"Equipe & permissões",relatorios:"Relatórios",financeiro:"Financeiro",pagamentos:"Pagamentos",unidades:"Unidades",links:"Links & QR",acessos:"Gerentes & acessos",config:"Configurações",ajuda:"Ajuda"};
 
 // Seletor de cliente (multiempresa) — troca entre grupos de restaurantes e cria novo cliente.
 function ClienteSwitcher(){
@@ -3796,9 +4760,9 @@ function Sidebar({view,setView,open,setOpen,onLogout}) {
             {g.items.map(it=>
               <button key={it.k} onClick={()=>{setView(it.k);setOpen(false);}}
                 className={cx("w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition mb-0.5",
-                  view===it.k?"bg-white/10 text-white":"text-white/60 hover:text-white hover:bg-white/5")}>
+                  view===it.k?"bg-white/10 text-white ring-1 ring-white/10":"text-white/60 hover:text-white hover:bg-white/5")}>
                 <Icon d={it.d} className="w-[18px] h-[18px]"/>{it.l}
-                {view===it.k && <span className="ml-auto w-1.5 h-1.5 rounded-full bg-brand-400"/>}
+                {view===it.k && <span className="ml-auto w-1.5 h-1.5 rounded-full bg-free-400"/>}
               </button>)}
           </div>)}
       </div>
@@ -3829,7 +4793,8 @@ function Shell({ onLogout }) {
   const [view,setView]=useState("dashboard");
   const [sbOpen,setSbOpen]=useState(false);
   const [toasts,setToasts]=useState([]);
-  const { acesso, tenantAtual, trocarCliente } = useStore();
+  const { acesso, tenantAtual, trocarCliente, ajustes } = useStore();
+  const ajustesPend=(ajustes||[]).filter(a=>a.status==="pendente").length;
   // Gerente vinculado a um cliente diferente do ativo → entra automaticamente no seu espaço.
   useEffect(()=>{
     if(acesso && acesso.pronto && acesso.tenantBind!=null && acesso.tenantBind!==tenantAtual){ trocarCliente(acesso.tenantBind); }
@@ -3840,16 +4805,17 @@ function Shell({ onLogout }) {
   if(acesso && acesso.semAcesso) return <TelaBloqueio icone={I.shield} titulo="Sua conta ainda não tem acesso" texto="Peça ao administrador para vincular seu e-mail a um cliente. Assim que ele liberar, é só entrar novamente." onLogout={onLogout}/>;
   if(acesso && acesso.tenantBind!=null && acesso.tenantBind!==tenantAtual) return <TelaBloqueio spin titulo="Abrindo seu cliente…"/>;
   const views={ dashboard:<Dashboard go={setView}/>, escala:<EscalaVisual/>, ponto:<PontoLive/>, ajustes:<AjustesPonto/>, clt:<ColaboradoresCLT/>, freelas:<Freelancers/>,
-    dossie:<Dossie/>, equipe:<Equipe/>, relatorios:<Relatorios/>, financeiro:<Financeiro/>, pagamentos:<Pagamentos/>, unidades:<Unidades/>, links:<LinksQR/>, acessos:<GerentesAcesso/>, config:<Configuracoes/>, ajuda:<Ajuda/> };
+    dossie:<Dossie/>, pjs:<PrestadoresPJ/>, arquivos:<ArquivosPage/>, holerites:<HoleritesPage/>, equipe:<Equipe/>, relatorios:<Relatorios/>, financeiro:<Financeiro/>, pagamentos:<Pagamentos/>, unidades:<Unidades/>, links:<LinksQR/>, acessos:<GerentesAcesso/>, config:<Configuracoes/>, ajuda:<Ajuda/> };
   return <ToastCtx.Provider value={pushToast}>
     <div className="flex min-h-screen">
       <Sidebar view={view} setView={setView} open={sbOpen} setOpen={setSbOpen} onLogout={onLogout}/>
       <div className="flex-1 min-w-0 flex flex-col">
         <header className="sticky top-0 z-20 glass border-b border-slate-200/70 px-4 lg:px-8 py-1.5 flex items-center gap-3">
           <button className="lg:hidden text-slate-600" onClick={()=>setSbOpen(true)}><Icon d={I.menu}/></button>
-          <div className="hidden sm:flex items-center gap-2 text-sm text-slate-400"><Icon d={I.grid} className="w-4 h-4"/> / <span className="text-slate-700 font-semibold">{TITULOS[view]}</span></div>
+          <div className="lg:hidden"><Logo size="text-base"/></div>
+          <div className="hidden lg:flex items-center gap-2 text-sm text-slate-400"><Icon d={(NAV.flatMap(g=>g.items).find(it=>it.k===view)||{}).d||I.grid} className="w-4 h-4 text-brand-600"/><span>{(NAV.find(g=>g.items.some(it=>it.k===view))||{}).sec}</span><span>/</span><span className="text-slate-700 font-semibold">{TITULOS[view]}</span></div>
           <div className="ml-auto flex items-center gap-2">
-            <button className="relative w-9 h-9 rounded-xl bg-white border border-slate-200 grid place-items-center text-slate-500 hover:bg-slate-50"><Icon d={I.bell} className="w-4 h-4"/><span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-rose-500"/></button>
+            <button onClick={()=>setView("ajustes")} title={ajustesPend?ajustesPend+" ajuste(s) de ponto aguardando aprovação":"Sem pendências"} className="relative w-9 h-9 rounded-xl bg-white border border-slate-200 grid place-items-center text-slate-500 hover:bg-slate-50"><Icon d={I.bell} className="w-4 h-4"/>{ajustesPend>0 && <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold grid place-items-center">{ajustesPend}</span>}</button>
           </div>
         </header>
         <main className="flex-1 px-4 lg:px-8 py-5">{views[view]}</main>
@@ -3867,7 +4833,7 @@ function Shell({ onLogout }) {
 // Roteamento por hash para os LINKS de cadastro/ponto (CLT e Freelancer).
 // Ex.: abrir  ...wilami-ponto-app.html#ponto-clt  já abre o quiosque CLT (público).
 function usePontoHash() {
-  const read=()=>{ const h=(window.location.hash||"").replace("#",""); return h==="ponto-clt"?"clt": h==="ponto-free"?"free": null; };
+  const read=()=>{ const h=(window.location.hash||"").replace("#",""); return h==="ponto-clt"?"clt": h==="ponto-free"?"free": h==="meus-docs"?"docs": null; };
   const [mode,setMode]=useState(read());
   useEffect(()=>{ const on=()=>setMode(read()); window.addEventListener("hashchange",on); return ()=>window.removeEventListener("hashchange",on); },[]);
   return [mode, ()=>{ if(window.location.hash){ window.history.replaceState(null,"",window.location.pathname+window.location.search); } setMode(null); }];
@@ -3908,7 +4874,8 @@ function App() {
   const logged = window.__WPAUTH ? !!user : localLogged;
   const logout=()=>{ try{ window.__WPAUTH&&window.__WPAUTH.signOut(); }catch(e){} setLocalLogged(false); };
   return <StoreProvider>
-    {pontoMode ? <PontoKiosk mode={pontoMode} onClose={fecharPonto}/>
+    {pontoMode==="docs" ? <PortalColab onClose={fecharPonto}/>
+     : pontoMode ? <PontoKiosk mode={pontoMode} onClose={fecharPonto}/>
      : !authReady ? <div className="min-h-screen grad-ink grad-hero grid place-items-center text-white"><div className="text-center"><div className="w-10 h-10 mx-auto rounded-full border-2 border-white/30 border-t-white animate-spin mb-3"/><Logo light/></div></div>
      : logged ? <Shell onLogout={logout}/>
      : <LoginScreen onLogin={()=>setLocalLogged(true)}/>}
