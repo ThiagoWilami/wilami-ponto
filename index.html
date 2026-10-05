@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- build: Marca WILAMI (verde/dourado) + Arquivos & pastas por pessoa + Holerites no app (CPF+PIN) + Prestadores PJ + assinatura DocuSign 2026-10-03 -->
+<!-- build: PJ na escala + financeiro PJ + correção de gravação/órfãos | Marca WILAMI (verde/dourado) + Arquivos & pastas por pessoa + Holerites no app (CPF+PIN) + Prestadores PJ + assinatura DocuSign 2026-10-03 -->
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8" />
@@ -279,14 +279,15 @@ async function criarUsuarioAuth(email, senha){
 
 function usePersist(key, initial){
   const [v,setV]=useState(()=>{ try{ const s=localStorage.getItem(tKey(key)); return s!=null?JSON.parse(s):initial; }catch{ return initial; } });
-  const remoto=useRef(false);
+  const [pronto,setPronto]=useState(()=>!window.__WPDB);   // true quando a 1ª leitura do SERVIDOR chegou
   useEffect(()=>{
     const db=window.__WPDB; if(!db) return;
     try{
       return tDoc(key).onSnapshot(function(snap){
         if(snap && snap.metadata && snap.metadata.hasPendingWrites) return; // ignora eco da própria escrita
+        if(!(snap && snap.metadata && snap.metadata.fromCache)) setPronto(true);
         const d=snap && snap.exists ? snap.data() : null;
-        if(d && Object.prototype.hasOwnProperty.call(d,"v")){ remoto.current=true; setV(d.v); }
+        if(d && Object.prototype.hasOwnProperty.call(d,"v")){ setV(d.v); }
       }, function(){ /* sem permissão/erro — segue com local */ });
     }catch(e){ return; }
   },[key]);
@@ -294,13 +295,15 @@ function usePersist(key, initial){
     setV(prev=>{
       const nv = typeof upd==="function" ? upd(prev) : upd;
       try{ localStorage.setItem(tKey(key), JSON.stringify(nv)); }catch{}
+      // Sempre grava no banco. (Antes, a 1ª alteração feita depois de uma atualização vinda de outro
+      // aparelho NÃO era salva no servidor — edições "voltavam" e a escala acumulava marcações órfãs.)
+      // Não há eco em loop: a atualização remota chega por setV direto e não passa por aqui.
       const db=window.__WPDB;
-      if(db && !remoto.current){ try{ tDoc(key).set({v:nv}); }catch(e){} }
-      remoto.current=false;
+      if(db){ try{ tDoc(key).set({v:nv}); }catch(e){} }
       return nv;
     });
   };
-  return [v,setBoth];
+  return [v,setBoth,pronto];
 }
 // Lista de CLIENTES (empresas) — sempre na raiz (não é isolada por cliente).
 function useTenants(){
@@ -765,10 +768,12 @@ const PAPEIS = { proprietario:"Proprietário", gerente:"Gerente", rh_financeiro:
 // O painel admin mescla esses cadastros automaticamente.
 function useCadastros(){
   const [items,setItems]=useState([]);
+  const [pronto,setPronto]=useState(()=>!window.__WPDB);
   useEffect(()=>{
     const db=window.__WPDB; if(!db) return;
     try{
       return tCol("cadastros").onSnapshot(function(snap){
+        if(!(snap && snap.metadata && snap.metadata.fromCache)) setPronto(true);
         const arr=[]; snap.forEach(function(d){ const x=d.data()||{}; arr.push({...x, id:"auto_"+d.id, _docId:d.id, _auto:true}); });
         setItems(arr);
       }, function(){ /* sem permissão/erro */ });
@@ -777,7 +782,7 @@ function useCadastros(){
   const add=(obj)=>{ const db=window.__WPDB; if(!db) return Promise.reject(new Error("sem-banco")); return tCol("cadastros").add(obj); };
   const update=(docId,patch)=>{ const db=window.__WPDB; if(db){ try{ tCol("cadastros").doc(docId).set(patch,{merge:true}); }catch(e){} } };
   const remove=(docId)=>{ const db=window.__WPDB; if(db){ try{ tCol("cadastros").doc(docId).delete(); }catch(e){} } };
-  return [items,{add,update,remove}];
+  return [items,{add,update,remove},pronto];
 }
 
 // Data de hoje (AAAA-MM-DD, fuso local) — usada para separar os registros do dia.
@@ -862,9 +867,9 @@ const SEED_FREELAS = NOVO_TENANT ? [] : INIT_FREELAS;
 const SEED_ESCALA = NOVO_TENANT ? {1:escalaVaziaUnidade()} : escalaInicial();
 function StoreProvider({children}) {
   const [unidades,setUnidades]=usePersist("unidades",SEED_UNIDADES);
-  const [cltsBase,setClts]=usePersist("clts",SEED_CLTS);
-  const [freelasBase,setFreelas]=usePersist("freelas",SEED_FREELAS);
-  const [cadAuto,cadOps]=useCadastros();
+  const [cltsBase,setClts,cltsPronto]=usePersist("clts",SEED_CLTS);
+  const [freelasBase,setFreelas,freelasPronto]=usePersist("freelas",SEED_FREELAS);
+  const [cadAuto,cadOps,cadPronto]=useCadastros();
   const [atestados,atestadosOps]=useAtestados();
   const enviarAtestado=(obj)=>{ if(window.__WPDB) return atestadosOps.add(obj); return Promise.resolve(); };
   const [ajustes,ajustesOps]=useAjustes();
@@ -927,8 +932,8 @@ function StoreProvider({children}) {
   // Listas expostas = base (admin) + auto-cadastros do celular (mesclados por vínculo)
   const clts=[...cltsBase, ...cadAuto.filter(c=>c.tipo==="clt")];
   const freelas=[...freelasBase, ...cadAuto.filter(c=>c.tipo==="free")];
-  const [escala,setEscala]=usePersist("escala",SEED_ESCALA);            // padrão semanal (repete toda semana)
-  const [escalaOv,setEscalaOv]=usePersist("escalaOv",{});              // exceções por DATA: {unidade:{"AAAA-MM-DD":[...]}}
+  const [escala,setEscala,escalaPronta]=usePersist("escala",SEED_ESCALA);            // padrão semanal (repete toda semana)
+  const [escalaOv,setEscalaOv,escalaOvPronta]=usePersist("escalaOv",{});              // exceções por DATA: {unidade:{"AAAA-MM-DD":[...]}}
   const [escalaSeed,setEscalaSeed]=usePersist("escalaSeed",{});         // pids já semeados na auto-escala (nunca re-semear)
   const [freeMigr,setFreeMigr]=usePersist("freeMigr",0);               // migração: tira freela do padrão semanal (1x)
   const [registrosLocal,setRegistrosLocal]=usePersist("registros",[]);  // fallback sem banco
@@ -939,14 +944,18 @@ function StoreProvider({children}) {
   const [dossie,setDossie]=usePersist("dossie",{});          // { "clt-1": {faltas:[],feedbacks:[]} }
   // ---- Marca (logo da empresa), Prestadores PJ, pastas personalizadas e assinatura eletrônica ----
   const [marca,setMarca]=usePersist("marca",{});                       // {logo:dataURL, nome, mostrarNome}
-  const [pjsBase,setPjs]=usePersist("pjs",[]);                         // prestadores de serviço (não batem ponto)
+  const [pjsBase,setPjs,pjsPronto]=usePersist("pjs",[]);               // prestadores de serviço (entram na escala, não batem ponto)
   const [pastasExtra,setPastasExtra]=usePersist("pastasExtra",{});     // { "clt-1": ["Minha pasta", …] }
   const [assinaturaCfg,setAssinaturaCfg]=usePersist("assinaturaCfg",{signatarios:[]}); // signatários padrão da empresa
   const logado = !!authUser || !window.__WPAUTH;
   const [arquivos]=useArquivosMeta(logado);                            // metadados dos arquivos (só no painel)
   const [acessosColab]=useAcessosColab(logado);                        // PINs do app do colaborador (hash)
   const salvarPj=(pj)=>setPjs(prev=> pj.id ? prev.map(x=>x.id===pj.id?{...x,...pj}:x) : [...prev,{...pj,id:(prev.reduce((m,x)=>Math.max(m,x.id),500))+1,status:pj.status||"ativo",criadoEm:Date.now()}]);
-  const excluirPj=(id)=>setPjs(prev=>prev.filter(x=>x.id!==id));
+  const excluirPj=(id)=>{ setPjs(prev=>prev.filter(x=>x.id!==id)); removerDaEscala(id,"pj"); };
+  // Pagamentos dos prestadores PJ (parcelas/adiantamentos), chaveados pelo id do PJ.
+  const [pagamentosPJ,setPagPJ]=usePersist("pagamentosPJ",{});
+  const addPagamentoPJ=(id,obj)=>setPagPJ(prev=>{ const arr=prev[String(id)]||[]; return {...prev,[String(id)]:[{...obj,id:Math.random().toString(36).slice(2)},...arr]}; });
+  const removePagamentoPJ=(id,pid)=>setPagPJ(prev=>({...prev,[String(id)]:(prev[String(id)]||[]).filter(x=>x.id!==pid)}));
   const criarPasta=(donoKey,nome)=>setPastasExtra(prev=>{ const arr=prev[donoKey]||[]; if(arr.includes(nome)) return prev; return {...prev,[donoKey]:[...arr,nome]}; });
   const removerPasta=(donoKey,nome)=>setPastasExtra(prev=>({...prev,[donoKey]:(prev[donoKey]||[]).filter(x=>x!==nome)}));
   const [perfil,setPerfil]=useState("proprietario");         // papel simulado
@@ -1002,8 +1011,14 @@ function StoreProvider({children}) {
     if(ehAuto(id)){ cadOps.remove(docIdDe(id)); }
     else if(tipo==="clt") setClts(prev=>prev.filter(x=>x.id!==id));
     else setFreelas(prev=>prev.filter(x=>x.id!==id));
-    setEscala(prev=>{ const n={}; Object.keys(prev).forEach(uid=>{ n[uid]={}; Object.keys(prev[uid]).forEach(d=>{ n[uid][d]=prev[uid][d].filter(a=>a.pid!==id); }); }); return n; });
-    setEscalaOv(prev=>{ const n={}; Object.keys(prev||{}).forEach(uid=>{ n[uid]={}; Object.keys(prev[uid]||{}).forEach(ds=>{ n[uid][ds]=(prev[uid][ds]||[]).filter(a=>a.pid!==id); }); }); return n; });
+    removerDaEscala(id, tipo==="clt"?"clt":"free");
+  };
+  // Tira a pessoa de TODA a escala (padrão semanal + datas). Compara como texto: "5" e 5 são o mesmo id
+  // (a comparação estrita antiga deixava marcações "órfãs" para trás).
+  const removerDaEscala=(id,tipo)=>{
+    const sai=(a)=> String(a.pid)===String(id) && (tipo==="pj" ? a.tipo==="pj" : a.tipo!=="pj");
+    setEscala(prev=>{ const n={}; Object.keys(prev||{}).forEach(uid=>{ n[uid]={}; Object.keys(prev[uid]||{}).forEach(d=>{ n[uid][d]=(prev[uid][d]||[]).filter(a=>!sai(a)); }); }); return n; });
+    setEscalaOv(prev=>{ const n={}; Object.keys(prev||{}).forEach(uid=>{ n[uid]={}; Object.keys(prev[uid]||{}).forEach(ds=>{ n[uid][ds]=(prev[uid][ds]||[]).filter(a=>!sai(a)); }); }); return n; });
   };
 
   const addRegistro=(r)=>{
@@ -1105,6 +1120,24 @@ function StoreProvider({children}) {
     }catch(e){ setFreeMigr(1); }
   },[escala]); // eslint-disable-line
 
+  // ---- Órfãos da escala: limpeza AUTOMÁTICA e segura ----
+  // Só roda no painel logado e depois que TODOS os cadastros e a própria escala chegaram do servidor
+  // (assim nunca apaga alguém que só ainda não carregou). Espera 4s de estabilidade antes de agir.
+  const tudoCarregado = cltsPronto && freelasPronto && cadPronto && pjsPronto && escalaPronta && escalaOvPronta;
+  useEffect(()=>{
+    if(!tudoCarregado) return;
+    if(window.__WPAUTH && !window.__WPAUTH.currentUser) return;
+    if(clts.length+freelas.length+pjsBase.length===0) return;   // cadastro vazio = suspeito, não mexe
+    const t=setTimeout(()=>{
+      const orfa=(a)=>alocOrfa(a,clts,freelas,pjsBase);
+      const tem=(obj)=>Object.values(obj||{}).some(g=>Object.values(g||{}).some(arr=>(arr||[]).some(orfa)));
+      const limpa=(prev)=>{ const n={}; Object.keys(prev||{}).forEach(uid=>{ n[uid]={}; Object.keys(prev[uid]||{}).forEach(k=>{ n[uid][k]=(prev[uid][k]||[]).filter(a=>!orfa(a)); }); }); return n; };
+      if(tem(escala)) setEscala(limpa);
+      if(tem(escalaOv)) setEscalaOv(limpa);
+    },4000);
+    return ()=>clearTimeout(t);
+  },[tudoCarregado, cltsBase, freelasBase, cadAuto, pjsBase, escala, escalaOv]); // eslint-disable-line
+
   // Gerente vinculado a uma CASA específica só enxerga os dados daquela casa (isolamento por unidade).
   const _mesmaCasa=(uid)=> String(uid)===String(casaRestrita);
   const unidadesVis = casaRestrita!=null ? unidades.filter(u=>_mesmaCasa(u.id)) : unidades;
@@ -1120,15 +1153,17 @@ function StoreProvider({children}) {
     dossie,getDossie,addFalta,addFeedback,addAnexo, perfil,setPerfil, perms,setPerms, can,
     clientes,clienteAtivo,tenantAtual,criarCliente,trocarCliente,
     acesso,donos,setDonos,acessos,acessosOps,
-    marca,setMarca, pjs:(casaRestrita!=null?pjsBase.filter(x=>x.unidade==null||x.unidade==="todas"||_mesmaCasa(x.unidade)):pjsBase), salvarPj,excluirPj,
+    marca,setMarca, pjs:(casaRestrita!=null?pjsBase.filter(x=>x.unidade==null||x.unidade==="todas"||_mesmaCasa(x.unidade)):pjsBase), salvarPj,excluirPj, pagamentosPJ,addPagamentoPJ,removePagamentoPJ,
     pastasExtra,criarPasta,removerPasta, assinaturaCfg,setAssinaturaCfg, arquivos, acessosColab };
   return <StoreCtx.Provider value={value}>{children}</StoreCtx.Provider>;
 }
-const pessoaNome = (pid,tipo,clts,freelas)=> (tipo==="clt"?clts:freelas).find(p=>p.id===pid)?.nome || "—";
+const pessoaNome = (pid,tipo,clts,freelas,pjs)=> (tipo==="clt"?clts:tipo==="pj"?(pjs||[]):freelas).find(p=>String(p.id)===String(pid))?.nome || "—";
 // Nome + sobrenome (1º e último token) — para exibir na escala sem cortar em "Maria ..."
 const nomeSobrenome = (full)=>{ const s=String(full||"").trim(); if(!s||s==="—") return s; const p=s.split(/\s+/); return p.length<=1?p[0]:p[0]+" "+p[p.length-1]; };
 // Alocação órfã = pid não existe em NENHUM cadastro (clt ou freela). Aparecia como "—" na escala.
-const alocOrfa = (a,clts,freelas)=> !clts.some(p=>String(p.id)===String(a.pid)) && !freelas.some(p=>String(p.id)===String(a.pid));
+const alocOrfa = (a,clts,freelas,pjs)=> a.tipo==="pj"
+  ? !(pjs||[]).some(p=>String(p.id)===String(a.pid))
+  : (!clts.some(p=>String(p.id)===String(a.pid)) && !freelas.some(p=>String(p.id)===String(a.pid)));
 const unidadeNome = (id,unidades)=> unidades.find(u=>u.id===id)?.nome || "—";
 
 // Filtro por CASA (unidade) reutilizável — chips "Todas as casas" + cada unidade
@@ -1321,7 +1356,7 @@ function Dashboard({go}) {
 
 /* ============================ ESCALA VISUAL (POR UNIDADE) ============================ */
 function EscalaVisual() {
-  const { escala, setEscala, escalaOv, setEscalaOv, clts, freelas, unidades, can } = useStore();
+  const { escala, setEscala, escalaOv, setEscalaOv, clts, freelas, pjs, unidades, can } = useStore();
   const toast=useContext(ToastCtx);
   const [uSel,setUSel]=useState(unidades[0]?.id);
   // Semana visível (para editar POR DATA, sem replicar nas outras semanas)
@@ -1342,11 +1377,11 @@ function EscalaVisual() {
   const [setorF,setSetorF]=useState("todos");
   const [menu,setMenu]=useState(null); // {di,id}
   const editavel=can("escala");
-  const nome=(pid,tipo)=>pessoaNome(pid,tipo,clts,freelas);
-  const pessoaDe=(a)=>(a.tipo==="clt"?clts:freelas).find(p=>p.id===a.pid);
+  const nome=(pid,tipo)=>pessoaNome(pid,tipo,clts,freelas,pjs);
+  const pessoaDe=(a)=>(a.tipo==="clt"?clts:a.tipo==="pj"?pjs:freelas).find(p=>String(p.id)===String(a.pid));
   const passaSetor=(a)=> setorF==="todos" || setorDe(pessoaDe(a))===setorF;
   // Esconde alocações órfãs (colaborador que não existe mais → aparecia como "—")
-  const valido=(a)=> !alocOrfa(a,clts,freelas);
+  const valido=(a)=> !alocOrfa(a,clts,freelas,pjs);
 
   // Todas as edições gravam SÓ na data da coluna (exceção), sem replicar nas outras semanas.
   const onDrop=(dia)=>{
@@ -1361,29 +1396,16 @@ function EscalaVisual() {
   const setTurnoTo=(dia,id,turno)=>setDiaData(dia, arr=>arr.map(a=>a.id===id?{...a,turno,marca:turno==="folga"?null:a.marca}:a));
   const setHorario=(dia,id,h)=>setDiaData(dia, arr=>arr.map(a=>a.id===id?{...a,h}:a));
   const [editH,setEditH]=useState(null); // {di,id,hi,hf}
-  const addColab=(dia,pid,tipo)=>{ setDiaData(dia, arr=>[...arr,{id:(tipo==="clt"?"c":"f")+Date.now(),pid,tipo,turno:tipo==="clt"?turnoPorDia(dia):"noite"}]); setAdd(null); toast("Colaborador inserido na escala do dia "+labelDiaFull(dia)); };
+  const addColab=(dia,pid,tipo)=>{ setDiaData(dia, arr=>[...arr,{id:(tipo==="clt"?"c":tipo==="pj"?"p":"f")+Date.now(),pid,tipo,turno:tipo==="free"?"noite":turnoPorDia(dia)}]); setAdd(null); toast("Colaborador inserido na escala do dia "+labelDiaFull(dia)); };
 
   const tot=[0,1,2,3,4,5,6].map(di=>diaDe(di)).flat().filter(valido);
   // Contagem por PESSOAS distintas (não por dia-slot): 8 CLTs escalados 6 dias = 8, não 48.
   const nClt=new Set(tot.filter(a=>a.tipo==="clt").map(a=>String(a.pid))).size;   // colaboradores CLT distintos na casa (semana)
   const nFree=new Set(tot.filter(a=>a.tipo==="free").map(a=>String(a.pid))).size; // freelancers distintos
+  const nPj=new Set(tot.filter(a=>a.tipo==="pj").map(a=>String(a.pid))).size;     // prestadores PJ distintos
   const nFolga=tot.filter(a=>a.turno==="folga").length;                            // folgas (por dia)
   const nCob=tot.filter(a=>a.turno!=="folga").length;                              // turnos escalados na semana (coberturas)
   const uAtual=unidades.find(u=>u.id===uSel);
-  // Conta e remove (com segurança) marcações órfãs de TODAS as casas/datas — só quando os cadastros já carregaram.
-  const cadastrosProntos = (clts.length+freelas.length)>0;
-  const contarOrfaos=()=>{ let n=0;
-    Object.values(escala||{}).forEach(dias=>Object.values(dias||{}).forEach(arr=>(arr||[]).forEach(a=>{ if(alocOrfa(a,clts,freelas)) n++; })));
-    Object.values(escalaOv||{}).forEach(datas=>Object.values(datas||{}).forEach(arr=>(arr||[]).forEach(a=>{ if(alocOrfa(a,clts,freelas)) n++; })));
-    return n; };
-  const nOrfaos = cadastrosProntos ? contarOrfaos() : 0;
-  const limparOrfaos=()=>{
-    if(!cadastrosProntos){ toast("Aguarde os cadastros carregarem."); return; }
-    setEscala(prev=>{ const n={}; Object.keys(prev||{}).forEach(uid=>{ n[uid]={}; Object.keys(prev[uid]||{}).forEach(d=>{ n[uid][d]=(prev[uid][d]||[]).filter(a=>!alocOrfa(a,clts,freelas)); }); }); return n; });
-    setEscalaOv(prev=>{ const n={}; Object.keys(prev||{}).forEach(uid=>{ n[uid]={}; Object.keys(prev[uid]||{}).forEach(ds=>{ n[uid][ds]=(prev[uid][ds]||[]).filter(a=>!alocOrfa(a,clts,freelas)); }); }); return n; });
-    toast("Marcações órfãs removidas da escala");
-  };
-
   // ===== Passador de datas: "hoje" real, rótulos e busca de data específica =====
   const ehHoje=(di)=> ymd(datasSemana[di])===hojeStr();
   const labelDiaFull=(di)=>{ const d=datasSemana[di]; return `${DIAS[di]} ${d.getDate()}/${String(d.getMonth()+1).padStart(2,"0")}`; };
@@ -1393,7 +1415,6 @@ function EscalaVisual() {
 
   return <div className="fade-in">
     <PageHeader title="Escala por unidade" sub="Uma aba por casa · filtro por setor · layout compacto · menu (⋯) para turno, faltou, atrasou, folga">
-      {editavel && nOrfaos>0 && <Btn variant="ghost" icon={I.trash} onClick={limparOrfaos} title="Remover alocações de colaboradores que não existem mais">Limpar órfãos ({nOrfaos})</Btn>}
       {editavel && <Btn icon={I.plus} onClick={()=>setAdd(HOJE_IDX)}>Incluir colaborador</Btn>}
     </PageHeader>
 
@@ -1408,10 +1429,10 @@ function EscalaVisual() {
 
     {!editavel && <div className="mb-4 p-3 rounded-xl bg-amber-50 text-amber-700 text-sm flex items-center gap-2"><Icon d={I.shield} className="w-4 h-4"/> Seu perfil ({/* */}somente leitura) não tem permissão para editar a escala.</div>}
 
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-      {[["CLT nesta casa",nClt,"brand",I.user],["Freelancers",nFree,"free",I.coffee],["Folgas",nFolga,"slate",I.sun],["Coberturas",nCob,"green",I.check]].map(([l,v,t,d])=>
+    <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
+      {[["CLT nesta casa",nClt,"brand",I.user],["Freelancers",nFree,"free",I.coffee],["Prestadores PJ",nPj,"pj",I.briefcase],["Folgas",nFolga,"slate",I.sun],["Coberturas",nCob,"green",I.check]].map(([l,v,t,d])=>
         <Card key={l} className="p-4 flex items-center gap-3">
-          <div className={cx("w-10 h-10 rounded-xl grid place-items-center text-white", t==="brand"?"grad-brand":t==="free"?"bg-free-500":t==="green"?"bg-emerald-500":"bg-slate-400")}><Icon d={d} className="w-5 h-5"/></div>
+          <div className={cx("w-10 h-10 rounded-xl grid place-items-center text-white", t==="brand"?"grad-brand":t==="free"?"bg-free-500":t==="pj"?"bg-sky-600":t==="green"?"bg-emerald-500":"bg-slate-400")}><Icon d={d} className="w-5 h-5"/></div>
           <div><div className="text-2xl font-extrabold text-slate-900 leading-none">{v}</div><div className="text-xs text-slate-500 mt-0.5">{l}</div></div>
         </Card>)}
     </div>
@@ -1454,13 +1475,14 @@ function EscalaVisual() {
                     className={cx("rounded-lg pl-2 pr-1 py-1.5 bg-white shadow-soft border border-slate-100 border-l-[3px]", editavel&&"cursor-grab", a.marca==="faltou"&&"opacity-70")}
                     style={{borderLeftColor:setor?.c||"#6366f1"}}>
                     <div className="flex items-center gap-1.5">
-                      <Avatar name={nome(a.pid,a.tipo)} tone={a.tipo==="clt"?"brand":"free"} size="w-5 h-5"/>
+                      <Avatar name={nome(a.pid,a.tipo)} tone={a.tipo==="clt"?"brand":a.tipo==="pj"?"slate":"free"} size="w-5 h-5"/>
                       <span className="text-[11px] font-semibold text-slate-800 flex-1 min-w-0 leading-tight break-words" title={nome(a.pid,a.tipo)}>{nomeSobrenome(nome(a.pid,a.tipo))}</span>
                       {editavel && <button onClick={()=>setMenu(aberto?null:{di,id:a.id})} className="text-slate-400 hover:text-slate-700 font-bold px-1 leading-none">⋯</button>}
                     </div>
                     <div className="flex items-center gap-1 mt-1 flex-wrap">
                       <span className="text-[9px] font-bold px-1.5 py-0.5 rounded" style={{background:(setor?.c||"#6366f1")+"22",color:setor?.c}}>{t.l}</span>
                       {a.turno!=="folga" && <span className="text-[9px] font-semibold text-slate-500 tabular-nums">{a.h||t.h}</span>}
+                      {a.tipo==="pj" && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-sky-50 text-sky-700">PJ</span>}
                       {a.marca==="faltou" && <Badge tone="red">Faltou</Badge>}
                       {a.marca==="atrasou" && <Badge tone="amber">Atrasou</Badge>}
                     </div>
@@ -1505,13 +1527,13 @@ function EscalaVisual() {
           <h3 className="text-lg font-bold text-slate-900">Incluir colaborador em {uAtual?.nome} {add!==null&&`— ${labelDiaFull(add)}`}</h3>
           <button onClick={()=>setAdd(null)} className="text-slate-400 hover:text-slate-600"><Icon d={I.x}/></button>
         </div>
-        <p className="text-sm text-slate-500 mb-4">Inclua um freelancer (cobertura) ou um CLT auto-cadastrado. Só quem está escalado consegue registrar ponto.</p>
+        <p className="text-sm text-slate-500 mb-4">Inclua um freelancer (cobertura), um CLT auto-cadastrado ou um prestador PJ. CLT e freelancer registram ponto; o PJ aparece na escala sem bater ponto.</p>
         <div className="space-y-2 max-h-[50vh] overflow-y-auto">
-          {[...freelas.filter(f=>f.status==="ativo").map(f=>({...f,_t:"free"})), ...clts.filter(c=>c._auto).map(c=>({...c,_t:"clt"}))].map(f=>
-            <button key={f._t+f.id} onClick={()=>addColab(add,f.id,f._t)} className={cx("w-full flex items-center gap-3 p-3 rounded-xl border border-slate-200 transition", f._t==="clt"?"hover:border-brand-400 hover:bg-brand-50/40":"hover:border-free-400 hover:bg-free-50/40")}>
-              <Avatar name={f.nome} src={f.foto} tone={f._t==="clt"?"brand":"free"}/>
-              <div className="text-left flex-1"><div className="font-semibold text-slate-800 flex items-center gap-2">{f.nome} <Badge tone={f._t==="clt"?"brand":"free"}>{f._t==="clt"?"CLT":"Freela"}</Badge></div><div className="text-xs text-slate-500">{f.cargo} · casa base: {unidadeNome(f.unidade,unidades)}</div></div>
-              <Icon d={I.plus} className={cx("w-4 h-4", f._t==="clt"?"text-brand-500":"text-free-500")}/>
+          {[...freelas.filter(f=>f.status==="ativo").map(f=>({...f,_t:"free"})), ...clts.filter(c=>c._auto).map(c=>({...c,_t:"clt"})), ...(pjs||[]).filter(p=>p.status!=="encerrado").map(p=>({...p,_t:"pj",cargo:p.servico||"Prestador PJ"}))].map(f=>
+            <button key={f._t+f.id} onClick={()=>addColab(add,f.id,f._t)} className={cx("w-full flex items-center gap-3 p-3 rounded-xl border border-slate-200 transition", f._t==="clt"?"hover:border-brand-400 hover:bg-brand-50/40":f._t==="pj"?"hover:border-sky-400 hover:bg-sky-50/40":"hover:border-free-400 hover:bg-free-50/40")}>
+              <Avatar name={f.nome} src={f.foto} tone={f._t==="clt"?"brand":f._t==="pj"?"slate":"free"}/>
+              <div className="text-left flex-1"><div className="font-semibold text-slate-800 flex items-center gap-2">{f.nome} <Badge tone={f._t==="clt"?"brand":f._t==="pj"?"blue":"free"}>{f._t==="clt"?"CLT":f._t==="pj"?"PJ":"Freela"}</Badge></div><div className="text-xs text-slate-500">{f.cargo} · casa base: {f.unidade==="todas"||f.unidade==null?"Todas as casas":unidadeNome(f.unidade,unidades)}</div></div>
+              <Icon d={I.plus} className={cx("w-4 h-4", f._t==="clt"?"text-brand-500":f._t==="pj"?"text-sky-500":"text-free-500")}/>
             </button>)}
         </div>
       </div>
@@ -2586,7 +2608,11 @@ function Relatorios() {
 /* ============================ PAGAMENTOS (FREELANCERS) ============================ */
 // Pagamentos de SALARIADOS (CLT ou Cargos de confiança) — parcelado/adiantamento + saldo, modelo dos freelancers.
 function PagamentoSalariados({ modo, ini, fim, uni }){
-  const { clts, unidades, registros, pontoHist, getDossie, cltExtraAjuste, escala, escalaOv, atestados, acesso, pagamentosCLT, addPagamentoCLT, removePagamentoCLT, faltaDescontoDesde } = useStore();
+  const { clts, pjs, unidades, registros, pontoHist, getDossie, cltExtraAjuste, escala, escalaOv, atestados, acesso, pagamentosCLT, addPagamentoCLT, removePagamentoCLT, pagamentosPJ, addPagamentoPJ, removePagamentoPJ, faltaDescontoDesde } = useStore();
+  const ehPJ = modo==="pj";
+  const pagMap = ehPJ ? pagamentosPJ : pagamentosCLT;
+  const addPag = ehPJ ? addPagamentoPJ : addPagamentoCLT;
+  const removePag = ehPJ ? removePagamentoPJ : removePagamentoCLT;
   const toast=useContext(ToastCtx);
   const _clock=useClock();
   const [aberto,setAberto]=useState(null);
@@ -2598,27 +2624,32 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
   const apurCLT=apurarHoras([...pontoHist,...registros]).filter(x=>x.tipo==="clt"&&x.completo&&naData(x.dia));
   const faltasCtx={ escala, escalaOv, registros:[...pontoHist,...registros], atestados, ini, fim, hoje:hojeStr(), nowMin:_nowMin, desde:faltaDescontoDesde };
   const folhaCtx={ apurCLT, cltExtraAjuste, ymRef, getDossie, naData, faltasCtx };
-  const naCasa=(c)=> uni==="todas" || c.unidade===Number(uni) || (modo==="confianca" && (c.unidade==="todas"||c.unidade==null));
-  const lista = (modo==="confianca"
+  const naCasa=(c)=> uni==="todas" || c.unidade===Number(uni) || ((modo==="confianca"||ehPJ) && (c.unidade==="todas"||c.unidade==null));
+  const lista = (ehPJ
+    ? (pjs||[]).filter(pj=>pjAtivoNoPeriodo(pj,ini,fim))
+    : modo==="confianca"
     ? clts.filter(c=>c.vinculo==="confianca")
     : clts.filter(c=>c.vinculo!=="fixo" && c.vinculo!=="confianca")).filter(naCasa);
-  const pagosDe=(id)=> (pagamentosCLT[String(id)]||[]).filter(p=>{ const r=p.ref||p.data; return (r||"").slice(0,7)===ymRef || naData(r); });
+  const pagosDe=(id)=> (pagMap[String(id)]||[]).filter(p=>{ const r=p.ref||p.data; return (r||"").slice(0,7)===ymRef || naData(r); });
   const linhas=lista.map(c=>{
     let total, det=null;
-    if(modo==="confianca"){ total=Number(c.salario||0); }
+    if(ehPJ){ const meses=pjMesesNoPeriodo(c,ini,fim); total=Number(c.valor||0)*meses.length;
+      det={ meses, venc:pjVencimento(c,ymRef), forma:c.formaPagamento||"Pix", cnpj:c.cnpj }; }
+    else if(modo==="confianca"){ total=Number(c.salario||0); }
     else { det=calcFolhaLinha(c,folhaCtx); total=det.liquido; }
     const oculto = modo==="confianca" && c.sigiloso && !podeSigilo;
     const pagos=pagosDe(c.id); const pago=pagos.reduce((s,p)=>s+Number(p.valor||0),0);
-    return { id:c.id, nome:c.nome, foto:c.foto, pix:c.pix, cargo:c.cargo, sigiloso:!!c.sigiloso, oculto, total, pago, saldo:total-pago, pagos, det };
+    return { id:c.id, nome:c.nome, foto:c.foto, pix:c.pix, cargo:ehPJ?(c.servico||"Prestador PJ"):c.cargo, sigiloso:!!c.sigiloso, oculto, total, pago, saldo:total-pago, pagos, det };
   }).sort((a,b)=>b.total-a.total);
   const vis=linhas.filter(l=>!l.oculto);
   const totalGeral=vis.reduce((s,l)=>s+l.total,0);
   const totalPago=vis.reduce((s,l)=>s+l.pago,0);
   const saldoGeral=totalGeral-totalPago;
   const confOcultos=linhas.filter(l=>l.oculto).length;
-  const pagarTudo=(l)=>{ if(l.saldo<=0){ toast("Nada em aberto para "+l.nome); return; } addPagamentoCLT(l.id,{data:hojeStr(), ref:(ini||hojeStr()), valor:Math.round(l.saldo*100)/100, obs:(modo==="confianca"?"Salário ":"Folha ")+ymRef}); toast("Pagamento registrado"); };
-  const lancarPag=(l)=>{ const np=novoPag[l.id]||{}; const v=Number(np.valor||0); if(!v){ toast("Informe o valor do pagamento"); return; } addPagamentoCLT(l.id,{data:hojeStr(), ref:(ini||hojeStr()), valor:v, obs:np.obs||"Adiantamento"}); setNovoPag(p=>({...p,[l.id]:{valor:"",obs:""}})); toast("Pagamento registrado"); };
-  const rot = modo==="confianca"?"Gerência & Diretoria":"CLT";
+  const pagarTudo=(l)=>{ if(l.saldo<=0){ toast("Nada em aberto para "+l.nome); return; } addPag(l.id,{data:hojeStr(), ref:(ini||hojeStr()), valor:Math.round(l.saldo*100)/100, obs:(ehPJ?"Prestação de serviço ":modo==="confianca"?"Salário ":"Folha ")+ymRef}); toast("Pagamento registrado"); };
+  const lancarPag=(l)=>{ const np=novoPag[l.id]||{}; const v=Number(np.valor||0); if(!v){ toast("Informe o valor do pagamento"); return; } addPag(l.id,{data:hojeStr(), ref:(ini||hojeStr()), valor:v, obs:np.obs||"Adiantamento"}); setNovoPag(p=>({...p,[l.id]:{valor:"",obs:""}})); toast("Pagamento registrado"); };
+  const rot = ehPJ?"Prestadores PJ":modo==="confianca"?"Gerência & Diretoria":"CLT";
+  const atrasado=(l)=> ehPJ && l.saldo>0 && l.det && l.det.venc && l.det.venc<hojeStr();
   return <>
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
       <StatCard icon={I.wallet} label={"Total a pagar ("+rot+")"} value={fmtBRL(totalGeral)} tone="brand"/>
@@ -2628,16 +2659,16 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
     </div>
     {modo==="confianca" && confOcultos>0 && <div className="mb-3 p-3 rounded-xl bg-amber-50 text-amber-700 text-xs flex items-center gap-2"><Icon d={I.shield} className="w-4 h-4"/> {confOcultos} pagamento(s) de diretoria ocultos — valor visível apenas para o Diretor e a Diretora Financeira.</div>}
     <Card className="overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm min-w-[760px]">
-      <thead><tr className="text-left text-slate-400 border-b border-slate-100">{["Colaborador","Cargo",modo==="confianca"?"Salário mensal":"Líquido do mês","Pago","Saldo","Pix"].map(h=><th key={h} className="px-4 py-3 font-semibold">{h}</th>)}</tr></thead>
+      <thead><tr className="text-left text-slate-400 border-b border-slate-100">{(ehPJ?["Prestador","Serviço","Valor do período","Pago","Saldo","Vencimento · Pix"]:["Colaborador","Cargo",modo==="confianca"?"Salário mensal":"Líquido do mês","Pago","Saldo","Pix"]).map(h=><th key={h} className="px-4 py-3 font-semibold">{h}</th>)}</tr></thead>
       <tbody className="divide-y divide-slate-50">
         {linhas.map(l=>[
           <tr key={l.id} className={cx("hover:bg-slate-50/70", !l.oculto&&"cursor-pointer")} onClick={()=>{ if(!l.oculto) setAberto(aberto===l.id?null:l.id); }}>
-          <td className="px-4 py-3"><div className="flex items-center gap-2">{!l.oculto&&<Icon d={aberto===l.id?I.x:I.plus} className="w-3.5 h-3.5 text-slate-400"/>}<Avatar name={l.nome} src={l.foto} tone={modo==="confianca"?"slate":"brand"} size="w-7 h-7"/><span className="font-semibold text-slate-800">{l.nome}</span>{l.sigiloso&&<Badge tone="amber">sigiloso</Badge>}</div></td>
+          <td className="px-4 py-3"><div className="flex items-center gap-2">{!l.oculto&&<Icon d={aberto===l.id?I.x:I.plus} className="w-3.5 h-3.5 text-slate-400"/>}<Avatar name={l.nome} src={l.foto} tone={modo==="confianca"||ehPJ?"slate":"brand"} size="w-7 h-7"/><span className="font-semibold text-slate-800">{l.nome}</span>{l.sigiloso&&<Badge tone="amber">sigiloso</Badge>}{ehPJ&&<Badge tone="blue">PJ</Badge>}</div></td>
           <td className="px-4 py-3 text-slate-600">{l.cargo}</td>
           <td className="px-4 py-3 font-bold text-slate-900 tabular-nums">{l.oculto?<span className="inline-flex items-center gap-1 text-slate-400"><Icon d={I.shield} className="w-3.5 h-3.5"/>••••••</span>:fmtBRL(l.total)}</td>
           <td className="px-4 py-3 text-emerald-600 tabular-nums">{l.oculto?"—":(l.pago>0?fmtBRL(l.pago):"—")}</td>
           <td className={cx("px-4 py-3 font-semibold tabular-nums", l.oculto?"text-slate-400":l.saldo>0?"text-amber-600":"text-emerald-600")}>{l.oculto?"—":fmtBRL(l.saldo)}</td>
-          <td className="px-4 py-3 font-mono text-xs text-slate-500">{l.oculto?"—":(l.pix||"—")}</td>
+          <td className="px-4 py-3 font-mono text-xs text-slate-500">{ehPJ && l.det && l.det.venc && <div className={cx("font-sans font-semibold mb-0.5", atrasado(l)?"text-rose-600":l.saldo<=0?"text-emerald-600":"text-slate-600")}>{l.saldo<=0?"pago":atrasado(l)?"vencido "+fmtDataBR(l.det.venc):"vence "+fmtDataBR(l.det.venc)}</div>}{l.oculto?"—":(l.pix||"—")}</td>
         </tr>,
           aberto===l.id && !l.oculto && <tr key={l.id+"-d"} className="bg-slate-50/60"><td colSpan="6" className="px-4 py-4" onClick={e=>e.stopPropagation()}>
             <div className="grid lg:grid-cols-3 gap-4">
@@ -2652,14 +2683,19 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
                     {(l.det.descontos-l.det.vtDesconto)>0 && <div className="flex justify-between"><span className="text-slate-500">Descontos ({l.det.faltasQtd} falta{l.det.dsrQtd?` +${l.det.dsrQtd} DSR`:""})</span><span className="tabular-nums text-rose-600">-{fmtBRL(l.det.descontos-l.det.vtDesconto)}</span></div>}
                   </>}
                   {modo==="confianca" && <div className="flex justify-between"><span className="text-slate-500">Salário mensal</span><span className="tabular-nums">{fmtBRL(l.total)}</span></div>}
-                  <div className="flex justify-between border-t border-slate-100 pt-1 font-bold"><span className="text-slate-700">{modo==="confianca"?"Total":"Líquido do mês"}</span><span className="tabular-nums text-slate-900">{fmtBRL(l.total)}</span></div>
+                  {ehPJ && l.det && <>
+                    <div className="flex justify-between"><span className="text-slate-500">Valor mensal × {l.det.meses.length} mês(es)</span><span className="tabular-nums">{fmtBRL(l.total)}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">Vencimento</span><span>{l.det.venc?fmtDataBR(l.det.venc):"—"} · {l.det.forma}</span></div>
+                    {l.det.cnpj && <div className="flex justify-between"><span className="text-slate-500">CNPJ</span><span className="font-mono text-xs">{l.det.cnpj}</span></div>}
+                  </>}
+                  <div className="flex justify-between border-t border-slate-100 pt-1 font-bold"><span className="text-slate-700">{modo==="confianca"||ehPJ?"Total":"Líquido do mês"}</span><span className="tabular-nums text-slate-900">{fmtBRL(l.total)}</span></div>
                 </div>
                 <div className="text-[11px] font-bold text-slate-400 uppercase mt-3 mb-1.5">Pagamentos registrados</div>
                 <div className="space-y-1.5">
                   {l.pagos.length===0 && <p className="text-xs text-slate-400">Nenhum pagamento registrado ainda.</p>}
                   {l.pagos.map(p=><div key={p.id} className="flex items-center gap-2 text-sm bg-white rounded-lg px-3 py-2 border border-slate-100">
                     <div className="min-w-0"><div className="font-semibold text-slate-800 tabular-nums">{fmtBRL(Number(p.valor||0))}</div><div className="text-[11px] text-slate-400 truncate">{fmtDataBR(p.data)} · {p.obs||"—"}</div></div>
-                    <button onClick={()=>removePagamentoCLT(l.id,p.id)} className="ml-auto text-slate-300 hover:text-rose-500" title="Remover"><Icon d={I.trash} className="w-4 h-4"/></button>
+                    <button onClick={()=>removePag(l.id,p.id)} className="ml-auto text-slate-300 hover:text-rose-500" title="Remover"><Icon d={I.trash} className="w-4 h-4"/></button>
                   </div>)}
                 </div>
               </div>
@@ -2680,7 +2716,7 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
             </div>
           </td></tr>
         ])}
-        {linhas.length===0 && <tr><td colSpan="6" className="px-4 py-8 text-center text-slate-400">Nenhum {modo==="confianca"?"cargo de confiança":"colaborador CLT"} nesta casa.</td></tr>}
+        {linhas.length===0 && <tr><td colSpan="6" className="px-4 py-8 text-center text-slate-400">Nenhum {ehPJ?"prestador PJ ativo":modo==="confianca"?"cargo de confiança":"colaborador CLT"} nesta casa.</td></tr>}
       </tbody>
       {vis.length>0 && <tfoot><tr className="border-t-2 border-slate-100 bg-slate-50/60">
         <td className="px-4 py-3 font-bold" colSpan="2">Total {podeSigilo?"":"(visível)"}</td>
@@ -2688,7 +2724,7 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
         <td className="px-4 py-3 font-bold text-emerald-600 tabular-nums">{fmtBRL(totalPago)}</td>
         <td className={cx("px-4 py-3 font-extrabold tabular-nums", saldoGeral>0?"text-amber-600":"text-emerald-600")}>{fmtBRL(saldoGeral)}</td><td/></tr></tfoot>}
     </table></div></Card>
-    <p className="text-xs text-slate-400 mt-3">{modo==="confianca"?"Salário mensal fixo dos cargos de confiança. ":"Líquido do mês = salário + extras/adic. noturno − faltas/DSR (mesma conta da folha). "}Clique no nome para registrar pagamentos parciais, adiantamentos e o saldo restante.</p>
+    <p className="text-xs text-slate-400 mt-3">{ehPJ?"Valor mensal do contrato de cada prestador PJ (proporcional aos meses de vigência no período), com o vencimento no dia de pagamento cadastrado. ":modo==="confianca"?"Salário mensal fixo dos cargos de confiança. ":"Líquido do mês = salário + extras/adic. noturno − faltas/DSR (mesma conta da folha). "}Clique no nome para registrar pagamentos parciais, adiantamentos e o saldo restante.</p>
   </>;
 }
 
@@ -2740,12 +2776,12 @@ function Pagamentos() {
   };
 
   return <div className="fade-in">
-    <PageHeader title="Pagamentos" sub="Freelancers, CLT e gerência/diretoria · pagamento parcelado (adiantamentos), saldo do mês e filtro por período/casa">
+    <PageHeader title="Pagamentos" sub="Freelancers, CLT, gerência/diretoria e prestadores PJ · pagamento parcelado (adiantamentos), saldo do mês e filtro por período/casa">
       {abaP==="freela" && <Btn icon={I.download} onClick={exportar}>Exportar consolidado</Btn>}
     </PageHeader>
 
     <div className="flex flex-wrap gap-2 mb-3">
-      {[["freela","Freelancers"],["clt","CLT"],["confianca","Gerência & Diretoria"]].map(([k,l])=>
+      {[["freela","Freelancers"],["clt","CLT"],["confianca","Gerência & Diretoria"],["pj","Prestadores PJ"]].map(([k,l])=>
         <button key={k} onClick={()=>{setAbaP(k);setAberto(null);}} className={cx("px-4 py-2 rounded-xl text-sm font-semibold border transition", abaP===k?"grad-brand text-white border-transparent shadow-glow":"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>{l}</button>)}
     </div>
 
@@ -3036,7 +3072,7 @@ function LinksQR() {
 
 /* ============================ RELATÓRIOS FINANCEIROS ============================ */
 function Financeiro() {
-  const { freelasComPagamentos:freelas, clts, unidades, registros, pontoHist, getDossie, cltExtraAjuste, setCltExtra, acesso, escala, escalaOv, atestados, faltaDescontoDesde, vtDiaPagamento } = useStore();
+  const { freelasComPagamentos:freelas, clts, pjs, pagamentosPJ, unidades, registros, pontoHist, getDossie, cltExtraAjuste, setCltExtra, acesso, escala, escalaOv, atestados, faltaDescontoDesde, vtDiaPagamento } = useStore();
   const podeSigilo = !acesso || acesso.podeSigilo;   // sem contexto (offline) → mostra tudo
   const _clock=useClock();
   const toast=useContext(ToastCtx);
@@ -3089,10 +3125,28 @@ function Financeiro() {
   const freeTotal=linhasFree.reduce((s,l)=>s+l.total,0);
   const freeDias=linhasFree.reduce((s,l)=>s+l.dias,0);
 
+  /* ===================== PRESTADORES PJ (valor mensal, sem ponto) ===================== */
+  const ymIni=(ini||hojeStr()).slice(0,7);
+  const linhasPJ = (pjs||[]).filter(pj=>pjAtivoNoPeriodo(pj,ini,fim) && (uni==="todas"||pj.unidade===Number(uni)||pj.unidade==="todas"||pj.unidade==null)).map(pj=>{
+    const meses=pjMesesNoPeriodo(pj,ini,fim); const total=Number(pj.valor||0)*meses.length;
+    const pago=(pagamentosPJ[String(pj.id)]||[]).filter(p=>{ const r=p.ref||p.data||""; return naData(r) || r.slice(0,7)===ymIni; }).reduce((s2,p)=>s2+Number(p.valor||0),0);
+    return { id:pj.id, nome:pj.nome, cnpj:pj.cnpj||"", servico:pj.servico||"Prestação de serviço", pix:pj.pix||"", banco:pj.banco||"", forma:pj.formaPagamento||"Pix",
+      valorMensal:Number(pj.valor||0), meses:meses.length, total, pago, saldo:total-pago, venc:pjVencimento(pj,ymIni), dia:pj.diaPagamento,
+      unidade:(pj.unidade==="todas"||pj.unidade==null)?"Todas as casas":unidadeNome(pj.unidade,unidades), semValor:!Number(pj.valor||0) };
+  }).sort((a,b)=>b.total-a.total);
+  const pjTotal=linhasPJ.reduce((s2,l)=>s2+l.total,0);
+  const pjPago=linhasPJ.reduce((s2,l)=>s2+l.pago,0);
+
+  /* ===================== RESUMO GERAL (custo total de pessoal no período) ===================== */
+  const _liq=(ls)=>ls.reduce((s2,l)=>s2+l.liquido,0);
+  const resumo=[["clt","Folha CLT",_liq(linhasCLTreais)],["fixo","Freela Fixo",_liq(linhasFixo)],["confianca","Gerência & Diretoria",confFolhaVisivel],["freela","Freelancers",freeTotal],["pj","Prestadores PJ",pjTotal]];
+  const custoTotal=resumo.reduce((s2,r)=>s2+r[2],0);
+
   /* ===================== WhatsApp ===================== */
   const rotuloFolha = aba==="fixo"?"Freela Fixo":"CLT";
   const whatsCLT=(l)=>`*${l.nome}* (${rotuloFolha})\nSalário base: ${fmtBRL(l.salario)}\nHoras extras: ${fmtHoras(l.extrasHoras)} = ${fmtBRL(l.extrasVal)}${l.notVal?`\nAdic. noturno: ${fmtBRL(l.notVal)}`:""}${l.vt?`\nVale Transporte: ${fmtBRL(l.vt)} (desconto 6%: -${fmtBRL(l.vtDesconto)})`:""}${l.faltasQtd?`\nFaltas: ${l.faltasQtd} = -${fmtBRL(l.descFaltas)}`:""}${l.dsrQtd?`\nDSR perdido (${l.dsrQtd} sem.): -${fmtBRL(l.descDSR)}`:""}${l.descontos?`\nDescontos totais: -${fmtBRL(l.descontos)}`:""}\n*Líquido a pagar: ${fmtBRL(l.liquido)}*\nPix: ${l.pix||"—"}`;
   const whatsFree=(l)=>`*${l.nome}*\nValor acumulado: ${fmtBRL(l.total)}\nDias trabalhados: ${l.dias}\nDatas: ${fmtD(l.datas)}\nPix: ${l.pix||"—"}`;
+  const whatsPJ=(l)=>`*${l.nome}* (PJ${l.cnpj?" · CNPJ "+l.cnpj:""})\nServiço: ${l.servico}\nValor: ${fmtBRL(l.total)}${l.meses>1?` (${l.meses} meses × ${fmtBRL(l.valorMensal)})`:""}\nVencimento: ${l.venc?fmtDataBR(l.venc):"—"} · ${l.forma}\nPix: ${l.pix||"—"}`;
   const whatsConf=(l)=>`*${l.nome}* (${l.cargo})\nSalário mensal: ${fmtBRL(l.salario)}\nPix: ${l.pix||"—"}`;
   const copiarUm=(txt)=>{ copyText(txt); toast("Copiado para enviar no WhatsApp"); };
   const copiarTodos=()=>{
@@ -3101,6 +3155,8 @@ function Financeiro() {
     else if(aba==="confianca"){ const vis=linhasConf.filter(l=>!l.oculto);
       const txt=`🛡️ *Gerência & Diretoria — ${uNome}*\n\n`+vis.map(whatsConf).join("\n\n")+`\n\n*Total: ${fmtBRL(confFolhaVisivel)}*`+(confOcultos>0?`\n\n_(${confOcultos} pagamento(s) sigiloso(s) não incluídos)_`:"");
       copyText(txt); toast(`${vis.length} cargo(s) de confiança copiados`); }
+    else if(aba==="pj"){ const txt=`🤝 *Prestadores PJ — ${uNome}*\n_${fmtDataBR(ini)} a ${fmtDataBR(fim)}_\n\n`+linhasPJ.map(whatsPJ).join("\n\n")+`\n\n*Total: ${fmtBRL(pjTotal)}*`;
+      copyText(txt); toast(`${linhasPJ.length} prestador(es) PJ copiados`); }
     else { const txt=`💰 *Pagamento freelancers — ${uNome}*\n_${fmtDataBR(ini)} a ${fmtDataBR(fim)}_\n\n`+linhasFree.map(whatsFree).join("\n\n")+`\n\n*Total: ${fmtBRL(freeTotal)}* (${freeDias} dias)`;
       copyText(txt); toast(`${linhasFree.length} freelancers copiados`); }
   };
@@ -3145,14 +3201,34 @@ function Financeiro() {
       linhasConf.forEach(l=>{ const r=wg.addRow([l.nome,l.cargo,l.unidade, l.oculto?"(sigiloso)":l.salario, l.oculto?"":(l.pix||"")]); if(!l.oculto){ r.getCell(4).numFmt='"R$" #,##0.00'; r.getCell(4).font={bold:true}; } });
       const gTot=wg.addRow(["TOTAL"+(podeSigilo?"":" (visível)"),"","",confFolhaVisivel,""]); gTot.eachCell(cell=>{ cell.font={bold:true}; cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFEEF2FF"}}; }); gTot.getCell(4).numFmt='"R$" #,##0.00';
     }
+    // --- Aba: Prestadores PJ ---
+    if(linhasPJ.length){
+      const wp=wb.addWorksheet("Prestadores PJ");
+      wp.columns=[{width:32},{width:22},{width:26},{width:20},{width:16},{width:10},{width:16},{width:16},{width:16},{width:14},{width:26}];
+      wp.mergeCells("A1:K1"); const tp=wp.getCell("A1"); tp.value=`Prestadores PJ — ${uNome}`; tp.font={bold:true,size:15,color:{argb:"FF1E3E1D"}};
+      wp.mergeCells("A2:K2"); wp.getCell("A2").value=`Período: ${fmtDataBR(ini)} a ${fmtDataBR(fim)}`; wp.getCell("A2").font={italic:true,color:{argb:"FF64748B"}};
+      const hp=wp.addRow(["Prestador","CNPJ","Serviço","Casa","Valor mensal","Meses","Valor do período","Pago","Saldo","Vencimento","Pix / forma"]);
+      hp.eachCell(cell=>{ cell.font={bold:true,color:{argb:"FFFFFFFF"}}; cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FF0369A1"}}; cell.alignment={horizontal:"center"}; });
+      linhasPJ.forEach(l=>{ const r=wp.addRow([l.nome,l.cnpj,l.servico,l.unidade,l.valorMensal,l.meses,l.total,l.pago,l.saldo,l.venc?fmtDataBR(l.venc):"",(l.pix||"")+" · "+l.forma]);
+        [5,7,8,9].forEach(i=>r.getCell(i).numFmt='"R$" #,##0.00'); r.getCell(7).font={bold:true}; });
+      const pt=wp.addRow(["TOTAL","","","","","",pjTotal,pjPago,pjTotal-pjPago,"",""]); pt.eachCell(cell=>{ cell.font={bold:true}; cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFE0F2FE"}}; }); [7,8,9].forEach(i=>pt.getCell(i).numFmt='"R$" #,##0.00');
+    }
+    // --- Aba: Resumo geral ---
+    const wr=wb.addWorksheet("Resumo geral");
+    wr.columns=[{width:30},{width:20},{width:12}];
+    wr.mergeCells("A1:C1"); wr.getCell("A1").value=`Custo de pessoal — ${uNome}`; wr.getCell("A1").font={bold:true,size:15,color:{argb:"FF1E3E1D"}};
+    wr.mergeCells("A2:C2"); wr.getCell("A2").value=`Período: ${fmtDataBR(ini)} a ${fmtDataBR(fim)}`; wr.getCell("A2").font={italic:true,color:{argb:"FF64748B"}};
+    const hr=wr.addRow(["Categoria","Valor","%"]); hr.eachCell(cell=>{ cell.font={bold:true,color:{argb:"FFFFFFFF"}}; cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FF2F6F2A"}}; });
+    resumo.forEach(([,l,v])=>{ const r=wr.addRow([l,v,custoTotal?v/custoTotal:0]); r.getCell(2).numFmt='"R$" #,##0.00'; r.getCell(3).numFmt='0.0%'; });
+    const rt=wr.addRow(["TOTAL"+(podeSigilo?"":" (visível)"),custoTotal,1]); rt.eachCell(cell=>{ cell.font={bold:true}; }); rt.getCell(2).numFmt='"R$" #,##0.00'; rt.getCell(3).numFmt='0.0%';
     const buf=await wb.xlsx.writeBuffer(); const blob=new Blob([buf],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
     const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`folha_${uNome.replace(/\s+/g,"-")}_${ini}.xlsx`; a.click(); URL.revokeObjectURL(url);
-    toast("Excel gerado: Folha CLT + Freela Fixo + Freelancers");
+    toast("Excel gerado: Folha CLT + Freela Fixo + Freelancers + Diretoria + PJ + Resumo geral");
   };
 
-  const abas=[["clt","Folha CLT"],["fixo","Freela Fixo"],["confianca","Gerência & Diretoria"],["freela","Pagamento freelancers"]];
+  const abas=[["clt","Folha CLT"],["fixo","Freela Fixo"],["confianca","Gerência & Diretoria"],["freela","Pagamento freelancers"],["pj","Prestadores PJ"]];
   return <div className="fade-in">
-    <PageHeader title="Relatórios financeiros" sub="Folha CLT · Freela Fixo · Gerência & Diretoria · pagamento de freelancers · filtro por período e casa · Excel · WhatsApp">
+    <PageHeader title="Relatórios financeiros" sub="Folha CLT · Freela Fixo · Gerência & Diretoria · freelancers · prestadores PJ · filtro por período e casa · Excel · WhatsApp">
       <Btn variant="ghost" icon={I.copy} onClick={copiarTodos}>Copiar p/ WhatsApp</Btn>
       <Btn icon={I.download} onClick={exportarExcel}>Exportar Excel</Btn>
     </PageHeader>
@@ -3168,7 +3244,49 @@ function Financeiro() {
       </Select></Field>
     </div></Card>
 
-    {(aba==="clt"||aba==="fixo") ? <>
+    <Card className="p-4 mb-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-2 mb-3">
+        <div className="text-xs font-bold text-slate-400 uppercase tracking-wide">Custo total de pessoal · {uNome}</div>
+        <div className="text-2xl font-extrabold text-slate-900 tabular-nums">{fmtBRL(custoTotal)}{!podeSigilo && confOcultos>0 && <span className="text-xs font-semibold text-slate-400 ml-1">(visível)</span>}</div>
+      </div>
+      {custoTotal>0 && <div className="flex h-2.5 rounded-full overflow-hidden bg-slate-100 mb-3">
+        {resumo.map(([k,,v],i)=> v>0 && <div key={k} style={{width:(v/custoTotal*100)+"%", background:["#2f6f2a","#d39520","#64748b","#e7b136","#0369a1"][i]}} title={k}/>)}
+      </div>}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+        {resumo.map(([k,l,v],i)=><button key={k} onClick={()=>setAba(k)} className={cx("text-left p-2.5 rounded-xl border transition", aba===k?"border-brand-300 bg-brand-50/50":"border-slate-100 hover:bg-slate-50")}>
+          <div className="flex items-center gap-1.5 text-xs text-slate-500"><span className="w-2 h-2 rounded-full" style={{background:["#2f6f2a","#d39520","#64748b","#e7b136","#0369a1"][i]}}/>{l}</div>
+          <div className="font-bold text-slate-900 tabular-nums text-sm mt-0.5">{fmtBRL(v)}</div>
+          <div className="text-[11px] text-slate-400">{custoTotal?Math.round(v/custoTotal*100):0}% do total</div>
+        </button>)}
+      </div>
+    </Card>
+
+    {aba==="pj" ? <>
+      <div className="grid sm:grid-cols-3 gap-3 mb-4">
+        <StatCard icon={I.wallet} label="Total PJ no período" value={fmtBRL(pjTotal)} tone="blue"/>
+        <StatCard icon={I.check} label="Já pago" value={fmtBRL(pjPago)} tone="green"/>
+        <StatCard icon={I.briefcase} label="Prestadores PJ" value={linhasPJ.length} tone="brand"/>
+      </div>
+      <Card className="overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm min-w-[860px]">
+        <thead><tr className="text-left text-slate-400 border-b border-slate-100">{["Prestador","Serviço","Casa","Valor mensal","Valor do período","Pago","Vencimento","Pix","WhatsApp"].map(h=><th key={h} className="px-4 py-3 font-semibold">{h}</th>)}</tr></thead>
+        <tbody className="divide-y divide-slate-50">
+          {linhasPJ.map(l=>{ const venc=l.saldo>0&&l.venc&&l.venc<hojeStr(); return <tr key={l.id} className="hover:bg-slate-50/70">
+            <td className="px-4 py-3"><div className="flex items-center gap-2"><Avatar name={l.nome} tone="slate" size="w-7 h-7"/><div><div className="font-semibold text-slate-800">{l.nome}</div><div className="text-[11px] text-slate-400 font-mono">{l.cnpj||"—"}</div>{l.semValor&&<div className="text-[11px] text-amber-600">defina o valor no cadastro</div>}</div></div></td>
+            <td className="px-4 py-3 text-slate-600">{l.servico}</td>
+            <td className="px-4 py-3 text-slate-600">{l.unidade}</td>
+            <td className="px-4 py-3 tabular-nums text-slate-700">{fmtBRL(l.valorMensal)}</td>
+            <td className="px-4 py-3 font-extrabold text-slate-900 tabular-nums">{fmtBRL(l.total)}{l.meses>1&&<div className="text-[10px] font-normal text-slate-400">{l.meses} meses</div>}</td>
+            <td className="px-4 py-3 tabular-nums text-emerald-600">{l.pago>0?fmtBRL(l.pago):"—"}</td>
+            <td className={cx("px-4 py-3 text-xs font-semibold", l.saldo<=0?"text-emerald-600":venc?"text-rose-600":"text-slate-600")}>{l.saldo<=0?"Pago":l.venc?(venc?"Vencido ":"")+fmtDataBR(l.venc):"—"}<div className="font-normal text-slate-400">{l.forma}</div></td>
+            <td className="px-4 py-3 font-mono text-xs text-slate-500">{l.pix||"—"}</td>
+            <td className="px-4 py-3"><Btn size="sm" variant="soft" icon={I.copy} onClick={()=>copiarUm(whatsPJ(l))}>Copiar</Btn></td>
+          </tr>; })}
+          {linhasPJ.length===0 && <tr><td colSpan="9" className="px-4 py-8 text-center text-slate-400">Nenhum prestador PJ ativo neste período/casa. Cadastre em “Prestadores PJ”.</td></tr>}
+        </tbody>
+        {linhasPJ.length>0 && <tfoot><tr className="border-t-2 border-slate-100 bg-slate-50/60"><td className="px-4 py-3 font-bold" colSpan="4">Total</td><td className="px-4 py-3 font-extrabold text-sky-700 tabular-nums">{fmtBRL(pjTotal)}</td><td className="px-4 py-3 font-bold text-emerald-600 tabular-nums">{fmtBRL(pjPago)}</td><td colSpan="3"/></tr></tfoot>}
+      </table></div></Card>
+      <p className="text-xs text-slate-400 mt-3">Valor mensal do contrato × meses de vigência no período. Registre os pagamentos (inclusive parciais) em <b>Pagamentos → Prestadores PJ</b>.</p>
+    </> : (aba==="clt"||aba==="fixo") ? <>
       <div className="grid sm:grid-cols-3 gap-3 mb-4">
         <StatCard icon={I.wallet} label={aba==="fixo"?"Folha líquida Freela Fixo":"Folha líquida CLT"} value={fmtBRL(cltFolha)} tone={aba==="fixo"?"free":"brand"}/>
         <StatCard icon={I.chart} label="Valor em horas extras" value={fmtBRL(cltExtras)} tone="amber"/>
@@ -4179,15 +4297,33 @@ function HoleritesPage(){
 }
 
 /* ============================ PRESTADORES PJ ============================ */
+const FORMAS_PAG_PJ=["Pix","Transferência (TED)","Boleto","Dinheiro"];
+// Meses (AAAA-MM) do período em que o contrato do PJ está vigente
+function pjMesesNoPeriodo(pj, ini, fim){
+  if(!ini||!fim) return [];
+  const out=[]; let [y,m]=ini.slice(0,7).split("-").map(Number); const [yf,mf]=fim.slice(0,7).split("-").map(Number);
+  while(y<yf || (y===yf && m<=mf)){ const ym=y+"-"+String(m).padStart(2,"0");
+    const iniOk=!pj.inicio || pj.inicio.slice(0,7)<=ym; const fimOk=!pj.fim || pj.fim.slice(0,7)>=ym;
+    if(iniOk && fimOk) out.push(ym); m++; if(m>12){ m=1; y++; } }
+  return out;
+}
+// Data de vencimento do PJ no mês (dia de pagamento limitado ao último dia do mês)
+function pjVencimento(pj, ym){
+  const dia=Number(pj.diaPagamento)||0; if(!dia||!ym) return "";
+  const [y,m]=ym.split("-").map(Number); const ult=new Date(y,m,0).getDate();
+  return ym+"-"+String(Math.min(dia,ult)).padStart(2,"0");
+}
+const pjAtivoNoPeriodo=(pj,ini,fim)=> pj.status!=="encerrado" || pjMesesNoPeriodo(pj,ini,fim).length>0;
+
 function PjForm({inicial,onSalvar,onClose}){
   const { unidades } = useStore();
-  const [f,setF]=useState(inicial||{ nome:"", cnpj:"", responsavel:"", cpf:"", email:"", tel:"", servico:"", valor:0, unidade:"todas", inicio:"", fim:"", tipoPix:"CNPJ", pix:"", obs:"" });
+  const [f,setF]=useState(()=>({ nome:"", cnpj:"", responsavel:"", cpf:"", email:"", tel:"", servico:"", valor:0, diaPagamento:5, formaPagamento:"Pix", unidade:"todas", inicio:"", fim:"", tipoPix:"CNPJ", pix:"", banco:"", obs:"", ...(inicial||{}) }));
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
-  const falta=[]; if(!f.nome.trim()) falta.push("razão social / nome"); if(soDigitos(f.cnpj).length!==14) falta.push("CNPJ (14 dígitos)"); if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email||"")) falta.push("e-mail");
+  const falta=[]; if(!f.nome.trim()) falta.push("razão social / nome"); if(soDigitos(f.cnpj).length!==14) falta.push("CNPJ (14 dígitos)"); if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email||"")) falta.push("e-mail"); if(!(Number(f.valor)>0)) falta.push("valor mensal"); if(!(Number(f.diaPagamento)>=1&&Number(f.diaPagamento)<=31)) falta.push("dia de pagamento");
   return <div className="p-6">
     <div className="flex items-center gap-2 mb-4"><button onClick={onClose} className="flex items-center gap-1 text-sm font-semibold text-slate-600 hover:text-slate-900"><Icon d={I.arrow} className="w-4 h-4 rotate-180"/>Voltar</button>
       <h3 className="text-base font-bold text-slate-900 ml-1">{inicial?"Editar prestador PJ":"Novo prestador PJ"}</h3></div>
-    <div className="mb-4 p-3 rounded-xl bg-brand-50 text-brand-800 text-sm flex items-start gap-2"><Icon d={I.briefcase} className="w-4 h-4 mt-0.5 shrink-0"/>Prestador PJ <b className="mx-1">não bate ponto</b> e não entra na escala. Ele tem uma pasta para o contrato de prestação de serviço e notas fiscais.</div>
+    <div className="mb-4 p-3 rounded-xl bg-brand-50 text-brand-800 text-sm flex items-start gap-2"><Icon d={I.briefcase} className="w-4 h-4 mt-0.5 shrink-0"/><span>O prestador PJ <b>entra na escala</b> (sem bater ponto), recebe o <b>valor mensal</b> na folha de pagamentos e nos relatórios financeiros, e tem uma pasta para o contrato e as notas fiscais.</span></div>
     <div className="grid sm:grid-cols-2 gap-3">
       <Field label="Razão social / nome *"><Input value={f.nome} onChange={e=>set("nome",e.target.value)}/></Field>
       <Field label="CNPJ *"><Input value={f.cnpj} onChange={e=>set("cnpj",e.target.value)} placeholder="00.000.000/0000-00"/></Field>
@@ -4196,13 +4332,22 @@ function PjForm({inicial,onSalvar,onClose}){
       <Field label="E-mail * (recebe o contrato)"><Input type="email" value={f.email} onChange={e=>set("email",e.target.value)}/></Field>
       <Field label="Telefone"><Input value={f.tel} onChange={e=>set("tel",e.target.value)}/></Field>
       <Field label="Serviço prestado"><Input value={f.servico} onChange={e=>set("servico",e.target.value)} placeholder="Ex.: consultoria, contabilidade, manutenção"/></Field>
-      <Field label="Valor mensal (R$)"><Input type="number" value={f.valor} onChange={e=>set("valor",Number(e.target.value))}/></Field>
+      <Field label="Setor (escala)"><Select value={f.setor||"salao"} onChange={e=>set("setor",e.target.value)}>{SETORES.map(([k,l])=><option key={k} value={k}>{l}</option>)}</Select></Field>
+    </div>
+    <div className="mt-4 mb-1 text-xs font-bold text-slate-400 uppercase tracking-wide flex items-center gap-1.5"><Icon d={I.wallet} className="w-3.5 h-3.5"/>Financeiro</div>
+    <div className="grid sm:grid-cols-3 gap-3 p-3 rounded-2xl border border-slate-200 bg-slate-50/50">
+      <Field label="Valor mensal (R$) *"><Input type="number" min="0" step="0.01" value={f.valor} onChange={e=>set("valor",Number(e.target.value))}/></Field>
+      <Field label="Dia de pagamento *"><Select value={f.diaPagamento} onChange={e=>set("diaPagamento",Number(e.target.value))}>{Array.from({length:31},(_,i)=>i+1).map(d=><option key={d} value={d}>Todo dia {d}</option>)}</Select></Field>
+      <Field label="Forma de pagamento"><Select value={f.formaPagamento} onChange={e=>set("formaPagamento",e.target.value)}>{FORMAS_PAG_PJ.map(x=><option key={x}>{x}</option>)}</Select></Field>
+      <Field label="Tipo Pix"><Select value={f.tipoPix} onChange={e=>set("tipoPix",e.target.value)}>{PIX_TIPOS.map(t=><option key={t}>{t}</option>)}</Select></Field>
+      <Field label="Chave Pix"><Input value={f.pix} onChange={e=>set("pix",e.target.value)}/></Field>
+      <Field label="Banco"><Input value={f.banco} onChange={e=>set("banco",e.target.value)} placeholder="Ex.: Itaú ag. 0001 c/c 12345-6"/></Field>
+    </div>
+    <div className="grid sm:grid-cols-2 gap-3 mt-3">
       <Field label="Unidade"><Select value={f.unidade} onChange={e=>set("unidade",e.target.value==="todas"?"todas":Number(e.target.value))}><option value="todas">Todas as casas</option>{unidades.map(u=><option key={u.id} value={u.id}>{u.nome}</option>)}</Select></Field>
       <Field label="Status"><Select value={f.status||"ativo"} onChange={e=>set("status",e.target.value)}><option value="ativo">Ativo</option><option value="encerrado">Contrato encerrado</option></Select></Field>
       <Field label="Início do contrato"><Input type="date" value={f.inicio} onChange={e=>set("inicio",e.target.value)}/></Field>
       <Field label="Fim do contrato"><Input type="date" value={f.fim} onChange={e=>set("fim",e.target.value)}/></Field>
-      <Field label="Tipo Pix"><Select value={f.tipoPix} onChange={e=>set("tipoPix",e.target.value)}>{PIX_TIPOS.map(t=><option key={t}>{t}</option>)}</Select></Field>
-      <Field label="Chave Pix"><Input value={f.pix} onChange={e=>set("pix",e.target.value)}/></Field>
     </div>
     <Field label="Observações"><textarea value={f.obs} onChange={e=>set("obs",e.target.value)} rows={2} className="w-full mt-1 px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-brand-400 text-sm"/></Field>
     {falta.length>0 && <p className="text-xs text-rose-500 mt-3">Falta: {falta.join(", ")}</p>}
@@ -4224,7 +4369,7 @@ function PrestadoresPJ(){
   const lista=pjs.filter(p=>normTxt(p.nome+" "+(p.cnpj||"")+" "+(p.responsavel||"")+" "+(p.servico||"")).includes(normTxt(q)));
   const fmtR$=(v)=>Number(v||0).toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
   return <div className="fade-in">
-    <PageHeader title="Prestadores PJ" sub="Prestadores de serviço sem ponto — pasta com contrato assinado por todos e notas fiscais">
+    <PageHeader title="Prestadores PJ" sub="Prestadores de serviço · entram na escala sem bater ponto · valor mensal na folha e nos relatórios · contrato assinado por todos">
       {can("colaboradores") && <Btn icon={I.plus} onClick={()=>setForm({})}>Novo prestador</Btn>}
     </PageHeader>
     <Card className="p-2 mb-4"><div className="flex items-center gap-2 px-3 py-2"><Icon d={I.search} className="w-4 h-4 text-slate-400"/><input value={q} onChange={e=>setQ(e.target.value)} placeholder="Buscar por nome, CNPJ, responsável ou serviço…" className="flex-1 outline-none text-sm bg-transparent"/></div></Card>
@@ -4245,7 +4390,7 @@ function PrestadoresPJ(){
           </div>
           <div className="flex items-center justify-between mt-3">
             <Badge tone={tone}><Icon d={I.sign} className="w-3 h-3"/>{st}</Badge>
-            {Number(pj.valor)>0 && <span className="text-sm font-bold text-slate-700">{fmtR$(pj.valor)}<span className="text-xs text-slate-400 font-normal">/mês</span></span>}
+            {Number(pj.valor)>0 && <span className="text-right"><span className="text-sm font-bold text-slate-700">{fmtR$(pj.valor)}<span className="text-xs text-slate-400 font-normal">/mês</span></span>{pj.diaPagamento && <span className="block text-[11px] text-slate-400">paga todo dia {pj.diaPagamento}</span>}</span>}
           </div>
         </Card></button>; })}
     </div>}
@@ -4266,6 +4411,9 @@ function PrestadoresPJ(){
             <div className="rounded-xl bg-white/10 px-3 py-2"><div className="text-white/50 text-xs">Responsável</div>{pjAtual.responsavel||"—"}</div>
             <div className="rounded-xl bg-white/10 px-3 py-2"><div className="text-white/50 text-xs">E-mail</div><span className="break-all">{pjAtual.email||"—"}</span></div>
             <div className="rounded-xl bg-white/10 px-3 py-2"><div className="text-white/50 text-xs">Vigência</div>{pjAtual.inicio?fmtDataBR(pjAtual.inicio):"—"} {pjAtual.fim?"até "+fmtDataBR(pjAtual.fim):""}</div>
+            <div className="rounded-xl bg-white/10 px-3 py-2"><div className="text-white/50 text-xs">Valor mensal</div>{fmtR$(pjAtual.valor)}</div>
+            <div className="rounded-xl bg-white/10 px-3 py-2"><div className="text-white/50 text-xs">Pagamento</div>{pjAtual.diaPagamento?"Todo dia "+pjAtual.diaPagamento:"—"} · {pjAtual.formaPagamento||"Pix"}</div>
+            <div className="rounded-xl bg-white/10 px-3 py-2"><div className="text-white/50 text-xs">Pix / banco</div><span className="break-all">{pjAtual.pix||pjAtual.banco||"—"}</span></div>
           </div>
           <div className="flex gap-2 mt-4">
             {can("colaboradores") && <Btn size="sm" variant="soft" icon={I.edit} onClick={()=>setForm(pjAtual)}>Editar dados</Btn>}
