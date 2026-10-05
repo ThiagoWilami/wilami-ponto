@@ -589,6 +589,22 @@ const escalaInicial = () => {
 /* ============================ ARQUIVOS (pastas, holerites, contratos) ============================ */
 // Cada arquivo = 1 documento de METADADOS em "arquivos" + N "partes" (base64 fatiado) em "arquivos_partes".
 // O fatiamento contorna o limite de 1 MB por documento do Firestore (aceita PDFs de até ~12 MB).
+// Mensagem clara quando as regras do Firestore bloqueiam uma coleção nova
+const ehErroPermissao=(e)=> !!e && (e.code==="permission-denied" || /insufficient permissions/i.test(String(e.message||e)));
+const erroBanco=(e)=> ehErroPermissao(e)
+  ? "o banco de dados (Firebase) ainda não libera este recurso. Atualize as regras em Configurações → Banco de dados."
+  : String((e&&e.message)||e);
+const REGRAS_FIRESTORE_NOVAS = '// ===== Regras para as coleções novas do Wilami Ponto & RH =====\n// Cole estes blocos DENTRO do bloco existente:\n//   match /databases/{database}/documents { ... }\n// sem apagar as regras que você já tem.\n// Se você usa vários clientes (tenants) e as regras de /tenants/... NÃO liberam tudo,\n// copie os mesmos blocos também para dentro de: match /tenants/{tenant} { ... }\n\n// Arquivos (pastas, holerites, contratos, documentos do convite)\nmatch /arquivos/{id} {\n  allow read: if true;                       // app "Meus documentos" lê os próprios arquivos\n  allow create: if true;                     // painel e candidato do convite enviam arquivos\n  allow update: if request.auth != null\n    || request.resource.data.diff(resource.data).affectedKeys().hasOnly([\'vistoEm\']);  // colaborador marca "visto"\n  allow delete: if request.auth != null;\n}\nmatch /arquivos_partes/{id} {\n  allow read: if true;\n  allow create: if true;\n  allow update: if false;\n  allow delete: if request.auth != null;\n}\n\n// PIN do app "Meus documentos" (só o hash é guardado)\nmatch /acessosColab/{id} {\n  allow read: if true;\n  allow create, delete: if request.auth != null;\n  allow update: if request.auth != null\n    || request.resource.data.diff(resource.data).affectedKeys().hasOnly([\'hash\',\'cpf\',\'atualizadoEm\',\'trocadoPeloColab\']);\n}\n\n// Convites de cadastro (link enviado ao candidato)\nmatch /convites/{token} {\n  allow read: if true;\n  allow create, delete: if request.auth != null;\n  allow update: if request.auth != null\n    || (resource.data.status == \'aberto\'\n        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([\'status\',\'preenchidoEm\',\'pessoaKey\',\'nome\']));\n}\n';
+// Testa se cada coleção nova aceita gravação (cria e apaga um documento de teste)
+async function testarPermissoesBanco(){
+  const out=[];
+  for(const col of ["arquivos","arquivos_partes","acessosColab","convites"]){
+    const ref=tCol(col).doc("_teste_permissao_"+Math.random().toString(36).slice(2,8));
+    try{ await ref.set({teste:true, ts:Date.now()}); await ref.delete().catch(()=>{}); out.push({col, ok:true}); }
+    catch(e){ out.push({col, ok:false, msg: ehErroPermissao(e)?"bloqueada pelas regras":String(e.message||e)}); }
+  }
+  return out;
+}
 const ARQ_PARTE = 700000;                  // caracteres base64 por parte (~525 KB)
 const ARQ_MAX_BYTES = 12*1024*1024;        // limite por arquivo
 // Pastas padrão por tipo de vínculo (o gestor pode criar outras)
@@ -3835,6 +3851,7 @@ function Configuracoes() {
           <div className="p-3 rounded-xl bg-slate-50 flex items-start gap-2"><Icon d={I.shield} className="w-4 h-4 text-slate-500 mt-0.5"/><span>Selfies e coordenadas criptografadas (AES-256) e retidas pelo prazo legal.</span></div>
         </div>
       </Card>
+      <ConfigBanco/>
       <ConfigMarca/>
       <ConfigAssinatura/>
     </div>
@@ -3914,12 +3931,12 @@ function PastasPessoa({tipo, pessoa}){
         await arqSalvar({ nome:f.name, donoKey:key, donoTipo:tipo, donoId:String(pessoa.id), donoNome:pessoa.nome, cpf:soDigitos(pessoa.cpf||pessoa.cnpj),
           pasta, categoria:pasta==="Holerites"?"holerite":"documento", visivelColab:pasta==="Holerites" }, du);
         ok++;
-      }catch(e){ toast("Não foi possível enviar "+f.name+": "+(e.message||e)); }
+      }catch(e){ toast("Não foi possível enviar "+f.name+": "+erroBanco(e)); }
       setEnviando(n=>n-1);
     }
     if(ok) toast(ok===1?"Arquivo salvo na pasta "+pasta:ok+" arquivos salvos na pasta "+pasta);
   };
-  const acao=async(a,fn,msg)=>{ setOcupado(a.id); try{ await fn(); if(msg) toast(msg); }catch(e){ toast(e.message||"Falha na operação"); } setOcupado(""); };
+  const acao=async(a,fn,msg)=>{ setOcupado(a.id); try{ await fn(); if(msg) toast(msg); }catch(e){ toast("Falha: "+erroBanco(e)); } setOcupado(""); };
   const excluir=(a)=>{ if(!confirm("Excluir “"+a.nome+"” definitivamente?")) return; acao(a,()=>arqRemover(a),"Arquivo excluído"); };
   const contar=(p)=>meus.filter(a=>a.pasta===p).length;
 
@@ -4081,7 +4098,7 @@ function AcessoAppColab({tipo, pessoa}){
     if(!(docLogin.length===11||docLogin.length===14)){ toast("Cadastre o CPF"+(tipo==="pj"?" ou CNPJ":"")+" antes de liberar o acesso."); return; }
     setGerando(true);
     try{ const pin=gerarPin(); await definirPinColab(key,docLogin,pin,{nome:pessoa.nome,tipo}); setPinNovo(pin); }
-    catch(e){ toast("Não foi possível gerar o PIN: "+(e.message||e)); }
+    catch(e){ toast("Não foi possível gerar o PIN: "+erroBanco(e)); }
     setGerando(false);
   };
   return <div className="p-3.5 rounded-2xl border border-slate-200 bg-slate-50/60 flex flex-wrap items-center gap-3">
@@ -4233,7 +4250,7 @@ function HoleritesPage(){
         await arqSalvar({ nome:"Holerite "+tipoLabel+" "+fmtCompetencia(comp)+" - "+p.nome+ext, donoKey:it.k, donoTipo:p._tipo, donoId:String(p.id), donoNome:p.nome, cpf:soDigitos(p.cpf),
           pasta:"Holerites", categoria:"holerite", competencia:comp, holeriteTipo:tipoHol, visivelColab:true, origem:it.origem }, bytesParaDataUrl(b,it.mime));
         feitos++; setPub({feito:feitos,total:ok.length});
-      }catch(e){ restantes.push(it); toast("Falha em "+p.nome+": "+(e.message||e)); }
+      }catch(e){ restantes.push(it); toast("Falha em "+p.nome+": "+erroBanco(e)); }
     }
     setItens(restantes); setPub(null);
     if(feitos) toast(feitos+" holerite(s) publicados no app dos colaboradores");
@@ -4556,6 +4573,31 @@ function PortalColab({onClose}){
 }
 
 /* ============================ CONFIGURAÇÕES: MARCA + ASSINATURA ELETRÔNICA ============================ */
+function ConfigBanco(){
+  const toast=useContext(ToastCtx);
+  const [res,setRes]=useState(null); const [testando,setTestando]=useState(false); const [ver,setVer]=useState(false);
+  const testar=async()=>{ if(!window.__WPDB){ toast("Sem conexão com o banco"); return; } setTestando(true); setRes(await testarPermissoesBanco()); setTestando(false); };
+  const NOMES={arquivos:"Arquivos & pastas",arquivos_partes:"Conteúdo dos arquivos",acessosColab:"PIN do app do colaborador",convites:"Convites de cadastro"};
+  const bloqueadas=(res||[]).filter(r=>!r.ok);
+  return <Card className="p-5 lg:col-span-2">
+    <h3 className="font-bold text-slate-900 mb-1 flex items-center gap-2"><Icon d={I.shield} className="w-4 h-4 text-brand-600"/>Banco de dados (permissões)</h3>
+    <p className="text-sm text-slate-500 mb-3">Pastas, holerites, PIN do colaborador e convites usam coleções novas no Firebase. Se aparecer “Missing or insufficient permissions”, as regras do Firestore precisam liberar essas coleções.</p>
+    <div className="flex flex-wrap gap-2">
+      <Btn size="sm" variant="ghost" icon={I.refresh} disabled={testando} onClick={testar}>{testando?"Verificando…":"Verificar permissões"}</Btn>
+      <Btn size="sm" variant="soft" icon={I.copy} onClick={()=>{ copyText(REGRAS_FIRESTORE_NOVAS); toast("Regras copiadas"); }}>Copiar regras para o Firebase</Btn>
+      <button onClick={()=>setVer(!ver)} className="text-sm font-semibold text-brand-700 hover:underline">{ver?"Ocultar":"Ver"} passo a passo</button>
+    </div>
+    {res && <div className="grid sm:grid-cols-2 gap-2 mt-3">{res.map(r=><div key={r.col} className={cx("flex items-center gap-2 p-2.5 rounded-xl text-sm", r.ok?"bg-emerald-50 text-emerald-700":"bg-rose-50 text-rose-700")}>
+      <Icon d={r.ok?I.check:I.x} className="w-4 h-4 shrink-0"/><span className="font-semibold">{NOMES[r.col]}</span><span className="ml-auto text-xs">{r.ok?"liberada":r.msg}</span></div>)}</div>}
+    {res && bloqueadas.length===0 && <p className="text-sm text-emerald-700 mt-2 font-semibold">Tudo liberado ✓</p>}
+    {(ver || bloqueadas.length>0) && <ol className="list-decimal pl-5 mt-3 space-y-1 text-sm text-slate-600">
+      <li>Clique em <b>Copiar regras para o Firebase</b>.</li>
+      <li>Abra <a className="text-brand-700 underline" href="https://console.firebase.google.com/project/twilami-ponto/firestore/rules" target="_blank" rel="noreferrer">Firebase → Firestore Database → Regras</a>.</li>
+      <li>Cole o texto copiado <b>dentro</b> do bloco <code>match /databases/{"{database}"}/documents {"{ … }"}</code>, logo antes do último <code>{"}"}</code> — sem apagar as regras que já existem.</li>
+      <li>Clique em <b>Publicar</b>, volte aqui e clique em <b>Verificar permissões</b>.</li>
+    </ol>}
+  </Card>;
+}
 function ConfigMarca(){
   const { marca, setMarca } = useStore();
   const toast=useContext(ToastCtx);
@@ -4698,7 +4740,7 @@ function ConvitesPage(){
       salario:Number(novo.salario)||0, valor:Number(novo.valor)||0, status:"aberto", criadoEm:Date.now(), expira:Date.now()+30*864e5,
       criadoPor:((window.__WPAUTH&&window.__WPAUTH.currentUser)||{}).email||"" };
     try{ await tCol("convites").doc(token).set(doc); setCriado({...doc,id:token}); setNovo(null); }
-    catch(e){ toast("Não foi possível criar o convite: "+(e.message||e)); }
+    catch(e){ toast("Não foi possível criar o convite: "+erroBanco(e)); }
   };
   const msgWhats=(c)=>`Olá${c.nome?", "+c.nome.split(" ")[0]:""}! Para fazer seu cadastro${c.tipo==="pj"?" como prestador de serviço":""}, abra o link abaixo e envie fotos ou PDFs dos seus documentos — o sistema preenche os dados automaticamente:\n${linkConvite(c.id)}`;
   const abrirWhats=(c)=>{ const tel=c.tel?(c.tel.length<=11?"55"+c.tel:c.tel):""; window.open("https://wa.me/"+tel+"?text="+encodeURIComponent(msgWhats(c)),"_blank"); };

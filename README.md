@@ -54,6 +54,6 @@ Novas coleções. No cliente principal elas ficam na raiz; nos demais clientes, 
 - `acessosColab`: hash SHA-256 do PIN de cada colaborador (o PIN em si não é guardado).
 - `convites`: links de cadastro (o candidato precisa ler o convite e marcá-lo como preenchido sem login).
 
-Se as regras do Firestore liberam coleção por coleção, inclua essas quatro com as mesmas permissões de `atestados`/`ajustes`.
+Se as regras do Firestore liberam coleção por coleção, cole os blocos de `docs/firestore-regras-novas.rules` dentro de `match /databases/{database}/documents { ... }` (Firebase → Firestore Database → Regras) e publique. O painel tem *Configurações → Banco de dados → Verificar permissões* para conferir e um botão que copia essas regras.
 
 > **Atenção:** o app do colaborador funciona sem login do Firebase, como o quiosque de ponto. Por isso a proteção dos holerites depende do CPF + PIN dentro do app. Para blindar no nível do banco, o próximo passo é criar regras do Firestore que exijam autenticação para ler `arquivos` e `arquivos_partes`, com o colaborador autenticado por Firebase Auth.
