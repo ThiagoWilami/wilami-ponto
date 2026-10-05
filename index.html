@@ -318,6 +318,8 @@ function useTenants(){
   const add=(obj)=>{ const db=window.__WPDB; if(!db) return Promise.reject(new Error("sem-banco")); return db.collection("tenants").add(obj); };
   return [items,{add}];
 }
+// Unidade tem coordenadas válidas? (unidade nova pode vir sem lat/lng → null)
+const temCoordenadas=(u)=> !!u && Number.isFinite(Number(u.lat)) && Number.isFinite(Number(u.lng)) && u.lat!=null && u.lng!=null && !(Number(u.lat)===0 && Number(u.lng)===0);
 function haversine(la1,lo1,la2,lo2){
   const R=6371000, r=Math.PI/180, dLa=(la2-la1)*r, dLo=(lo2-lo1)*r;
   const a=Math.sin(dLa/2)**2+Math.cos(la1*r)*Math.cos(la2*r)*Math.sin(dLo/2)**2;
@@ -1938,7 +1940,8 @@ function PontoKiosk({ mode, onClose }) {
   const pegarGeo=()=>{ setGeoErr(null);
     if(!navigator.geolocation){ setGeoErr("Geolocalização não suportada."); return; }
     navigator.geolocation.getCurrentPosition(
-      pos=>{ const {latitude,longitude}=pos.coords; const dist=haversine(latitude,longitude,unidade.lat,unidade.lng); setGeo({dist,ok:dist<=unidade.raio}); },
+      pos=>{ if(!temCoordenadas(unidade)){ setGeoErr("A unidade "+(unidade&&unidade.nome||"")+" ainda não tem localização cadastrada — avise o gestor. Registro liberado sem cerca."); setGeo({dist:0,ok:true}); return; }
+        const {latitude,longitude}=pos.coords; const dist=haversine(latitude,longitude,Number(unidade.lat),Number(unidade.lng)); setGeo({dist,ok:dist<=(Number(unidade.raio)||100)}); },
       ()=>{ setGeoErr("Permissão de GPS negada. Simulando posição dentro da cerca."); setGeo({dist:38,ok:true}); }, {enableHighAccuracy:true,timeout:8000}); };
   const simGeo=()=>setGeo({dist:42,ok:true});
 
@@ -2912,9 +2915,10 @@ function Pagamentos() {
 
 /* ============================ UNIDADES (CRUD) ============================ */
 function UnidadeForm({ inicial, onSalvar, onClose }) {
-  const [u,setU]=useState(inicial || { nome:"", end:"", lat:-23.55, lng:-46.63, raio:100, cor:"#6366f1" });
+  const [u,setU]=useState(()=>({ nome:"", end:"", lat:null, lng:null, raio:100, cor:"#2f6f2a", ...(inicial||{}) }));
+  const numOuNulo=(v)=> v===""||v==null ? null : Number(v);
   const set=(k,v)=>setU(p=>({...p,[k]:v}));
-  const cores=["#6366f1","#f97316","#10b981","#0ea5e9","#e11d48","#8b5cf6"];
+  const cores=["#2f6f2a","#d39520","#6366f1","#f97316","#10b981","#0ea5e9","#e11d48","#8b5cf6"];
   const [geoMsg,setGeoMsg]=useState(null);      // {tone:'ok'|'erro'|'buscando', txt}
   const [buscando,setBuscando]=useState(false);
   // Usa a localização ATUAL do dispositivo (GPS/Wi-Fi) para preencher latitude/longitude.
@@ -2930,7 +2934,7 @@ function UnidadeForm({ inicial, onSalvar, onClose }) {
         setGeoMsg({tone:"erro",txt: err && err.code===1 ? "Permissão de localização negada. Autorize o acesso no navegador e tente de novo." : "Não foi possível obter a localização agora. Tente novamente."}); },
       {enableHighAccuracy:true, timeout:10000, maximumAge:0});
   };
-  const temCoord = Number.isFinite(u.lat) && Number.isFinite(u.lng) && !(u.lat===0 && u.lng===0);
+  const temCoord = temCoordenadas(u);
   // Mapa do Google embutido (sem chave de API) mostrando o ponto marcado.
   const mapSrc = temCoord ? `https://www.google.com/maps?q=${u.lat},${u.lng}&z=16&hl=pt-BR&output=embed` : null;
   const mapLink = temCoord ? `https://www.google.com/maps?q=${u.lat},${u.lng}` : null;
@@ -2952,9 +2956,9 @@ function UnidadeForm({ inicial, onSalvar, onClose }) {
         <span>{geoMsg.txt}</span></div>}
 
       <div className="grid grid-cols-3 gap-3">
-        <Field label="Latitude"><Input type="number" step="0.000001" value={u.lat} onChange={e=>set("lat",Number(e.target.value))}/></Field>
-        <Field label="Longitude"><Input type="number" step="0.000001" value={u.lng} onChange={e=>set("lng",Number(e.target.value))}/></Field>
-        <Field label="Cerca (m)"><Input type="number" value={u.raio} onChange={e=>set("raio",Number(e.target.value))}/></Field>
+        <Field label="Latitude"><Input type="number" step="0.000001" value={u.lat??""} placeholder="-23.550000" onChange={e=>set("lat",numOuNulo(e.target.value))}/></Field>
+        <Field label="Longitude"><Input type="number" step="0.000001" value={u.lng??""} placeholder="-46.630000" onChange={e=>set("lng",numOuNulo(e.target.value))}/></Field>
+        <Field label="Cerca (m)"><Input type="number" value={u.raio??""} onChange={e=>set("raio",numOuNulo(e.target.value))}/></Field>
       </div>
 
       {mapSrc && <div>
@@ -2971,7 +2975,8 @@ function UnidadeForm({ inicial, onSalvar, onClose }) {
       <Field label="Cor"><div className="flex gap-2">{cores.map(c=><button key={c} onClick={()=>set("cor",c)} className={cx("w-8 h-8 rounded-lg shadow", u.cor===c&&"ring-2 ring-offset-2 ring-slate-400")} style={{background:c}}/>)}</div></Field>
     </div>
     <div className="flex gap-2 mt-6"><Btn variant="ghost" className="flex-1" onClick={onClose}>Cancelar</Btn>
-      <Btn className="flex-1" icon={I.check} disabled={!u.nome.trim()} onClick={()=>onSalvar(u)}>{inicial?"Salvar":"Criar unidade"}</Btn></div>
+      <Btn className="flex-1" icon={I.check} disabled={!u.nome.trim()} onClick={()=>onSalvar({...u, nome:u.nome.trim(), raio:Number(u.raio)||100})}>{inicial?"Salvar":"Criar unidade"}</Btn></div>
+    {!temCoord && <p className="text-xs text-amber-600 mt-3 text-center">Sem localização, a unidade é criada normalmente — defina as coordenadas depois para ativar a cerca virtual do ponto.</p>}
   </div>;
 }
 function Unidades() {
@@ -3001,8 +3006,8 @@ function Unidades() {
             </div>
             <p className="text-sm text-slate-500 mt-1 min-h-[2.5rem]">{u.end}</p>
             <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
-              <div className="p-2 rounded-lg bg-slate-50"><div className="text-slate-400">Cerca</div><div className="font-semibold text-slate-800">{u.raio} m</div></div>
-              <div className="p-2 rounded-lg bg-slate-50"><div className="text-slate-400">Coordenadas</div><div className="font-semibold text-slate-800 tabular-nums">{u.lat.toFixed(3)}, {u.lng.toFixed(3)}</div></div>
+              <div className="p-2 rounded-lg bg-slate-50"><div className="text-slate-400">Cerca</div><div className="font-semibold text-slate-800">{u.raio||0} m</div></div>
+              <div className="p-2 rounded-lg bg-slate-50"><div className="text-slate-400">Coordenadas</div><div className="font-semibold text-slate-800 tabular-nums">{temCoordenadas(u) ? Number(u.lat).toFixed(3)+", "+Number(u.lng).toFixed(3) : <span className="text-amber-600">não definidas</span>}</div></div>
             </div>
             <div className="mt-3 flex gap-2">
               <Btn size="sm" variant="ghost" icon={I.edit} className="flex-1" onClick={()=>setForm({inicial:u})}>Editar</Btn>
@@ -4958,6 +4963,26 @@ function ConviteCadastro({onClose}){
   </>);
 }
 
+/* ============================ PROTEÇÃO CONTRA TELA BRANCA ============================ */
+class ErroTela extends React.Component{
+  constructor(p){ super(p); this.state={erro:null}; }
+  static getDerivedStateFromError(erro){ return {erro}; }
+  componentDidCatch(erro,info){ try{ console.error("Erro na tela:",erro,info&&info.componentStack); }catch(e){} }
+  componentDidUpdate(prev){ if(prev.chave!==this.props.chave && this.state.erro) this.setState({erro:null}); }
+  render(){
+    if(!this.state.erro) return this.props.children;
+    return <div className="max-w-lg mx-auto mt-10 text-center">
+      <div className="w-14 h-14 mx-auto rounded-2xl bg-amber-50 text-amber-500 grid place-items-center mb-3"><Icon d={I.help} className="w-7 h-7"/></div>
+      <h2 className="text-xl font-bold text-slate-900">Esta tela encontrou um problema</h2>
+      <p className="text-slate-500 text-sm mt-1">Os seus dados estão salvos. Volte ao painel ou recarregue a página. Se continuar, envie esta mensagem ao suporte:</p>
+      <pre className="mt-3 p-3 rounded-xl bg-slate-100 text-left text-xs text-slate-600 whitespace-pre-wrap break-all">{String(this.state.erro&&this.state.erro.message||this.state.erro)}</pre>
+      <div className="flex gap-2 justify-center mt-4">
+        {this.props.onVoltar && <Btn variant="ghost" onClick={()=>{ this.setState({erro:null}); this.props.onVoltar(); }}>Voltar ao painel</Btn>}
+        <Btn onClick={()=>location.reload()}>Recarregar</Btn>
+      </div>
+    </div>;
+  }
+}
 /* ============================ APP SHELL ============================ */
 /* ============================ AJUSTES DE PONTO (aprovação do gestor) ============================ */
 function AjustesPonto(){
@@ -5314,7 +5339,7 @@ function Shell({ onLogout }) {
             <button onClick={()=>setView("ajustes")} title={ajustesPend?ajustesPend+" ajuste(s) de ponto aguardando aprovação":"Sem pendências"} className="relative w-9 h-9 rounded-xl bg-white border border-slate-200 grid place-items-center text-slate-500 hover:bg-slate-50"><Icon d={I.bell} className="w-4 h-4"/>{ajustesPend>0 && <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold grid place-items-center">{ajustesPend}</span>}</button>
           </div>
         </header>
-        <main className="flex-1 px-4 lg:px-8 py-5">{views[view]}</main>
+        <main className="flex-1 px-4 lg:px-8 py-5"><ErroTela chave={view} onVoltar={()=>setView("dashboard")}>{views[view]}</ErroTela></main>
       </div>
     </div>
     <div className="fixed bottom-5 right-5 z-[60] space-y-2">
