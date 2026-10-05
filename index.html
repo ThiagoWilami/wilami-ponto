@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- build: Convites de cadastro com leitura automática dos documentos | PJ na escala + financeiro PJ + correção de gravação/órfãos | Marca WILAMI (verde/dourado) + Arquivos & pastas por pessoa + Holerites no app (CPF+PIN) + Prestadores PJ + assinatura DocuSign 2026-10-03 -->
+<!-- build: dados novos na coleção ajustes (sem mexer nas regras) | Convites de cadastro com leitura automática dos documentos | PJ na escala + financeiro PJ + correção de gravação/órfãos | Marca WILAMI (verde/dourado) + Arquivos & pastas por pessoa + Holerites no app (CPF+PIN) + Prestadores PJ + assinatura DocuSign 2026-10-03 -->
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8" />
@@ -589,17 +589,44 @@ const escalaInicial = () => {
 /* ============================ ARQUIVOS (pastas, holerites, contratos) ============================ */
 // Cada arquivo = 1 documento de METADADOS em "arquivos" + N "partes" (base64 fatiado) em "arquivos_partes".
 // O fatiamento contorna o limite de 1 MB por documento do Firestore (aceita PDFs de até ~12 MB).
+/* ===== Coleções "virtuais" guardadas dentro de uma coleção que o banco JÁ libera ===== */
+// Convites, arquivos (pastas/holerites), partes dos arquivos e PINs ficam na coleção "ajustes",
+// cada tipo com um prefixo no id e o campo _t. Assim nada precisa ser alterado nas regras do Firebase.
+// Esses documentos não têm o campo "ts" (é guardado como "_ts"), então NÃO aparecem na lista de
+// ajustes de ponto, que é ordenada por "ts".
+const COL_HOSPEDEIRA="ajustes";
+const COL_VIRTUAL={ arquivos:["arq_","arquivo"], arquivos_partes:["arqp_","arquivo_parte"], acessosColab:["pin_","pin"], convites:["conv_","convite"] };
+const _vEntrada=(nome,data)=>{ const o={...data, _t:COL_VIRTUAL[nome][1]}; if("ts" in o){ o._ts=o.ts; delete o.ts; } return o; };
+const _vSaida=(data)=>{ const o={...(data||{})}; if("_ts" in o){ o.ts=o._ts; delete o._ts; } delete o._t; return o; };
+function nCol(nome){
+  const [pre,tipo]=COL_VIRTUAL[nome];
+  const host=()=>tCol(COL_HOSPEDEIRA);
+  const snapDoc=(d)=>({ id:d.id.slice(pre.length), exists:d.exists && !(d.data()||{})._excluido, data:()=>_vSaida(d.data()) });
+  const wrapQuery=(q)=>({
+    where:(f,op,v)=>wrapQuery(q.where(f,op,v)),
+    onSnapshot:(cb,err)=>q.onSnapshot(function(snap){ const docs=[]; snap.forEach(function(d){ const x=d.data()||{}; if(x._t===tipo && !x._excluido && d.id.indexOf(pre)===0) docs.push(snapDoc(d)); }); cb({ forEach:(fn)=>docs.forEach(fn), docs }); }, err),
+  });
+  const doc=(id)=>{ const ref=id ? host().doc(pre+id) : host().doc(); const vid=id || ref.id; const real=id?ref:host().doc(pre+vid);
+    return { id:vid,
+      set:(data,opts)=>real.set(_vEntrada(nome,data),opts),
+      get:()=>real.get().then(snapDoc),
+      // apaga de verdade; se as regras não deixarem apagar, marca como excluído (some do sistema)
+      delete:()=>real.delete().catch(()=>real.set(nome==="arquivos_partes"?{d:"",_excluido:true}:{_excluido:true},{merge:true})),
+    }; };
+  // filtro único por campo (evita precisar de índice composto); o tipo é conferido no cliente
+  return { doc, onSnapshot:wrapQuery(host().where("_t","==",tipo)).onSnapshot, where:(f,op,v)=>wrapQuery(host().where(f,op,v)) };
+}
 // Mensagem clara quando as regras do Firestore bloqueiam uma coleção nova
 const ehErroPermissao=(e)=> !!e && (e.code==="permission-denied" || /insufficient permissions/i.test(String(e.message||e)));
 const erroBanco=(e)=> ehErroPermissao(e)
-  ? "o banco de dados (Firebase) ainda não libera este recurso. Atualize as regras em Configurações → Banco de dados."
+  ? "o banco de dados (Firebase) recusou a gravação. Veja Configurações → Banco de dados → Verificar permissões."
   : String((e&&e.message)||e);
 const REGRAS_FIRESTORE_NOVAS = '// ===== Regras para as coleções novas do Wilami Ponto & RH =====\n// Cole estes blocos DENTRO do bloco existente:\n//   match /databases/{database}/documents { ... }\n// sem apagar as regras que você já tem.\n// Se você usa vários clientes (tenants) e as regras de /tenants/... NÃO liberam tudo,\n// copie os mesmos blocos também para dentro de: match /tenants/{tenant} { ... }\n\n// Arquivos (pastas, holerites, contratos, documentos do convite)\nmatch /arquivos/{id} {\n  allow read: if true;                       // app "Meus documentos" lê os próprios arquivos\n  allow create: if true;                     // painel e candidato do convite enviam arquivos\n  allow update: if request.auth != null\n    || request.resource.data.diff(resource.data).affectedKeys().hasOnly([\'vistoEm\']);  // colaborador marca "visto"\n  allow delete: if request.auth != null;\n}\nmatch /arquivos_partes/{id} {\n  allow read: if true;\n  allow create: if true;\n  allow update: if false;\n  allow delete: if request.auth != null;\n}\n\n// PIN do app "Meus documentos" (só o hash é guardado). Só o RH (logado) define ou redefine.\nmatch /acessosColab/{id} {\n  allow read: if true;\n  allow write: if request.auth != null;\n}\n\n// Convites de cadastro (link enviado ao candidato)\nmatch /convites/{token} {\n  allow read: if true;\n  allow create, delete: if request.auth != null;\n  allow update: if request.auth != null\n    || (resource.data.status == \'aberto\'\n        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([\'status\',\'preenchidoEm\',\'pessoaKey\',\'nome\']));\n}\n';
 // Testa se cada coleção nova aceita gravação (cria e apaga um documento de teste)
 async function testarPermissoesBanco(){
   const out=[];
   for(const col of ["arquivos","arquivos_partes","acessosColab","convites"]){
-    const ref=tCol(col).doc("_teste_permissao_"+Math.random().toString(36).slice(2,8));
+    const ref=nCol(col).doc("_teste_permissao_"+Math.random().toString(36).slice(2,8));
     try{ await ref.set({teste:true, ts:Date.now()}); await ref.delete().catch(()=>{}); out.push({col, ok:true}); }
     catch(e){ out.push({col, ok:false, msg: ehErroPermissao(e)?"bloqueada pelas regras":String(e.message||e)}); }
   }
@@ -637,10 +664,10 @@ async function arqSalvar(meta, dataUrl){
   const b64=dataUrl.slice(m[0].length);
   const tamanho=Math.round(b64.length*3/4);
   if(tamanho>ARQ_MAX_BYTES) throw new Error("Arquivo maior que "+fmtBytes(ARQ_MAX_BYTES)+".");
-  const ref=tCol("arquivos").doc();
+  const ref=nCol("arquivos").doc();
   const partes=[]; for(let i=0;i<b64.length;i+=ARQ_PARTE) partes.push(b64.slice(i,i+ARQ_PARTE));
   // partes primeiro; o metadado só aparece quando o conteúdo já está completo
-  await Promise.all(partes.map((d,i)=>tCol("arquivos_partes").doc(ref.id+"_"+i).set({f:ref.id,i,d})));
+  await Promise.all(partes.map((d,i)=>nCol("arquivos_partes").doc(ref.id+"_"+i).set({f:ref.id,i,d})));
   const user=window.__WPAUTH&&window.__WPAUTH.currentUser;
   await ref.set({ ...meta, mime:m[1]||"application/octet-stream", tamanho, partes:partes.length, ts:Date.now(), autor:(user&&user.email)||meta.autor||"" });
   return ref.id;
@@ -648,7 +675,7 @@ async function arqSalvar(meta, dataUrl){
 async function arqConteudo(meta){
   const db=window.__WPDB; if(!db) throw new Error("Sem conexão com o banco de dados.");
   const n=Number(meta.partes)||0; const ids=Array.from({length:n},(_,i)=>meta.id+"_"+i);
-  const snaps=await Promise.all(ids.map(id=>tCol("arquivos_partes").doc(id).get()));
+  const snaps=await Promise.all(ids.map(id=>nCol("arquivos_partes").doc(id).get()));
   const b64=snaps.map(s=>(s.exists&&s.data().d)||"").join("");
   return "data:"+(meta.mime||"application/octet-stream")+";base64,"+b64;
 }
@@ -668,15 +695,15 @@ async function arqBaixar(meta){
 }
 async function arqRemover(meta){
   const n=Number(meta.partes)||0;
-  await tCol("arquivos").doc(meta.id).delete();
-  await Promise.all(Array.from({length:n},(_,i)=>tCol("arquivos_partes").doc(meta.id+"_"+i).delete().catch(()=>{})));
+  await nCol("arquivos").doc(meta.id).delete();
+  await Promise.all(Array.from({length:n},(_,i)=>nCol("arquivos_partes").doc(meta.id+"_"+i).delete().catch(()=>{})));
 }
-function arqAtualizar(id,patch){ return tCol("arquivos").doc(id).set(patch,{merge:true}); }
+function arqAtualizar(id,patch){ return nCol("arquivos").doc(id).set(patch,{merge:true}); }
 // Metadados de TODOS os arquivos do cliente (só carrega no painel logado)
 function useArquivosMeta(ativo){
   const [items,setItems]=useState([]);
   useEffect(()=>{ const db=window.__WPDB; if(!db||!ativo) return;
-    try{ return tCol("arquivos").onSnapshot(function(snap){ const arr=[]; snap.forEach(function(d){ arr.push({...(d.data()||{}), id:d.id}); }); arr.sort((a,b)=>(b.ts||0)-(a.ts||0)); setItems(arr); }, function(){}); }catch(e){}
+    try{ return nCol("arquivos").onSnapshot(function(snap){ const arr=[]; snap.forEach(function(d){ arr.push({...(d.data()||{}), id:d.id}); }); arr.sort((a,b)=>(b.ts||0)-(a.ts||0)); setItems(arr); }, function(){}); }catch(e){}
   },[ativo]);
   return [items];
 }
@@ -684,7 +711,7 @@ function useArquivosMeta(ativo){
 function useAcessosColab(ativo){
   const [items,setItems]=useState({});
   useEffect(()=>{ const db=window.__WPDB; if(!db||!ativo) return;
-    try{ return tCol("acessosColab").onSnapshot(function(snap){ const o={}; snap.forEach(function(d){ o[d.id]=d.data()||{}; }); setItems(o); }, function(){}); }catch(e){}
+    try{ return nCol("acessosColab").onSnapshot(function(snap){ const o={}; snap.forEach(function(d){ o[d.id]=d.data()||{}; }); setItems(o); }, function(){}); }catch(e){}
   },[ativo]);
   return [items];
 }
@@ -696,7 +723,7 @@ async function pinHash(cpf,pin){
 function gerarPin(){ const a=new Uint32Array(1); crypto.getRandomValues(a); return String(a[0]%1000000).padStart(6,"0"); }
 async function definirPinColab(donoKey,cpf,pin,extra){
   const hash=await pinHash(cpf,pin);
-  return tCol("acessosColab").doc(donoKey).set({ hash, cpf:soDigitos(cpf), atualizadoEm:Date.now(), ...(extra||{}) },{merge:true});
+  return nCol("acessosColab").doc(donoKey).set({ hash, cpf:soDigitos(cpf), atualizadoEm:Date.now(), ...(extra||{}) },{merge:true});
 }
 // ---- Bibliotecas de PDF carregadas sob demanda (só quando o gestor usa holerites/assinatura) ----
 const _scripts={};
@@ -4489,7 +4516,7 @@ function PortalColab({onClose}){
     if(!window.__WPDB){ setErro("Sem conexão com o sistema. Tente novamente."); return; }
     setEntrando(true);
     try{
-      const s=await tCol("acessosColab").doc(key).get();
+      const s=await nCol("acessosColab").doc(key).get();
       if(!s.exists){ setErro("Seu acesso ainda não foi liberado. Peça seu PIN ao RH."); setEntrando(false); return; }
       const h=await pinHash(d,pin);
       if(h!==(s.data()||{}).hash){
@@ -4505,7 +4532,7 @@ function PortalColab({onClose}){
   };
   const sair=()=>{ setSessao(null); setArqs(null); try{ sessionStorage.removeItem(tKey("portal")); }catch(e){} };
   useEffect(()=>{ if(!sessao||!window.__WPDB) return;
-    try{ return tCol("arquivos").where("donoKey","==",sessao.key).onSnapshot(function(snap){ const a=[]; snap.forEach(function(d){ const x={...(d.data()||{}),id:d.id}; if(x.visivelColab) a.push(x); }); setArqs(a); }, function(){ setArqs([]); }); }catch(e){ setArqs([]); }
+    try{ return nCol("arquivos").where("donoKey","==",sessao.key).onSnapshot(function(snap){ const a=[]; snap.forEach(function(d){ const x={...(d.data()||{}),id:d.id}; if(x.visivelColab) a.push(x); }); setArqs(a); }, function(){ setArqs([]); }); }catch(e){ setArqs([]); }
   },[sessao&&sessao.key]);
   const abrir=async(a)=>{ setAbrindo(a.id); try{ await arqAbrir(a); if(!a.vistoEm) arqAtualizar(a.id,{vistoEm:Date.now()}).catch(()=>{}); }catch(e){ alert("Não foi possível abrir o arquivo."); } setAbrindo(""); };
   const hol=(arqs||[]).filter(a=>a.categoria==="holerite").sort((a,b)=>String(b.competencia||"").localeCompare(String(a.competencia||""))||(b.ts||0)-(a.ts||0));
@@ -4561,16 +4588,15 @@ function ConfigBanco(){
   const bloqueadas=(res||[]).filter(r=>!r.ok);
   return <Card className="p-5 lg:col-span-2">
     <h3 className="font-bold text-slate-900 mb-1 flex items-center gap-2"><Icon d={I.shield} className="w-4 h-4 text-brand-600"/>Banco de dados (permissões)</h3>
-    <p className="text-sm text-slate-500 mb-3">Pastas, holerites, PIN do colaborador e convites usam coleções novas no Firebase. Se aparecer “Missing or insufficient permissions”, as regras do Firestore precisam liberar essas coleções.</p>
+    <p className="text-sm text-slate-500 mb-3">Pastas, holerites, PIN do colaborador e convites são guardados numa coleção que o banco já libera — não é preciso mexer nas regras do Firebase. Use o botão abaixo para conferir se está tudo gravando.</p>
     <div className="flex flex-wrap gap-2">
       <Btn size="sm" variant="ghost" icon={I.refresh} disabled={testando} onClick={testar}>{testando?"Verificando…":"Verificar permissões"}</Btn>
-      <Btn size="sm" variant="soft" icon={I.copy} onClick={()=>{ copyText(REGRAS_FIRESTORE_NOVAS); toast("Regras copiadas"); }}>Copiar regras para o Firebase</Btn>
-      <button onClick={()=>setVer(!ver)} className="text-sm font-semibold text-brand-700 hover:underline">{ver?"Ocultar":"Ver"} passo a passo</button>
+      {bloqueadas.length>0 && <Btn size="sm" variant="soft" icon={I.copy} onClick={()=>{ copyText(REGRAS_FIRESTORE_NOVAS); toast("Regras copiadas"); }}>Copiar regras para o Firebase</Btn>}
     </div>
     {res && <div className="grid sm:grid-cols-2 gap-2 mt-3">{res.map(r=><div key={r.col} className={cx("flex items-center gap-2 p-2.5 rounded-xl text-sm", r.ok?"bg-emerald-50 text-emerald-700":"bg-rose-50 text-rose-700")}>
       <Icon d={r.ok?I.check:I.x} className="w-4 h-4 shrink-0"/><span className="font-semibold">{NOMES[r.col]}</span><span className="ml-auto text-xs">{r.ok?"liberada":r.msg}</span></div>)}</div>}
     {res && bloqueadas.length===0 && <p className="text-sm text-emerald-700 mt-2 font-semibold">Tudo liberado ✓</p>}
-    {(ver || bloqueadas.length>0) && <ol className="list-decimal pl-5 mt-3 space-y-1 text-sm text-slate-600">
+    {bloqueadas.length>0 && <ol className="list-decimal pl-5 mt-3 space-y-1 text-sm text-slate-600">
       <li>Clique em <b>Copiar regras para o Firebase</b>.</li>
       <li>Abra <a className="text-brand-700 underline" href="https://console.firebase.google.com/project/twilami-ponto/firestore/rules" target="_blank" rel="noreferrer">Firebase → Firestore Database → Regras</a>.</li>
       <li>Cole o texto copiado <b>dentro</b> do bloco <code>match /databases/{"{database}"}/documents {"{ … }"}</code>, logo antes do último <code>{"}"}</code> — sem apagar as regras que já existem.</li>
@@ -4688,7 +4714,7 @@ const linkConvite=(token)=> comTenantUrl(location.origin+location.pathname, "con
 function useConvites(ativo){
   const [items,setItems]=useState([]);
   useEffect(()=>{ const db=window.__WPDB; if(!db||!ativo) return;
-    try{ return tCol("convites").onSnapshot(function(snap){ const a=[]; snap.forEach(function(d){ a.push({...(d.data()||{}), id:d.id}); }); a.sort((x,y)=>(y.criadoEm||0)-(x.criadoEm||0)); setItems(a); }, function(){}); }catch(e){}
+    try{ return nCol("convites").onSnapshot(function(snap){ const a=[]; snap.forEach(function(d){ a.push({...(d.data()||{}), id:d.id}); }); a.sort((x,y)=>(y.criadoEm||0)-(x.criadoEm||0)); setItems(a); }, function(){}); }catch(e){}
   },[ativo]);
   return items;
 }
@@ -4709,7 +4735,9 @@ async function lerDocumentoIA(arquivo, esperado, convite){
 function ConvitesPage(){
   const { unidades, clts, pjs, can } = useStore();
   const toast=useContext(ToastCtx);
-  const convites=useConvites(true);
+  const convitesBrutos=useConvites(true);
+  const porConvite={}; [...clts.map(p=>["clt",p]), ...pjs.map(p=>["pj",p])].forEach(([t,p])=>{ if(p.conviteId) porConvite[p.conviteId]=t+"-"+p.id; });
+  const convites=convitesBrutos.map(c=> c.status==="aberto" && porConvite[c.id] ? {...c, status:"preenchido", pessoaKey:porConvite[c.id], preenchidoEm:c.preenchidoEm||c.criadoEm} : c);
   const [novo,setNovo]=useState(null);   // formulário de novo convite
   const [criado,setCriado]=useState(null);
   const [ver,setVer]=useState(null);
@@ -4719,12 +4747,12 @@ function ConvitesPage(){
     const doc={ tipo:novo.tipo, nome:(novo.nome||"").trim(), tel:soDigitos(novo.tel), unidade:novo.unidade, cargo:novo.tipo==="clt"?novo.cargo:"", servico:novo.tipo==="pj"?(novo.servico||""):"",
       salario:Number(novo.salario)||0, valor:Number(novo.valor)||0, status:"aberto", criadoEm:Date.now(), expira:Date.now()+30*864e5,
       criadoPor:((window.__WPAUTH&&window.__WPAUTH.currentUser)||{}).email||"" };
-    try{ await tCol("convites").doc(token).set(doc); setCriado({...doc,id:token}); setNovo(null); }
+    try{ await nCol("convites").doc(token).set(doc); setCriado({...doc,id:token}); setNovo(null); }
     catch(e){ toast("Não foi possível criar o convite: "+erroBanco(e)); }
   };
   const msgWhats=(c)=>`Olá${c.nome?", "+c.nome.split(" ")[0]:""}! Para fazer seu cadastro${c.tipo==="pj"?" como prestador de serviço":""}, abra o link abaixo e envie fotos ou PDFs dos seus documentos — o sistema preenche os dados automaticamente:\n${linkConvite(c.id)}`;
   const abrirWhats=(c)=>{ const tel=c.tel?(c.tel.length<=11?"55"+c.tel:c.tel):""; window.open("https://wa.me/"+tel+"?text="+encodeURIComponent(msgWhats(c)),"_blank"); };
-  const cancelar=(c)=>{ if(!confirm("Cancelar este convite? O link deixa de funcionar.")) return; tCol("convites").doc(c.id).set({status:"cancelado"},{merge:true}).then(()=>toast("Convite cancelado")); };
+  const cancelar=(c)=>{ if(!confirm("Cancelar este convite? O link deixa de funcionar.")) return; nCol("convites").doc(c.id).set({status:"cancelado"},{merge:true}).then(()=>toast("Convite cancelado")); };
   const pessoaDo=(c)=>{ if(!c.pessoaKey) return null; const [t,...rest]=c.pessoaKey.split("-"); const id=rest.join("-"); return (t==="pj"?pjs:clts).find(p=>String(p.id)===id); };
   const lista=convites.filter(c=> filtro==="todos" || (filtro==="aberto"?c.status==="aberto":filtro==="preenchido"?c.status==="preenchido":c.status==="cancelado"||(c.status==="aberto"&&c.expira<Date.now())));
   const STATUS_C={ aberto:["Aguardando o candidato","amber"], preenchido:["Cadastro recebido","green"], cancelado:["Cancelado","slate"] };
@@ -4847,7 +4875,7 @@ function ConviteCadastro({onClose}){
   const [erro,setErro]=useState("");
   const [aceite,setAceite]=useState(false);
   useEffect(()=>{ const db=window.__WPDB; if(!db||!token){ setConv(null); return; }
-    tCol("convites").doc(token).get().then(s=>{ const d=s.exists?s.data():null; setConv(d && d.status==="aberto" && !(d.expira<Date.now()) ? d : (d?{...d,_fechado:true}:null)); }).catch(()=>setConv(null));
+    nCol("convites").doc(token).get().then(s=>{ const d=s.exists?s.data():null; setConv(d && d.status==="aberto" && !(d.expira<Date.now()) ? d : (d?{...d,_fechado:true}:null)); }).catch(()=>setConv(null));
   },[token]);
   const tipo=(conv&&conv.tipo)||"clt";
   const slots=CONVITE_DOCS[tipo]||CONVITE_DOCS.clt;
@@ -4905,7 +4933,7 @@ function ConviteCadastro({onClose}){
         ? { ...comum, tipo:"pj", nome:nomePessoa, cnpj:f.cnpj||"", responsavel:f.responsavel||"", cpf:f.cpf||"", servico:conv.servico||f.atividade||"", valor:Number(conv.valor)||0, diaPagamento:5, formaPagamento:"Pix", unidade:conv.unidade==null?"todas":conv.unidade, inicio:hojeStr() }
         : { ...comum, tipo:"clt", nome:nomePessoa, cpf:f.cpf||"", cargo:conv.cargo||CARGOS[0], setor:SETOR_POR_CARGO[conv.cargo]||"salao", escala:"6x1", folgaDia:6, unidade:conv.unidade, salario:Number(conv.salario)||0, vt:0, admissao:"", foto };
       await ref.set(dados);
-      await tCol("convites").doc(token).set({ status:"preenchido", preenchidoEm:Date.now(), pessoaKey:donoKey, nome:nomePessoa },{merge:true});
+      await nCol("convites").doc(token).set({ status:"preenchido", preenchidoEm:Date.now(), pessoaKey:donoKey, nome:nomePessoa },{merge:true}).catch(()=>{});
       setEtapa("ok");
     }catch(e){ setErro("Não foi possível enviar agora. Verifique sua internet e tente novamente."); setEtapa("form"); }
   };

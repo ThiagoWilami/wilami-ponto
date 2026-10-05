@@ -94,8 +94,9 @@ module.exports = async function handler(req, res) {
       if (!/^[A-Za-z0-9_-]{16,64}$/.test(token) || (tenant && !/^[A-Za-z0-9_-]{1,64}$/.test(tenant))) {
         return res.status(401).json({ erro: "Convite inválido." });
       }
-      const conv = await lerDocFirestore((tenant ? `tenants/${tenant}/` : "") + `convites/${token}`);
-      if (!conv || conv.status !== "aberto" || (conv.expira && Number(conv.expira) < Date.now())) {
+      // convites ficam guardados na coleção "ajustes" com prefixo "conv_" (ver nCol no index.html)
+      const conv = await lerDocFirestore((tenant ? `tenants/${tenant}/` : "") + `ajustes/conv_${token}`);
+      if (!conv || conv._t !== "convite" || conv._excluido || conv.status !== "aberto" || (conv.expira && Number(conv.expira) < Date.now())) {
         return res.status(403).json({ erro: "Este link de cadastro expirou ou já foi usado. Peça um novo link à empresa." });
       }
     }

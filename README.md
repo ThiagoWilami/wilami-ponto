@@ -47,13 +47,15 @@ Só quem tem um convite válido (aberto e dentro do prazo de 30 dias) ou um usu�
 
 ## Banco de dados (Firestore)
 
-Novas coleções. No cliente principal elas ficam na raiz; nos demais clientes, em `tenants/{id}/...`:
+Os dados novos ficam na coleção `ajustes`, que as regras do Firestore já liberam. Por isso **não é preciso alterar as regras do Firebase**. Cada tipo usa um prefixo no id e o campo `_t`:
 
-- `arquivos`: metadados de cada arquivo (pasta, dono, holerite, competência, status de assinatura).
-- `arquivos_partes`: conteúdo do arquivo em base64, fatiado em partes de ~525 KB. Cada arquivo aceita até 12 MB.
-- `acessosColab`: hash SHA-256 do PIN de cada colaborador (o PIN em si não é guardado).
-- `convites`: links de cadastro (o candidato precisa ler o convite e marcá-lo como preenchido sem login).
+| Tipo | Id do documento | `_t` |
+|---|---|---|
+| Arquivo (pastas, holerites, contratos) | `arq_<id>` | `arquivo` |
+| Conteúdo do arquivo (base64 fatiado, ~525 KB por parte, até 12 MB) | `arqp_<id>_<n>` | `arquivo_parte` |
+| PIN do app do colaborador (só o hash SHA-256) | `pin_<pessoa>` | `pin` |
+| Convite de cadastro | `conv_<token>` | `convite` |
 
-Se as regras do Firestore liberam coleção por coleção, cole os blocos de `docs/firestore-regras-novas.rules` dentro de `match /databases/{database}/documents { ... }` (Firebase → Firestore Database → Regras) e publique. O painel tem *Configurações → Banco de dados → Verificar permissões* para conferir e um botão que copia essas regras.
+Esses documentos guardam o horário em `_ts`, e não em `ts`, para não aparecerem na lista de *Ajustes de ponto* (que é ordenada por `ts`). O acesso é feito pela função `nCol()` no `index.html`. Se um dia as regras liberarem coleções próprias, basta trocar `nCol` por `tCol`. As regras sugeridas para isso estão em `docs/firestore-regras-novas.rules`.
 
 > **Atenção:** o app do colaborador funciona sem login do Firebase, como o quiosque de ponto. Por isso a proteção dos holerites depende do CPF + PIN dentro do app. Para blindar no nível do banco, o próximo passo é criar regras do Firestore que exijam autenticação para ler `arquivos` e `arquivos_partes`, com o colaborador autenticado por Firebase Auth.
