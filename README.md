@@ -2,6 +2,8 @@
 
 Ponto digital, escala e RH para restaurantes. O app é um único `index.html` (React + Tailwind + Firebase/Firestore) publicado na Vercel. A pasta `api/` tem uma função serverless para a assinatura eletrônica.
 
+**Build:** a Vercel roda `npm run build` (`scripts/build.mjs`). Ele gera `dist/index.html` com o JSX já compilado e o CSS do Tailwind estático, então o navegador não precisa mais baixar o Babel nem gerar CSS ao vivo. O `index.html` da raiz continua sendo o código-fonte e também abre direto no navegador, sem build.
+
 ## Módulos
 
 - **Operação:** painel, escala por unidade, ponto ao vivo, ajustes de ponto.

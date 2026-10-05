@@ -232,9 +232,11 @@ const Donut = ({segments, size=120, label="na escala"}) => {
 };
 
 const ToastCtx = createContext(()=>{});
-const useClock = () => {
+// Relógio que re-renderiza o componente a cada "ms" (padrão 1s). Telas pesadas (folha/pagamentos)
+// usam 60s: recalcular a folha inteira a cada segundo travava os cliques.
+const useClock = (ms=1000) => {
   const [t,setT]=useState(new Date());
-  useEffect(()=>{ const id=setInterval(()=>setT(new Date()),1000); return ()=>clearInterval(id); },[]);
+  useEffect(()=>{ const id=setInterval(()=>setT(new Date()),ms); return ()=>clearInterval(id); },[ms]);
   return t;
 };
 // Banco central em TEMPO REAL (Firestore) com fallback para localStorage.
@@ -930,8 +932,8 @@ function StoreProvider({children}) {
   const podeSigilo = semAuth || ehDono || papelKey==="diretor" || papelKey==="financeira";
   const acesso={ pronto:acessoPronto, ehDono, tenantBind, semAcesso, email:meuEmail, minhaChave, nome:meuNome, papel:meuPapel, papelKey, podeSigilo, casa:casaRestrita };
   // Listas expostas = base (admin) + auto-cadastros do celular (mesclados por vínculo)
-  const clts=[...cltsBase, ...cadAuto.filter(c=>c.tipo==="clt")];
-  const freelas=[...freelasBase, ...cadAuto.filter(c=>c.tipo==="free")];
+  const clts=useMemo(()=>[...cltsBase, ...cadAuto.filter(c=>c.tipo==="clt")],[cltsBase,cadAuto]);
+  const freelas=useMemo(()=>[...freelasBase, ...cadAuto.filter(c=>c.tipo==="free")],[freelasBase,cadAuto]);
   const [escala,setEscala,escalaPronta]=usePersist("escala",SEED_ESCALA);            // padrão semanal (repete toda semana)
   const [escalaOv,setEscalaOv,escalaOvPronta]=usePersist("escalaOv",{});              // exceções por DATA: {unidade:{"AAAA-MM-DD":[...]}}
   const [escalaSeed,setEscalaSeed]=usePersist("escalaSeed",{});         // pids já semeados na auto-escala (nunca re-semear)
@@ -1072,8 +1074,8 @@ function StoreProvider({children}) {
   const removePagamentoCLT=(id,pid)=>setPagCLT(prev=>{ const arr=(prev[String(id)]||[]).filter(x=>x.id!==pid); return {...prev,[String(id)]:arr}; });
   // Diária do freela = dia TRABALHADO: conta quando há CHECK-IN (Entrada) no dia, mesmo sem checkout.
   // (antes exigia checkout → jornada "completo" → valores zeravam quando o freela não batia a saída)
-  const _freelaDias = apurarHoras(registros).filter(x=>x.tipo==="free" && (x.punches||[]).some(pp=>pp.acao==="Entrada"));
-  const freelasComPagamentos = freelas.map(f=>{
+  const _freelaDias = useMemo(()=>apurarHoras(registros).filter(x=>x.tipo==="free" && (x.punches||[]).some(pp=>pp.acao==="Entrada")),[registros]);
+  const freelasComPagamentos = useMemo(()=>freelas.map(f=>{
     const hist=f.jornadasHist||[]; const histDatas=new Set(hist.map(h=>h.data));
     const novos=_freelaDias.filter(x=>x.nome===f.nome && !histDatas.has(x.dia)).map(x=>({
       data:x.dia, unidade:(unidades.find(u=>u.nome===x.unidade)||{}).id,
@@ -1087,7 +1089,7 @@ function StoreProvider({children}) {
       return {...j, valorUnit, turnos, dobra:turnos>=2, editado:aj.valor!=null||aj.turnos!=null, total, valor:total };
     });
     return {...f, jornadasHist:jornadas };
-  });
+  }),[freelas,_freelaDias,frelaAjustes,unidades,cargosFreela]); // eslint-disable-line
   // ---- Escala automática p/ CLT auto-cadastrado (o gestor logado é quem grava a escala) ----
   useEffect(()=>{
     try{
@@ -2338,7 +2340,8 @@ function ColabForm({ tipo, inicial, onSalvar, onClose, vinculo }) {
 function ColaboradoresCLT() {
   const { clts, salvarClt, excluirColab, unidades, registros, pontoHist, can } = useStore();
   const toast=useContext(ToastCtx);
-  const bancoDe=(c)=>{ const meus=apurarHoras([...pontoHist, ...(registros||[])]).filter(x=>x.tipo==="clt"&&x.completo&&x.nome===c.nome);
+  const apurCltTodos=useMemo(()=>apurarHoras([...pontoHist, ...(registros||[])]).filter(x=>x.tipo==="clt"&&x.completo),[pontoHist,registros]);
+  const bancoDe=(c)=>{ const meus=apurCltTodos.filter(x=>x.nome===c.nome);
     const extras=meus.reduce((s,x)=>s+(x.extras||0)+(x.extras100||0),0), atraso=meus.reduce((s,x)=>s+(x.atraso||0),0), not=meus.reduce((s,x)=>s+minutosNoturnos(x.punches||[]),0);
     return {extras,atraso,not,saldo:extras-atraso}; };
   const [q,setQ]=useState("");
@@ -2614,7 +2617,7 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
   const addPag = ehPJ ? addPagamentoPJ : addPagamentoCLT;
   const removePag = ehPJ ? removePagamentoPJ : removePagamentoCLT;
   const toast=useContext(ToastCtx);
-  const _clock=useClock();
+  const _clock=useClock(60000);
   const [aberto,setAberto]=useState(null);
   const [novoPag,setNovoPag]=useState({});
   const podeSigilo=!acesso||acesso.podeSigilo;
@@ -3074,7 +3077,7 @@ function LinksQR() {
 function Financeiro() {
   const { freelasComPagamentos:freelas, clts, pjs, pagamentosPJ, unidades, registros, pontoHist, getDossie, cltExtraAjuste, setCltExtra, acesso, escala, escalaOv, atestados, faltaDescontoDesde, vtDiaPagamento } = useStore();
   const podeSigilo = !acesso || acesso.podeSigilo;   // sem contexto (offline) → mostra tudo
-  const _clock=useClock();
+  const _clock=useClock(60000);
   const toast=useContext(ToastCtx);
   const [aba,setAba]=useState("clt");                 // "clt" (folha) | "freela" (pagamentos)
   const _mr=mesAtualRange();
