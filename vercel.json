@@ -1,0 +1,12 @@
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "functions": {
+    "api/extrair.js": {
+      "maxDuration": 60
+    },
+    "api/docusign.js": {
+      "maxDuration": 30
+    }
+  }
+}
