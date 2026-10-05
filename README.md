@@ -12,6 +12,7 @@ Ponto digital, escala e RH para restaurantes. O app é um único `index.html` (R
   - **Arquivos & pastas:** uma pasta por pessoa (CLT, freela e PJ), com pastas padrão e pastas personalizadas.
   - **Holerites:** você sobe os PDFs da contabilidade, seja um por colaborador ou um único PDF com todos. O sistema separa as páginas pelo CPF ou pelo nome, você confere e publica no app de cada colaborador.
   - **Dossiê:** além das abas que já existiam, ganhou a aba "Pastas & holerites".
+- **Convites de cadastro:** gere um link (CLT ou PJ) e envie pelo WhatsApp. O candidato manda fotos ou PDFs dos documentos, a leitura automática (Claude) preenche o cadastro, ele confere e envia. O cadastro entra direto em Colaboradores CLT ou Prestadores PJ, com os documentos guardados na pasta da pessoa.
 - **App "Meus documentos"** (`#meus-docs`): o colaborador ou PJ entra com CPF/CNPJ + PIN e vê os holerites e contratos liberados. O RH gera o PIN em *Arquivos & pastas → Liberar acesso*.
 
 ## Assinatura eletrônica (DocuSign)
@@ -38,6 +39,12 @@ Só usuários logados no painel conseguem chamar `/api/docusign`, porque o servi
 
 Sem o DocuSign configurado, ainda dá para marcar um documento como "assinado manualmente" e subir a via assinada na pasta.
 
+## Leitura automática de documentos (Claude)
+
+Usada nos convites de cadastro (`api/extrair.js`, modelo `claude-opus-5-5`). Configure na Vercel a variável `ANTHROPIC_API_KEY` com uma chave criada em console.anthropic.com e faça um novo deploy. Sem a chave, o link de cadastro continua funcionando: o candidato envia os documentos e preenche os dados à mão.
+
+Só quem tem um convite válido (aberto e dentro do prazo de 30 dias) ou um usuário logado no painel consegue usar a leitura. Cada documento é enviado em uma chamada separada.
+
 ## Banco de dados (Firestore)
 
 Novas coleções. No cliente principal elas ficam na raiz; nos demais clientes, em `tenants/{id}/...`:
@@ -45,7 +52,8 @@ Novas coleções. No cliente principal elas ficam na raiz; nos demais clientes, 
 - `arquivos`: metadados de cada arquivo (pasta, dono, holerite, competência, status de assinatura).
 - `arquivos_partes`: conteúdo do arquivo em base64, fatiado em partes de ~525 KB. Cada arquivo aceita até 12 MB.
 - `acessosColab`: hash SHA-256 do PIN de cada colaborador (o PIN em si não é guardado).
+- `convites`: links de cadastro (o candidato precisa ler o convite e marcá-lo como preenchido sem login).
 
-Se as regras do Firestore liberam coleção por coleção, inclua essas três com as mesmas permissões de `atestados`/`ajustes`.
+Se as regras do Firestore liberam coleção por coleção, inclua essas quatro com as mesmas permissões de `atestados`/`ajustes`.
 
 > **Atenção:** o app do colaborador funciona sem login do Firebase, como o quiosque de ponto. Por isso a proteção dos holerites depende do CPF + PIN dentro do app. Para blindar no nível do banco, o próximo passo é criar regras do Firestore que exijam autenticação para ler `arquivos` e `arquivos_partes`, com o colaborador autenticado por Firebase Auth.

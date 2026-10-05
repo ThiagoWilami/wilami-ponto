@@ -9,13 +9,12 @@
 //   DOCUSIGN_ENV              "demo" (testes) ou "production"
 //   FIREBASE_PROJECT_ID       opcional (padrão: twilami-ponto) — só usuários logados no painel podem chamar
 const crypto = require("crypto");
+const { verificarUsuario, lerCorpo } = require("./_lib/firebase");
 
-const PROJECT_ID = process.env.FIREBASE_PROJECT_ID || "twilami-ponto";
 const PROD = String(process.env.DOCUSIGN_ENV || "demo").toLowerCase().startsWith("prod");
 const AUTH_HOST = PROD ? "account.docusign.com" : "account-d.docusign.com";
 
 const b64url = (buf) => Buffer.from(buf).toString("base64").replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
-const fromB64url = (s) => Buffer.from(String(s).replace(/-/g, "+").replace(/_/g, "/"), "base64");
 
 function configurado() {
   return !!(process.env.DOCUSIGN_INTEGRATION_KEY && process.env.DOCUSIGN_USER_ID && process.env.DOCUSIGN_PRIVATE_KEY);
@@ -26,34 +25,6 @@ function chavePrivada() {
 function urlConsentimento() {
   const redirect = process.env.DOCUSIGN_REDIRECT_URI || "https://www.docusign.com";
   return `https://${AUTH_HOST}/oauth/auth?response_type=code&scope=${encodeURIComponent("signature impersonation")}&client_id=${encodeURIComponent(process.env.DOCUSIGN_INTEGRATION_KEY || "")}&redirect_uri=${encodeURIComponent(redirect)}`;
-}
-
-// ---------- Verificação do login do painel (Firebase ID token, RS256) ----------
-let certsCache = { at: 0, ttl: 0, certs: null };
-async function certsGoogle() {
-  if (certsCache.certs && Date.now() - certsCache.at < certsCache.ttl) return certsCache.certs;
-  const r = await fetch("https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com");
-  const certs = await r.json();
-  const m = /max-age=(\d+)/.exec(r.headers.get("cache-control") || "");
-  certsCache = { at: Date.now(), ttl: (m ? Number(m[1]) : 3600) * 1000, certs };
-  return certs;
-}
-async function verificarUsuario(req) {
-  const h = req.headers.authorization || "";
-  const token = h.startsWith("Bearer ") ? h.slice(7) : "";
-  const partes = token.split(".");
-  if (partes.length !== 3) throw Object.assign(new Error("Faça login no painel para usar a assinatura eletrônica."), { status: 401 });
-  const header = JSON.parse(fromB64url(partes[0]).toString("utf8"));
-  const payload = JSON.parse(fromB64url(partes[1]).toString("utf8"));
-  const certs = await certsGoogle();
-  const cert = certs[header.kid];
-  const valido = header.alg === "RS256" && cert &&
-    crypto.createVerify("RSA-SHA256").update(partes[0] + "." + partes[1]).verify(cert, fromB64url(partes[2]));
-  const agora = Math.floor(Date.now() / 1000);
-  if (!valido || payload.aud !== PROJECT_ID || payload.iss !== "https://securetoken.google.com/" + PROJECT_ID || !payload.sub || payload.exp < agora - 60) {
-    throw Object.assign(new Error("Sessão inválida ou expirada. Entre novamente no painel."), { status: 401 });
-  }
-  return payload;
 }
 
 // ---------- DocuSign: token via JWT Grant + conta ----------
@@ -102,12 +73,6 @@ async function ds(caminho, opts) {
   return r;
 }
 
-function lerCorpo(req) {
-  if (req.body && typeof req.body === "object") return Promise.resolve(req.body);
-  return new Promise((res, rej) => {
-    let d = ""; req.on("data", (c) => (d += c)); req.on("end", () => { try { res(d ? JSON.parse(d) : {}); } catch (e) { rej(e); } }); req.on("error", rej);
-  });
-}
 const emailOk = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e || "").trim());
 
 module.exports = async function handler(req, res) {

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- build: PJ na escala + financeiro PJ + correção de gravação/órfãos | Marca WILAMI (verde/dourado) + Arquivos & pastas por pessoa + Holerites no app (CPF+PIN) + Prestadores PJ + assinatura DocuSign 2026-10-03 -->
+<!-- build: Convites de cadastro com leitura automática dos documentos | PJ na escala + financeiro PJ + correção de gravação/órfãos | Marca WILAMI (verde/dourado) + Arquivos & pastas por pessoa + Holerites no app (CPF+PIN) + Prestadores PJ + assinatura DocuSign 2026-10-03 -->
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8" />
@@ -194,10 +194,12 @@ const Toggle = ({on, onChange}) =>
 
 const Modal = ({open, onClose, children, wide}) => {
   if(!open) return null;
-  return <div className="fixed inset-0 z-50 grid place-items-center p-4 bg-ink-900/40 backdrop-blur-sm" onClick={onClose}>
+  // Renderiza no <body> (portal): assim a janela fica sempre por cima do cabeçalho,
+  // mesmo quando a tela que a abriu está dentro de um bloco com animação.
+  return ReactDOM.createPortal(<div className="fixed inset-0 z-50 grid place-items-center p-4 bg-ink-900/40 backdrop-blur-sm" onClick={onClose}>
     <div className={cx("bg-white rounded-3xl shadow-2xl w-full max-h-[92vh] overflow-auto fade-in", wide?"max-w-3xl":"max-w-lg")} onClick={e=>e.stopPropagation()}>
       {children}
-    </div></div>;
+    </div></div>, document.body);
 };
 
 /* Campo de formulário */
@@ -472,6 +474,8 @@ const DOC_TIPOS = [
   ["reservista","Reservista"],
   ["historico_escolar","Histórico Escolar"],
   ["diploma","Diploma"],
+  ["comprovante_residencia","Comprovante de residência"],
+  ["comprovante_bancario","Comprovante bancário / Pix"],
 ];
 // "hoje" DINÂMICO = dia da semana REAL (0=Seg … 6=Dom). Usado no ponto, no painel ao vivo e na escala.
 const HOJE_IDX = (new Date().getDay()+6)%7;
@@ -952,8 +956,9 @@ function StoreProvider({children}) {
   const logado = !!authUser || !window.__WPAUTH;
   const [arquivos]=useArquivosMeta(logado);                            // metadados dos arquivos (só no painel)
   const [acessosColab]=useAcessosColab(logado);                        // PINs do app do colaborador (hash)
-  const salvarPj=(pj)=>setPjs(prev=> pj.id ? prev.map(x=>x.id===pj.id?{...x,...pj}:x) : [...prev,{...pj,id:(prev.reduce((m,x)=>Math.max(m,x.id),500))+1,status:pj.status||"ativo",criadoEm:Date.now()}]);
-  const excluirPj=(id)=>{ setPjs(prev=>prev.filter(x=>x.id!==id)); removerDaEscala(id,"pj"); };
+  const pjsTodos=useMemo(()=>[...pjsBase, ...cadAuto.filter(c=>c.tipo==="pj")],[pjsBase,cadAuto]);
+  const salvarPj=(pj)=> ehAuto(pj.id) ? cadOps.update(pj._docId||docIdDe(pj.id), pj) : setPjs(prev=> pj.id ? prev.map(x=>x.id===pj.id?{...x,...pj}:x) : [...prev,{...pj,id:(prev.reduce((m,x)=>Math.max(m,x.id),500))+1,status:pj.status||"ativo",criadoEm:Date.now()}]);
+  const excluirPj=(id)=>{ if(ehAuto(id)) cadOps.remove(docIdDe(id)); else setPjs(prev=>prev.filter(x=>x.id!==id)); removerDaEscala(id,"pj"); };
   // Pagamentos dos prestadores PJ (parcelas/adiantamentos), chaveados pelo id do PJ.
   const [pagamentosPJ,setPagPJ]=usePersist("pagamentosPJ",{});
   const addPagamentoPJ=(id,obj)=>setPagPJ(prev=>{ const arr=prev[String(id)]||[]; return {...prev,[String(id)]:[{...obj,id:Math.random().toString(36).slice(2)},...arr]}; });
@@ -1129,16 +1134,16 @@ function StoreProvider({children}) {
   useEffect(()=>{
     if(!tudoCarregado) return;
     if(window.__WPAUTH && !window.__WPAUTH.currentUser) return;
-    if(clts.length+freelas.length+pjsBase.length===0) return;   // cadastro vazio = suspeito, não mexe
+    if(clts.length+freelas.length+pjsTodos.length===0) return;   // cadastro vazio = suspeito, não mexe
     const t=setTimeout(()=>{
-      const orfa=(a)=>alocOrfa(a,clts,freelas,pjsBase);
+      const orfa=(a)=>alocOrfa(a,clts,freelas,pjsTodos);
       const tem=(obj)=>Object.values(obj||{}).some(g=>Object.values(g||{}).some(arr=>(arr||[]).some(orfa)));
       const limpa=(prev)=>{ const n={}; Object.keys(prev||{}).forEach(uid=>{ n[uid]={}; Object.keys(prev[uid]||{}).forEach(k=>{ n[uid][k]=(prev[uid][k]||[]).filter(a=>!orfa(a)); }); }); return n; };
       if(tem(escala)) setEscala(limpa);
       if(tem(escalaOv)) setEscalaOv(limpa);
     },4000);
     return ()=>clearTimeout(t);
-  },[tudoCarregado, cltsBase, freelasBase, cadAuto, pjsBase, escala, escalaOv]); // eslint-disable-line
+  },[tudoCarregado, cltsBase, freelasBase, cadAuto, pjsTodos, escala, escalaOv]); // eslint-disable-line
 
   // Gerente vinculado a uma CASA específica só enxerga os dados daquela casa (isolamento por unidade).
   const _mesmaCasa=(uid)=> String(uid)===String(casaRestrita);
@@ -1155,7 +1160,7 @@ function StoreProvider({children}) {
     dossie,getDossie,addFalta,addFeedback,addAnexo, perfil,setPerfil, perms,setPerms, can,
     clientes,clienteAtivo,tenantAtual,criarCliente,trocarCliente,
     acesso,donos,setDonos,acessos,acessosOps,
-    marca,setMarca, pjs:(casaRestrita!=null?pjsBase.filter(x=>x.unidade==null||x.unidade==="todas"||_mesmaCasa(x.unidade)):pjsBase), salvarPj,excluirPj, pagamentosPJ,addPagamentoPJ,removePagamentoPJ,
+    marca,setMarca, pjs:(casaRestrita!=null?pjsTodos.filter(x=>x.unidade==null||x.unidade==="todas"||_mesmaCasa(x.unidade)):pjsTodos), salvarPj,excluirPj, pagamentosPJ,addPagamentoPJ,removePagamentoPJ,
     pastasExtra,criarPasta,removerPasta, assinaturaCfg,setAssinaturaCfg, arquivos, acessosColab };
   return <StoreCtx.Provider value={value}>{children}</StoreCtx.Provider>;
 }
@@ -3382,7 +3387,8 @@ function Financeiro() {
 
 /* ============================ DOSSIÊ DO COLABORADOR ============================ */
 function Dossie() {
-  const { clts, freelas, unidades, dossie, getDossie, addFalta, addFeedback, addAnexo, anexarDoc, can, atestados } = useStore();
+  const { clts, freelas, unidades, dossie, getDossie, addFalta, addFeedback, addAnexo, anexarDoc, can, atestados, arquivos } = useStore();
+  const arqDoc=(v)=> v && typeof v==="object" && v.arquivoId ? arquivos.find(a=>a.id===v.arquivoId) : null;
   const soD=(s)=>(s||"").replace(/\D/g,"");
   const toast=useContext(ToastCtx);
   const [sel,setSel]=useState(null); // {tipo,pessoa}
@@ -3442,15 +3448,15 @@ function Dossie() {
     const fImg=zip.folder("Imagens dos documentos");
     const fAssin=zip.folder("Documentos assinados");
     // Ficha de registro (dados cadastrais)
-    const ficha={ colaborador:pAtual.nome, vinculo:sel.tipo==="clt"?"CLT":"Freelancer", cargo:pAtual.cargo,
+    const ficha={ ...(pAtual.ficha||{}), colaborador:pAtual.nome, vinculo:sel.tipo==="clt"?"CLT":"Freelancer", cargo:pAtual.cargo,
       unidade:unidadeNome(pAtual.unidade,unidades), cpf:pAtual.cpf, tipoPix:pAtual.tipoPix, pix:pAtual.pix, banco:pAtual.banco,
       faltas:dos.faltas, feedbacks:dos.feedbacks };
     fFicha.file("ficha_registro.json", JSON.stringify(ficha,null,2));
     // Foto do colaborador (referência facial capturada no cadastro)
     if(pAtual.foto) fImg.file("foto_perfil.jpg", b64ToBytes(pAtual.foto), {binary:true});
     // Imagens dos documentos — grava BYTES REAIS quando enviados; senão gera um PDF válido
-    DOC_TIPOS.filter(([k])=>docsAtual[k]).forEach(([k,l])=>{
-      const v=docsAtual[k], nome=docNome(v), dados=docDados(v);
+    for(const [k,l] of DOC_TIPOS.filter(([k])=>docsAtual[k])){
+      const v=docsAtual[k], nome=docNome(v), meta=arqDoc(v), dados=docDados(v) || (meta ? await arqConteudo(meta).catch(()=>null) : null);
       if(dados){ // arquivo real (imagem/pdf) — abre sem falha
         fImg.file(nome, b64ToBytes(dados), {binary:true});
         if(k==="ctps") fAssin.file(nome, b64ToBytes(dados), {binary:true});
@@ -3460,7 +3466,7 @@ function Dossie() {
         fImg.file(pn, pdf, {binary:true});
         if(k==="ctps") fAssin.file(pn, pdf, {binary:true});
       }
-    });
+    }
     fContrato.file("contrato_"+pAtual.nome.replace(/\s+/g,"-")+".pdf",
       montarPDF("Contrato de trabalho", ["Colaborador: "+pAtual.nome, "Cargo: "+(pAtual.cargo||"—"), "Unidade: "+unidadeNome(pAtual.unidade,unidades), "Admissão: "+(pAtual.admissao||"—"), "Vínculo: "+(sel.tipo==="clt"?"CLT":"Freelancer")]), {binary:true});
     // Anexos por categoria — bytes reais quando houver; senão PDF válido
@@ -3525,7 +3531,7 @@ function Dossie() {
                   <div className="flex-1 min-w-0"><div className="font-semibold text-slate-800 text-sm">{l}</div>
                     {arq ? <div className="text-xs text-emerald-700 truncate flex items-center gap-1"><Icon d={I.check} className="w-3 h-3"/>{docNome(arq)}</div>
                          : <div className="text-xs text-slate-400">Não enviado</div>}</div>
-                  {arq && <Badge tone="green">OK</Badge>}
+                  {arq && arqDoc(arq) ? <button title="Abrir documento" onClick={()=>arqAbrir(arqDoc(arq)).catch(e=>toast(e.message))} className="w-8 h-8 rounded-lg grid place-items-center text-emerald-600 hover:bg-emerald-100"><Icon d={I.eye} className="w-4 h-4"/></button> : arq && <Badge tone="green">OK</Badge>}
                   {editavel && <label className="cursor-pointer shrink-0">
                     <span className="inline-flex items-center gap-1 text-xs font-semibold text-brand-700 bg-brand-50 hover:bg-brand-100 px-2.5 py-1.5 rounded-lg"><Icon d={I.upload} className="w-3.5 h-3.5"/>{arq?"Trocar":"Enviar"}</span>
                     <input type="file" accept="image/*,application/pdf" capture="environment" className="hidden" onChange={e=>upDocDossie(k,e.target.files&&e.target.files[0])}/>
@@ -3533,6 +3539,10 @@ function Dossie() {
                 </div>;})}
             </div>
 
+            {pAtual && pAtual.ficha && Object.keys(pAtual.ficha).length>0 && <div className="p-3 rounded-xl border border-brand-100 bg-brand-50/30">
+              <div className="text-xs font-bold text-brand-700 uppercase mb-2 flex items-center gap-1.5"><Icon d={I.check} className="w-3.5 h-3.5"/>Ficha cadastral {pAtual.origem==="convite"&&"(lida dos documentos enviados pelo link)"}</div>
+              <div className="grid sm:grid-cols-2 gap-x-6 gap-y-1 text-sm">{Object.keys(FICHA_ROTULOS).filter(k=>pAtual.ficha[k]).map(k=><div key={k} className="flex justify-between gap-3"><span className="text-slate-400">{FICHA_ROTULOS[k]}</span><span className="text-slate-800 font-medium text-right break-all">{fmtFicha(k,pAtual.ficha[k])}</span></div>)}</div>
+            </div>}
             {/* Anexos adicionais: atestados, advertências */}
             <div className="pt-2 border-t border-slate-100">
               <div className="flex items-center justify-between mb-2">
@@ -4614,6 +4624,340 @@ function ConfigAssinatura(){
   </Card>;
 }
 
+/* ============================ CONVITES DE CADASTRO (link + leitura automática dos documentos) ============================ */
+// Documentos pedidos no link, por tipo de vínculo. "chave" casa com DOC_TIPOS (pasta do colaborador) quando existir.
+const CONVITE_DOCS = {
+  clt: [
+    { k:"cnh_rg", l:"RG ou CNH (frente e verso)", obrig:true },
+    { k:"cpf", l:"CPF (se não constar no RG/CNH)" },
+    { k:"comprovante_residencia", l:"Comprovante de residência", obrig:true },
+    { k:"ctps", l:"Carteira de Trabalho (CTPS Digital)" },
+    { k:"titulo_eleitor", l:"Título de eleitor" },
+    { k:"reservista", l:"Certificado de reservista (homens)" },
+    { k:"comprovante_bancario", l:"Comprovante bancário ou Pix" },
+  ],
+  pj: [
+    { k:"cartao_cnpj", l:"Cartão CNPJ", obrig:true },
+    { k:"contrato_social", l:"Contrato social ou CCMEI" },
+    { k:"cnh_rg", l:"RG ou CNH do responsável", obrig:true },
+    { k:"comprovante_residencia", l:"Comprovante de endereço" },
+    { k:"comprovante_bancario", l:"Comprovante bancário ou Pix" },
+  ],
+};
+// Ordem de confiança ao juntar campos lidos de vários documentos (o 1º que tiver o campo ganha).
+const PRIORIDADE_DOC = ["cartao_cnpj","ccmei","contrato_social","rg","cnh","cpf","ctps","pis","titulo_eleitor","reservista","comprovante_residencia","comprovante_bancario","certidao_nascimento_casamento","cartao_sus","diploma","historico_escolar","outro"];
+const CAMPOS_ENDERECO = ["cep","logradouro","numero","complemento","bairro","cidade","uf"];
+function juntarLeituras(leituras){
+  const ord=[...leituras].sort((a,b)=>PRIORIDADE_DOC.indexOf(a.tipoDocumento)-PRIORIDADE_DOC.indexOf(b.tipoDocumento));
+  const out={};
+  // endereço vem inteiro do mesmo documento (prioriza o comprovante de residência)
+  const comEnd=[...ord.filter(l=>l.tipoDocumento==="comprovante_residencia"), ...ord].find(l=>l.campos && l.campos.logradouro);
+  if(comEnd) CAMPOS_ENDERECO.forEach(k=>{ if(comEnd.campos[k]) out[k]=comEnd.campos[k]; });
+  ord.forEach(l=>{ Object.entries(l.campos||{}).forEach(([k,v])=>{ if(v && String(v).trim() && out[k]==null && !CAMPOS_ENDERECO.includes(k)) out[k]=String(v).trim(); }); });
+  return out;
+}
+const gerarTokenConvite=()=>{ const a=new Uint8Array(18); crypto.getRandomValues(a); return Array.from(a).map(b=>"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"[b%62]).join(""); };
+const linkConvite=(token)=> comTenantUrl(location.origin+location.pathname, "convite/"+token);
+function useConvites(ativo){
+  const [items,setItems]=useState([]);
+  useEffect(()=>{ const db=window.__WPDB; if(!db||!ativo) return;
+    try{ return tCol("convites").onSnapshot(function(snap){ const a=[]; snap.forEach(function(d){ a.push({...(d.data()||{}), id:d.id}); }); a.sort((x,y)=>(y.criadoEm||0)-(x.criadoEm||0)); setItems(a); }, function(){}); }catch(e){}
+  },[ativo]);
+  return items;
+}
+// Lê um arquivo com a IA (via /api/extrair). Imagens são reduzidas antes do envio.
+async function lerDocumentoIA(arquivo, esperado, convite){
+  let du=arquivo.dados, mime=arquivo.mime;
+  if(/^image\//.test(mime)){ du=await compressImg(du,1600,0.85); mime="image/jpeg"; }
+  const user=window.__WPAUTH&&window.__WPAUTH.currentUser;
+  const token=user? await user.getIdToken().catch(()=>"") : "";
+  const r=await fetch("/api/extrair",{ method:"POST", headers:{"Content-Type":"application/json", ...(token?{Authorization:"Bearer "+token}:{})},
+    body:JSON.stringify({ mime, base64:du.split(",")[1], esperado, convite:convite||"", tenant:WP_TENANT||"" }) });
+  let j=null; try{ j=await r.json(); }catch(e){}
+  if(!r.ok){ const err=new Error((j&&j.erro)||("Erro "+r.status)); err.status=r.status; throw err; }
+  return j;
+}
+
+/* ---------- Painel: gerar e acompanhar convites ---------- */
+function ConvitesPage(){
+  const { unidades, clts, pjs, can } = useStore();
+  const toast=useContext(ToastCtx);
+  const convites=useConvites(true);
+  const [novo,setNovo]=useState(null);   // formulário de novo convite
+  const [criado,setCriado]=useState(null);
+  const [ver,setVer]=useState(null);
+  const [filtro,setFiltro]=useState("aberto");
+  const criar=async()=>{
+    const token=gerarTokenConvite();
+    const doc={ tipo:novo.tipo, nome:(novo.nome||"").trim(), tel:soDigitos(novo.tel), unidade:novo.unidade, cargo:novo.tipo==="clt"?novo.cargo:"", servico:novo.tipo==="pj"?(novo.servico||""):"",
+      salario:Number(novo.salario)||0, valor:Number(novo.valor)||0, status:"aberto", criadoEm:Date.now(), expira:Date.now()+30*864e5,
+      criadoPor:((window.__WPAUTH&&window.__WPAUTH.currentUser)||{}).email||"" };
+    try{ await tCol("convites").doc(token).set(doc); setCriado({...doc,id:token}); setNovo(null); }
+    catch(e){ toast("Não foi possível criar o convite: "+(e.message||e)); }
+  };
+  const msgWhats=(c)=>`Olá${c.nome?", "+c.nome.split(" ")[0]:""}! Para fazer seu cadastro${c.tipo==="pj"?" como prestador de serviço":""}, abra o link abaixo e envie fotos ou PDFs dos seus documentos — o sistema preenche os dados automaticamente:\n${linkConvite(c.id)}`;
+  const abrirWhats=(c)=>{ const tel=c.tel?(c.tel.length<=11?"55"+c.tel:c.tel):""; window.open("https://wa.me/"+tel+"?text="+encodeURIComponent(msgWhats(c)),"_blank"); };
+  const cancelar=(c)=>{ if(!confirm("Cancelar este convite? O link deixa de funcionar.")) return; tCol("convites").doc(c.id).set({status:"cancelado"},{merge:true}).then(()=>toast("Convite cancelado")); };
+  const pessoaDo=(c)=>{ if(!c.pessoaKey) return null; const [t,...rest]=c.pessoaKey.split("-"); const id=rest.join("-"); return (t==="pj"?pjs:clts).find(p=>String(p.id)===id); };
+  const lista=convites.filter(c=> filtro==="todos" || (filtro==="aberto"?c.status==="aberto":filtro==="preenchido"?c.status==="preenchido":c.status==="cancelado"||(c.status==="aberto"&&c.expira<Date.now())));
+  const STATUS_C={ aberto:["Aguardando o candidato","amber"], preenchido:["Cadastro recebido","green"], cancelado:["Cancelado","slate"] };
+  return <div className="fade-in">
+    <PageHeader title="Convites de cadastro" sub="Envie um link para o CLT ou PJ se cadastrar sozinho — ele manda os documentos e o sistema preenche os dados">
+      {can("colaboradores") && <Btn icon={I.plus} onClick={()=>setNovo({tipo:"clt",nome:"",tel:"",unidade:unidades[0]?.id,cargo:CARGOS[0],servico:"",salario:"",valor:""})}>Novo convite</Btn>}
+    </PageHeader>
+    <Card className="p-4 mb-4 grid sm:grid-cols-3 gap-3 text-sm">
+      {[[I.link,"1. Gere o link","Escolha CLT ou PJ e envie pelo WhatsApp."],[I.camera,"2. O candidato envia os documentos","Fotos ou PDFs pelo celular — RG/CNH, comprovante, CTPS, cartão CNPJ…"],[I.check,"3. Os dados são preenchidos sozinhos","A leitura automática preenche o cadastro; o candidato só confere e envia."]].map(([d,t,s],i)=>
+        <div key={i} className="flex items-start gap-3"><div className="w-9 h-9 rounded-xl grad-brand text-white grid place-items-center shrink-0"><Icon d={d} className="w-4 h-4"/></div><div><div className="font-bold text-slate-800">{t}</div><div className="text-slate-500">{s}</div></div></div>)}
+    </Card>
+    <div className="flex flex-wrap gap-2 mb-3">
+      {[["aberto","Aguardando"],["preenchido","Recebidos"],["encerrado","Cancelados/expirados"],["todos","Todos"]].map(([k,l])=>
+        <button key={k} onClick={()=>setFiltro(k)} className={cx("px-3 py-1.5 rounded-lg text-xs font-semibold border", filtro===k?"grad-brand text-white border-transparent":"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>{l} <span className="opacity-70">({convites.filter(c=>k==="todos"||(k==="aberto"?c.status==="aberto":k==="preenchido"?c.status==="preenchido":c.status==="cancelado"||(c.status==="aberto"&&c.expira<Date.now()))).length})</span></button>)}
+    </div>
+    <div className="space-y-2">
+      {lista.length===0 && <Card className="p-8 text-center text-sm text-slate-400">Nenhum convite aqui.</Card>}
+      {lista.map(c=>{ const exp=c.status==="aberto"&&c.expira<Date.now(); const [st,tone]=exp?["Expirado","slate"]:(STATUS_C[c.status]||[c.status,"slate"]); const p=pessoaDo(c);
+        return <Card key={c.id} className="p-4 flex flex-wrap items-center gap-3">
+          <div className={cx("w-10 h-10 rounded-xl grid place-items-center text-white shrink-0", c.tipo==="pj"?"bg-sky-600":"grad-brand")}><Icon d={c.tipo==="pj"?I.briefcase:I.user} className="w-5 h-5"/></div>
+          <div className="flex-1 min-w-[200px]">
+            <div className="font-bold text-slate-900">{(p&&p.nome)||c.nome||"Candidato sem nome"} <Badge tone={c.tipo==="pj"?"blue":"brand"}>{c.tipo==="pj"?"PJ":"CLT"}</Badge></div>
+            <div className="text-xs text-slate-500">{c.tipo==="pj"?(c.servico||"Prestação de serviço"):(c.cargo||"—")} · {unidadeNome(c.unidade,unidades)} · criado em {new Date(c.criadoEm||0).toLocaleDateString("pt-BR")}{c.preenchidoEm?" · recebido em "+new Date(c.preenchidoEm).toLocaleDateString("pt-BR"):""}</div>
+          </div>
+          <Badge tone={tone}>{st}</Badge>
+          <div className="flex gap-1.5">
+            {c.status==="aberto" && !exp && <>
+              <Btn size="sm" variant="soft" icon={I.copy} onClick={()=>{ copyText(msgWhats(c)); toast("Mensagem com o link copiada"); }}>Copiar</Btn>
+              <Btn size="sm" icon={I.arrow} onClick={()=>abrirWhats(c)}>WhatsApp</Btn>
+              <button title="Cancelar convite" onClick={()=>cancelar(c)} className="w-8 h-8 rounded-lg grid place-items-center text-slate-400 hover:text-rose-500 hover:bg-rose-50"><Icon d={I.x} className="w-4 h-4"/></button>
+            </>}
+            {c.status==="preenchido" && <Btn size="sm" variant="soft" icon={I.eye} onClick={()=>setVer({c,p})}>Ver cadastro</Btn>}
+          </div>
+        </Card>; })}
+    </div>
+
+    <Modal open={!!novo} onClose={()=>setNovo(null)}>
+      {novo && <div className="p-6">
+        <h3 className="text-lg font-bold text-slate-900 mb-4">Novo convite de cadastro</h3>
+        <div className="flex gap-2 p-1 bg-slate-100 rounded-xl mb-4">
+          {[["clt","CLT"],["pj","Prestador PJ"]].map(([k,l])=><button key={k} onClick={()=>setNovo({...novo,tipo:k})} className={cx("flex-1 py-2 rounded-lg text-sm font-semibold", novo.tipo===k?"bg-white shadow-soft text-brand-700":"text-slate-500")}>{l}</button>)}
+        </div>
+        <div className="grid gap-3">
+          <Field label="Nome (opcional)"><Input value={novo.nome} onChange={e=>setNovo({...novo,nome:e.target.value})} placeholder="Para identificar o convite"/></Field>
+          <Field label="WhatsApp do candidato (opcional)"><Input value={novo.tel} onChange={e=>setNovo({...novo,tel:e.target.value})} placeholder="(11) 90000-0000"/></Field>
+          <Field label="Unidade"><Select value={novo.unidade} onChange={e=>setNovo({...novo,unidade:e.target.value==="todas"?"todas":Number(e.target.value)})}>{novo.tipo==="pj"&&<option value="todas">Todas as casas</option>}{unidades.map(u=><option key={u.id} value={u.id}>{u.nome}</option>)}</Select></Field>
+          {novo.tipo==="clt" ? <div className="grid grid-cols-2 gap-3">
+            <Field label="Cargo"><Select value={novo.cargo} onChange={e=>setNovo({...novo,cargo:e.target.value})}>{CARGOS.map(c=><option key={c}>{c}</option>)}</Select></Field>
+            <Field label="Salário (R$, opcional)"><Input type="number" value={novo.salario} onChange={e=>setNovo({...novo,salario:e.target.value})}/></Field>
+          </div> : <div className="grid grid-cols-2 gap-3">
+            <Field label="Serviço"><Input value={novo.servico} onChange={e=>setNovo({...novo,servico:e.target.value})} placeholder="Ex.: consultoria"/></Field>
+            <Field label="Valor mensal (R$, opcional)"><Input type="number" value={novo.valor} onChange={e=>setNovo({...novo,valor:e.target.value})}/></Field>
+          </div>}
+        </div>
+        <p className="text-xs text-slate-400 mt-3">O link vale por 30 dias e pode ser usado uma única vez. Cargo, salário e valor ficam só no painel — o candidato não vê.</p>
+        <div className="flex gap-2 mt-4"><Btn variant="ghost" onClick={()=>setNovo(null)}>Cancelar</Btn><Btn className="flex-1" icon={I.link} onClick={criar}>Gerar link</Btn></div>
+      </div>}
+    </Modal>
+
+    <Modal open={!!criado} onClose={()=>setCriado(null)}>
+      {criado && <div className="p-6 text-center">
+        <div className="w-14 h-14 mx-auto rounded-2xl grad-brand grid place-items-center text-white mb-3"><Icon d={I.link} className="w-7 h-7"/></div>
+        <h3 className="text-lg font-bold text-slate-900">Link de cadastro pronto</h3>
+        <p className="text-sm text-slate-500 mt-1">Envie para {criado.nome||"o candidato"}. Quando ele enviar, o cadastro aparece aqui e em {criado.tipo==="pj"?"Prestadores PJ":"Colaboradores CLT"}.</p>
+        <div className="my-4 p-3 rounded-xl bg-slate-50 text-xs font-mono text-slate-600 break-all">{linkConvite(criado.id)}</div>
+        <div className="flex gap-2">
+          <Btn variant="ghost" className="flex-1" icon={I.copy} onClick={()=>{ copyText(msgWhats(criado)); toast("Mensagem com o link copiada"); }}>Copiar mensagem</Btn>
+          <Btn className="flex-1" icon={I.arrow} onClick={()=>abrirWhats(criado)}>Enviar no WhatsApp</Btn>
+        </div>
+      </div>}
+    </Modal>
+
+    <Modal open={!!ver} onClose={()=>setVer(null)} wide>
+      {ver && <FichaCadastro convite={ver.c} pessoa={ver.p} onClose={()=>setVer(null)}/>}
+    </Modal>
+  </div>;
+}
+// Rótulos dos campos da ficha
+const FICHA_ROTULOS = { nome:"Nome", cpf:"CPF", rg:"RG", rgOrgao:"Órgão emissor", nascimento:"Nascimento", sexo:"Sexo", mae:"Mãe", pai:"Pai", naturalidade:"Naturalidade",
+  cep:"CEP", logradouro:"Endereço", numero:"Número", complemento:"Complemento", bairro:"Bairro", cidade:"Cidade", uf:"UF", pis:"PIS/NIS", ctpsNumero:"CTPS nº", ctpsSerie:"CTPS série",
+  tituloEleitor:"Título de eleitor", tituloZona:"Zona", tituloSecao:"Seção", reservista:"Reservista", cnhNumero:"CNH nº", cnhCategoria:"CNH categoria", cnhValidade:"CNH validade",
+  razaoSocial:"Razão social", nomeFantasia:"Nome fantasia", cnpj:"CNPJ", aberturaCnpj:"Abertura", atividade:"Atividade", responsavel:"Responsável",
+  banco:"Banco", agencia:"Agência", conta:"Conta", pix:"Pix", email:"E-mail", telefone:"Telefone" };
+const fmtFicha=(k,v)=> /nascimento|validade|abertura/i.test(k) ? fmtDataBR(v) : v;
+function FichaCadastro({convite, pessoa, onClose}){
+  const { arquivos } = useStore();
+  const toast=useContext(ToastCtx);
+  const ficha=(pessoa&&pessoa.ficha)||{};
+  const docs=arquivos.filter(a=>a.donoKey===convite.pessoaKey);
+  return <div className="p-6">
+    <div className="flex items-start gap-3 mb-4">
+      <Avatar name={(pessoa&&pessoa.nome)||"?"} src={pessoa&&pessoa.foto} size="w-12 h-12"/>
+      <div className="flex-1 min-w-0"><h3 className="text-lg font-bold text-slate-900">{(pessoa&&pessoa.nome)||"Cadastro"}</h3>
+        <p className="text-sm text-slate-500">{convite.tipo==="pj"?"Prestador PJ":"CLT"} · cadastro feito pelo link em {new Date(convite.preenchidoEm||0).toLocaleString("pt-BR")}</p></div>
+      <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><Icon d={I.x}/></button>
+    </div>
+    {!pessoa && <div className="mb-3 p-3 rounded-xl bg-amber-50 text-amber-700 text-sm">O cadastro foi excluído ou ainda está carregando.</div>}
+    <div className="grid sm:grid-cols-2 gap-x-6 gap-y-1.5 text-sm">
+      {Object.keys(FICHA_ROTULOS).filter(k=>ficha[k]).map(k=><div key={k} className="flex justify-between gap-3 border-b border-slate-50 py-1"><span className="text-slate-400">{FICHA_ROTULOS[k]}</span><span className="text-slate-800 font-medium text-right break-all">{fmtFicha(k,ficha[k])}</span></div>)}
+    </div>
+    <div className="text-xs font-bold text-slate-400 uppercase mt-5 mb-2">Documentos enviados ({docs.length})</div>
+    <div className="grid sm:grid-cols-2 gap-2">
+      {docs.map(a=><button key={a.id} onClick={()=>arqAbrir(a).catch(e=>toast(e.message))} className="flex items-center gap-2 p-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-left">
+        <Icon d={I.doc} className="w-4 h-4 text-brand-600 shrink-0"/><span className="text-sm text-slate-700 truncate flex-1">{a.nome}</span><Icon d={I.eye} className="w-4 h-4 text-slate-400"/></button>)}
+    </div>
+  </div>;
+}
+
+/* ---------- Página pública: o candidato envia documentos e confere os dados ---------- */
+function ConviteCadastro({onClose}){
+  const token=(location.hash.replace("#","").split("/")[1]||"").trim();
+  const [conv,setConv]=useState(undefined);  // undefined = carregando · null = inválido
+  const [etapa,setEtapa]=useState("docs");   // docs | lendo | form | enviando | ok
+  const [arqs,setArqs]=useState({});         // { slot: [{nome,mime,dados}] }
+  const [foto,setFoto]=useState("");
+  const [f,setF]=useState({});
+  const [auto,setAuto]=useState({});         // campos preenchidos pela leitura automática
+  const [avisos,setAvisos]=useState([]);
+  const [prog,setProg]=useState({feito:0,total:0});
+  const [erro,setErro]=useState("");
+  const [aceite,setAceite]=useState(false);
+  useEffect(()=>{ const db=window.__WPDB; if(!db||!token){ setConv(null); return; }
+    tCol("convites").doc(token).get().then(s=>{ const d=s.exists?s.data():null; setConv(d && d.status==="aberto" && !(d.expira<Date.now()) ? d : (d?{...d,_fechado:true}:null)); }).catch(()=>setConv(null));
+  },[token]);
+  const tipo=(conv&&conv.tipo)||"clt";
+  const slots=CONVITE_DOCS[tipo]||CONVITE_DOCS.clt;
+  const set=(k,v)=>setF(p=>({...p,[k]:v}));
+  const addArq=async(slot,files)=>{
+    const lst=[];
+    for(const file of Array.from(files||[])){
+      if(file.size>12*1024*1024){ setErro(file.name+" é maior que 12 MB."); continue; }
+      let dados=await lerArquivoDataUrl(file);
+      if(file.type.indexOf("image/")===0 && file.size>1.5*1024*1024) dados=await compressImg(dados,2000,0.85);
+      lst.push({nome:file.name, mime:/^image\//.test(file.type)&&dados.startsWith("data:image/jpeg")?"image/jpeg":(file.type||"application/octet-stream"), dados});
+    }
+    setArqs(p=>({...p,[slot]:[...(p[slot]||[]),...lst]}));
+  };
+  const rmArq=(slot,i)=>setArqs(p=>({...p,[slot]:(p[slot]||[]).filter((_,j)=>j!==i)}));
+  const faltaObrig=slots.filter(s=>s.obrig && !(arqs[s.k]||[]).length);
+  const lerTudo=async()=>{
+    setErro(""); const fila=[]; slots.forEach(s=>(arqs[s.k]||[]).forEach(a=>fila.push({a,esperado:s.l})));
+    setEtapa("lendo"); setProg({feito:0,total:fila.length});
+    const leituras=[], av=[]; let semIA=false, i=0;
+    const worker=async()=>{ while(i<fila.length){ const it=fila[i++];
+      try{ const r=await lerDocumentoIA(it.a,it.esperado,token); leituras.push(r); if(r.observacao) av.push(it.a.nome+": "+r.observacao); else if(r.legivel===false) av.push(it.a.nome+": não foi possível ler com clareza."); }
+      catch(e){ if(e.status===501) semIA=true; else av.push(it.a.nome+": "+e.message); }
+      setProg(p=>({...p,feito:p.feito+1})); } };
+    await Promise.all([worker(),worker(),worker()]);
+    const dados=juntarLeituras(leituras);
+    if(tipo==="pj"){ dados.responsavel=dados.nome||""; }
+    const base={ ...dados, telefone:dados.telefone||"", email:dados.email||"", tipoPix:dados.pix?"Aleatória":"CPF" };
+    setF(base); setAuto(Object.fromEntries(Object.keys(dados).map(k=>[k,true])));
+    setAvisos(semIA?["A leitura automática ainda não está ativada — preencha os dados abaixo."]:av);
+    setEtapa("form");
+  };
+  const obrigForm = tipo==="pj" ? [["razaoSocial","Razão social"],["cnpj","CNPJ"],["responsavel","Responsável"],["telefone","Telefone"],["email","E-mail"]]
+    : [["nome","Nome completo"],["cpf","CPF"],["nascimento","Nascimento"],["telefone","Telefone"]];
+  const faltaForm=obrigForm.filter(([k])=>!String(f[k]||"").trim()).map(([,l])=>l);
+  if(tipo==="clt" && !foto) faltaForm.push("selfie");
+  if(!aceite) faltaForm.push("aceite LGPD");
+  const enviar=async()=>{
+    setEtapa("enviando"); setErro("");
+    try{
+      const ref=tCol("cadastros").doc();
+      const donoKey=tipo+"-auto_"+ref.id;
+      const nomePessoa = tipo==="pj" ? (f.razaoSocial||"").trim() : (f.nome||"").trim();
+      const docs={};
+      for(const s of slots){ for(const a of (arqs[s.k]||[])){
+        const id=await arqSalvar({ nome:s.l.replace(/\s*\(.*\)$/,"")+" - "+a.nome, donoKey, donoTipo:tipo, donoId:"auto_"+ref.id, donoNome:nomePessoa, cpf:soDigitos(f.cpf||f.cnpj),
+          pasta: tipo==="pj" && ["cartao_cnpj","contrato_social"].includes(s.k) ? "Documentos da empresa" : "Documentos pessoais", categoria:"documento", visivelColab:false, origem:"convite" }, a.dados);
+        if(!docs[s.k]) docs[s.k]={ nome:a.nome, arquivoId:id };
+      } }
+      const ficha={...f}; delete ficha.tipoPix;
+      const endereco=[f.logradouro,f.numero,f.complemento,f.bairro,f.cidade&&(f.cidade+(f.uf?"/"+f.uf:"")),f.cep].filter(Boolean).join(", ");
+      const comum={ tel:f.telefone||"", email:(f.email||"").trim().toLowerCase(), tipoPix:f.tipoPix||"CPF", pix:f.pix||"", banco:[f.banco,f.agencia&&("ag. "+f.agencia),f.conta&&("c/c "+f.conta)].filter(Boolean).join(" "),
+        endereco, ficha, docs, origem:"convite", conviteId:token, status:"ativo", criadoEm:Date.now() };
+      const dados = tipo==="pj"
+        ? { ...comum, tipo:"pj", nome:nomePessoa, cnpj:f.cnpj||"", responsavel:f.responsavel||"", cpf:f.cpf||"", servico:conv.servico||f.atividade||"", valor:Number(conv.valor)||0, diaPagamento:5, formaPagamento:"Pix", unidade:conv.unidade==null?"todas":conv.unidade, inicio:hojeStr() }
+        : { ...comum, tipo:"clt", nome:nomePessoa, cpf:f.cpf||"", cargo:conv.cargo||CARGOS[0], setor:SETOR_POR_CARGO[conv.cargo]||"salao", escala:"6x1", folgaDia:6, unidade:conv.unidade, salario:Number(conv.salario)||0, vt:0, admissao:"", foto };
+      await ref.set(dados);
+      await tCol("convites").doc(token).set({ status:"preenchido", preenchidoEm:Date.now(), pessoaKey:donoKey, nome:nomePessoa },{merge:true});
+      setEtapa("ok");
+    }catch(e){ setErro("Não foi possível enviar agora. Verifique sua internet e tente novamente."); setEtapa("form"); }
+  };
+  const Campo=({k,l,tipoInput,col})=> <Field label={<span className="flex items-center gap-1">{l}{auto[k]&&f[k]&&<span className="text-[10px] normal-case font-bold text-brand-600 bg-brand-50 px-1.5 rounded">lido do documento</span>}</span>}>
+    <Input type={tipoInput||"text"} value={f[k]||""} onChange={e=>set(k,e.target.value)} className={cx(col, auto[k]&&f[k]?"!border-brand-200 bg-brand-50/30":"")}/></Field>;
+
+  const casca=(conteudo)=> <div className="min-h-screen grad-ink grad-hero flex items-start justify-center p-4 py-8"><div className="w-full max-w-2xl"><div className="flex justify-center mb-5"><Logo light/></div><Card className="p-6">{conteudo}</Card></div></div>;
+  if(conv===undefined) return casca(<div className="py-10 text-center"><div className="w-8 h-8 mx-auto rounded-full border-2 border-slate-200 border-t-brand-600 animate-spin"/></div>);
+  if(!conv || conv._fechado) return casca(<div className="py-6 text-center">
+    <div className="w-14 h-14 mx-auto rounded-2xl bg-slate-100 text-slate-500 grid place-items-center mb-3"><Icon d={I.lock} className="w-7 h-7"/></div>
+    <h2 className="text-xl font-bold text-slate-900">{conv&&conv.status==="preenchido"?"Cadastro já enviado":"Link indisponível"}</h2>
+    <p className="text-slate-500 text-sm mt-1">{conv&&conv.status==="preenchido"?"Este link já foi usado. Se precisar corrigir algo, fale com a empresa.":"Este link expirou ou foi cancelado. Peça um novo link à empresa."}</p>
+    <Btn variant="ghost" className="mt-4" onClick={onClose}>Fechar</Btn></div>);
+  if(etapa==="ok") return casca(<div className="py-8 text-center">
+    <div className="w-20 h-20 mx-auto rounded-full bg-emerald-500 grid place-items-center text-white mb-4 shadow-glow"><Icon d={I.check} className="w-10 h-10" stroke={3}/></div>
+    <h2 className="text-2xl font-extrabold text-slate-900">Cadastro enviado!</h2>
+    <p className="text-slate-500 mt-1">Recebemos seus dados e documentos. A empresa vai entrar em contato com os próximos passos.</p></div>);
+  if(etapa==="lendo" || etapa==="enviando") return casca(<div className="py-10 text-center">
+    <div className="w-12 h-12 mx-auto rounded-full border-4 border-slate-200 border-t-brand-600 animate-spin mb-4"/>
+    <h3 className="text-lg font-bold text-slate-900">{etapa==="lendo"?"Lendo seus documentos…":"Enviando seu cadastro…"}</h3>
+    {etapa==="lendo" && <p className="text-slate-500 text-sm mt-1">{prog.feito} de {prog.total} arquivo(s) · isso pode levar alguns segundos</p>}</div>);
+
+  const cabec=<div className="mb-5">
+    <div className="text-xs font-bold uppercase tracking-wide text-free-600">Cadastro {tipo==="pj"?"de prestador PJ":"de colaborador CLT"}</div>
+    <h2 className="text-xl font-extrabold text-slate-900 mt-1">{etapa==="docs"?"Envie seus documentos":"Confira seus dados"}</h2>
+    <div className="flex gap-2 mt-3">{["Documentos","Conferir e enviar"].map((t,i)=><div key={t} className={cx("flex-1 h-1.5 rounded-full", (etapa==="docs"?0:1)>=i?"grad-brand":"bg-slate-200")}/>)}</div>
+  </div>;
+
+  if(etapa==="docs") return casca(<>{cabec}
+    <p className="text-sm text-slate-500 mb-4">Tire foto ou envie o PDF de cada documento. Nós lemos os dados automaticamente — você não precisa digitar quase nada.</p>
+    <div className="space-y-2.5">
+      {slots.map(s=>{ const lst=arqs[s.k]||[];
+        return <div key={s.k} className={cx("p-3 rounded-2xl border", lst.length?"border-emerald-200 bg-emerald-50/40":"border-slate-200")}>
+          <div className="flex items-center gap-3">
+            <div className={cx("w-9 h-9 rounded-lg grid place-items-center shrink-0", lst.length?"bg-emerald-100 text-emerald-600":"bg-slate-100 text-slate-400")}><Icon d={lst.length?I.check:I.doc} className="w-4 h-4"/></div>
+            <div className="flex-1 min-w-0"><div className="text-sm font-semibold text-slate-800">{s.l}{s.obrig&&<span className="text-rose-500"> *</span>}</div><div className="text-xs text-slate-400">{lst.length?lst.length+" arquivo(s)":"PDF ou foto"}</div></div>
+            <label className="cursor-pointer"><span className="inline-flex items-center gap-1 text-xs font-semibold text-brand-700 bg-brand-50 hover:bg-brand-100 px-3 py-2 rounded-lg"><Icon d={I.camera} className="w-3.5 h-3.5"/>{lst.length?"Mais":"Enviar"}</span>
+              <input type="file" multiple accept="image/*,application/pdf" className="hidden" onChange={e=>{ addArq(s.k,e.target.files); e.target.value=""; }}/></label>
+          </div>
+          {lst.length>0 && <div className="flex flex-wrap gap-1.5 mt-2 pl-12">{lst.map((a,i)=><span key={i} className="inline-flex items-center gap-1 text-[11px] bg-white border border-slate-200 rounded-full pl-2 pr-1 py-0.5 max-w-full"><span className="truncate max-w-[160px]">{a.nome}</span><button onClick={()=>rmArq(s.k,i)} className="text-slate-400 hover:text-rose-500"><Icon d={I.x} className="w-3 h-3"/></button></span>)}</div>}
+        </div>; })}
+    </div>
+    {erro && <p className="text-sm text-rose-500 mt-3">{erro}</p>}
+    {faltaObrig.length>0 && <p className="text-xs text-slate-400 mt-3">Obrigatório: {faltaObrig.map(s=>s.l).join(", ")}</p>}
+    <Btn className="w-full mt-4" size="lg" icon={I.arrow} disabled={faltaObrig.length>0} onClick={lerTudo}>Ler meus documentos e continuar</Btn>
+  </>);
+
+  // etapa === "form"
+  return casca(<>{cabec}
+    {avisos.length>0 && <div className="mb-4 p-3 rounded-xl bg-amber-50 text-amber-800 text-sm space-y-1">{avisos.map((a,i)=><div key={i}>• {a}</div>)}</div>}
+    {Object.keys(auto).length>0 && <div className="mb-4 p-3 rounded-xl bg-brand-50 text-brand-800 text-sm flex items-start gap-2"><Icon d={I.check} className="w-4 h-4 mt-0.5 shrink-0"/>Preenchemos {Object.keys(auto).length} campo(s) a partir dos seus documentos. Confira e complete o que faltar.</div>}
+    {tipo==="pj" ? <>
+      <div className="text-xs font-bold text-slate-400 uppercase mb-2">Empresa</div>
+      <div className="grid sm:grid-cols-2 gap-3 mb-4">{Campo({k:"razaoSocial",l:"Razão social *"})}{Campo({k:"cnpj",l:"CNPJ *"})}{Campo({k:"nomeFantasia",l:"Nome fantasia"})}{Campo({k:"atividade",l:"Atividade"})}</div>
+      <div className="text-xs font-bold text-slate-400 uppercase mb-2">Responsável</div>
+      <div className="grid sm:grid-cols-2 gap-3 mb-4">{Campo({k:"responsavel",l:"Nome do responsável *"})}{Campo({k:"cpf",l:"CPF do responsável"})}{Campo({k:"rg",l:"RG"})}{Campo({k:"nascimento",l:"Nascimento",tipoInput:"date"})}</div>
+    </> : <>
+      <div className="text-xs font-bold text-slate-400 uppercase mb-2">Dados pessoais</div>
+      <div className="grid sm:grid-cols-2 gap-3 mb-4">{Campo({k:"nome",l:"Nome completo *"})}{Campo({k:"cpf",l:"CPF *"})}{Campo({k:"rg",l:"RG"})}{Campo({k:"rgOrgao",l:"Órgão emissor"})}{Campo({k:"nascimento",l:"Nascimento *",tipoInput:"date"})}{Campo({k:"mae",l:"Nome da mãe"})}{Campo({k:"pis",l:"PIS/NIS"})}{Campo({k:"ctpsNumero",l:"CTPS nº"})}{Campo({k:"tituloEleitor",l:"Título de eleitor"})}{Campo({k:"cnhNumero",l:"CNH nº"})}</div>
+    </>}
+    <div className="text-xs font-bold text-slate-400 uppercase mb-2">Endereço</div>
+    <div className="grid sm:grid-cols-3 gap-3 mb-4">{Campo({k:"cep",l:"CEP"})}<div className="sm:col-span-2">{Campo({k:"logradouro",l:"Rua / avenida"})}</div>{Campo({k:"numero",l:"Número"})}{Campo({k:"complemento",l:"Complemento"})}{Campo({k:"bairro",l:"Bairro"})}{Campo({k:"cidade",l:"Cidade"})}{Campo({k:"uf",l:"UF"})}</div>
+    <div className="text-xs font-bold text-slate-400 uppercase mb-2">Contato e pagamento</div>
+    <div className="grid sm:grid-cols-2 gap-3 mb-4">{Campo({k:"telefone",l:"Telefone / WhatsApp *"})}{Campo({k:"email",l:"E-mail"+(tipo==="pj"?" *":""),tipoInput:"email"})}
+      <Field label="Tipo da chave Pix"><Select value={f.tipoPix||"CPF"} onChange={e=>set("tipoPix",e.target.value)}>{PIX_TIPOS.map(t=><option key={t}>{t}</option>)}</Select></Field>{Campo({k:"pix",l:"Chave Pix"})}{Campo({k:"banco",l:"Banco"})}<div className="grid grid-cols-2 gap-3">{Campo({k:"agencia",l:"Agência"})}{Campo({k:"conta",l:"Conta"})}</div></div>
+    {tipo==="clt" && <div className="mb-4 p-3 rounded-2xl border border-slate-200 flex items-center gap-3">
+      {foto ? <img src={foto} className="w-14 h-14 rounded-xl object-cover"/> : <div className="w-14 h-14 rounded-xl bg-slate-100 grid place-items-center text-slate-400"><Icon d={I.camera}/></div>}
+      <div className="flex-1"><div className="text-sm font-semibold text-slate-800">Selfie para o registro de ponto *</div><div className="text-xs text-slate-500">Usada como referência facial ao bater o ponto.</div></div>
+      <label className="cursor-pointer"><span className="inline-flex items-center gap-1 text-xs font-semibold text-white grad-brand px-3 py-2 rounded-lg"><Icon d={I.camera} className="w-3.5 h-3.5"/>{foto?"Trocar":"Tirar selfie"}</span>
+        <input type="file" accept="image/*" capture="user" className="hidden" onChange={async e=>{ const file=e.target.files&&e.target.files[0]; if(file) setFoto(await compressImg(await lerArquivoDataUrl(file))); e.target.value=""; }}/></label>
+    </div>}
+    <label className="flex items-start gap-2 text-sm text-slate-600"><input type="checkbox" checked={aceite} onChange={e=>setAceite(e.target.checked)} className="mt-0.5 w-4 h-4 accent-green-700"/>
+      <span>Autorizo o uso dos meus dados e documentos para fins de cadastro, admissão e cumprimento de obrigações legais (LGPD).</span></label>
+    {erro && <p className="text-sm text-rose-500 mt-3">{erro}</p>}
+    {faltaForm.length>0 && <p className="text-xs text-slate-400 mt-3">Falta: {faltaForm.join(", ")}</p>}
+    <div className="flex gap-2 mt-4"><Btn variant="ghost" onClick={()=>setEtapa("docs")}>Voltar</Btn><Btn className="flex-1" size="lg" icon={I.check} disabled={faltaForm.length>0} onClick={enviar}>Enviar cadastro</Btn></div>
+  </>);
+}
+
 /* ============================ APP SHELL ============================ */
 /* ============================ AJUSTES DE PONTO (aprovação do gestor) ============================ */
 function AjustesPonto(){
@@ -4674,6 +5018,7 @@ const NAV = [
     {k:"clt",l:"Colaboradores CLT",d:I.user},
     {k:"freelas",l:"Freelancers",d:I.coffee},
     {k:"pjs",l:"Prestadores PJ",d:I.briefcase},
+    {k:"convites",l:"Convites de cadastro",d:I.link},
     {k:"equipe",l:"Equipe & permissões",d:I.team,dono:true},
   ]},
   {sec:"Documentos", items:[
@@ -4694,7 +5039,7 @@ const NAV = [
     {k:"ajuda",l:"Ajuda",d:I.help},
   ]},
 ];
-const TITULOS={dashboard:"Painel",escala:"Escala por unidade",ponto:"Ponto ao vivo",ajustes:"Ajustes de ponto",clt:"Colaboradores CLT",freelas:"Freelancers",pjs:"Prestadores PJ",arquivos:"Arquivos & pastas",holerites:"Holerites",dossie:"Dossiê do colaborador",equipe:"Equipe & permissões",relatorios:"Relatórios",financeiro:"Financeiro",pagamentos:"Pagamentos",unidades:"Unidades",links:"Links & QR",acessos:"Gerentes & acessos",config:"Configurações",ajuda:"Ajuda"};
+const TITULOS={dashboard:"Painel",escala:"Escala por unidade",ponto:"Ponto ao vivo",ajustes:"Ajustes de ponto",clt:"Colaboradores CLT",freelas:"Freelancers",pjs:"Prestadores PJ",convites:"Convites de cadastro",arquivos:"Arquivos & pastas",holerites:"Holerites",dossie:"Dossiê do colaborador",equipe:"Equipe & permissões",relatorios:"Relatórios",financeiro:"Financeiro",pagamentos:"Pagamentos",unidades:"Unidades",links:"Links & QR",acessos:"Gerentes & acessos",config:"Configurações",ajuda:"Ajuda"};
 
 // Seletor de cliente (multiempresa) — troca entre grupos de restaurantes e cria novo cliente.
 function ClienteSwitcher(){
@@ -4956,7 +5301,7 @@ function Shell({ onLogout }) {
   if(acesso && acesso.semAcesso) return <TelaBloqueio icone={I.shield} titulo="Sua conta ainda não tem acesso" texto="Peça ao administrador para vincular seu e-mail a um cliente. Assim que ele liberar, é só entrar novamente." onLogout={onLogout}/>;
   if(acesso && acesso.tenantBind!=null && acesso.tenantBind!==tenantAtual) return <TelaBloqueio spin titulo="Abrindo seu cliente…"/>;
   const views={ dashboard:<Dashboard go={setView}/>, escala:<EscalaVisual/>, ponto:<PontoLive/>, ajustes:<AjustesPonto/>, clt:<ColaboradoresCLT/>, freelas:<Freelancers/>,
-    dossie:<Dossie/>, pjs:<PrestadoresPJ/>, arquivos:<ArquivosPage/>, holerites:<HoleritesPage/>, equipe:<Equipe/>, relatorios:<Relatorios/>, financeiro:<Financeiro/>, pagamentos:<Pagamentos/>, unidades:<Unidades/>, links:<LinksQR/>, acessos:<GerentesAcesso/>, config:<Configuracoes/>, ajuda:<Ajuda/> };
+    dossie:<Dossie/>, pjs:<PrestadoresPJ/>, convites:<ConvitesPage/>, arquivos:<ArquivosPage/>, holerites:<HoleritesPage/>, equipe:<Equipe/>, relatorios:<Relatorios/>, financeiro:<Financeiro/>, pagamentos:<Pagamentos/>, unidades:<Unidades/>, links:<LinksQR/>, acessos:<GerentesAcesso/>, config:<Configuracoes/>, ajuda:<Ajuda/> };
   return <ToastCtx.Provider value={pushToast}>
     <div className="flex min-h-screen">
       <Sidebar view={view} setView={setView} open={sbOpen} setOpen={setSbOpen} onLogout={onLogout}/>
@@ -4984,7 +5329,7 @@ function Shell({ onLogout }) {
 // Roteamento por hash para os LINKS de cadastro/ponto (CLT e Freelancer).
 // Ex.: abrir  ...wilami-ponto-app.html#ponto-clt  já abre o quiosque CLT (público).
 function usePontoHash() {
-  const read=()=>{ const h=(window.location.hash||"").replace("#",""); return h==="ponto-clt"?"clt": h==="ponto-free"?"free": h==="meus-docs"?"docs": null; };
+  const read=()=>{ const h=(window.location.hash||"").replace("#",""); return h==="ponto-clt"?"clt": h==="ponto-free"?"free": h==="meus-docs"?"docs": h.indexOf("convite/")===0?"convite": null; };
   const [mode,setMode]=useState(read());
   useEffect(()=>{ const on=()=>setMode(read()); window.addEventListener("hashchange",on); return ()=>window.removeEventListener("hashchange",on); },[]);
   return [mode, ()=>{ if(window.location.hash){ window.history.replaceState(null,"",window.location.pathname+window.location.search); } setMode(null); }];
@@ -5025,7 +5370,8 @@ function App() {
   const logged = window.__WPAUTH ? !!user : localLogged;
   const logout=()=>{ try{ window.__WPAUTH&&window.__WPAUTH.signOut(); }catch(e){} setLocalLogged(false); };
   return <StoreProvider>
-    {pontoMode==="docs" ? <PortalColab onClose={fecharPonto}/>
+    {pontoMode==="convite" ? <ConviteCadastro onClose={fecharPonto}/>
+     : pontoMode==="docs" ? <PortalColab onClose={fecharPonto}/>
      : pontoMode ? <PontoKiosk mode={pontoMode} onClose={fecharPonto}/>
      : !authReady ? <div className="min-h-screen grad-ink grad-hero grid place-items-center text-white"><div className="text-center"><div className="w-10 h-10 mx-auto rounded-full border-2 border-white/30 border-t-white animate-spin mb-3"/><Logo light/></div></div>
      : logged ? <Shell onLogout={logout}/>
