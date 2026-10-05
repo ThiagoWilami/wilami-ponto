@@ -594,7 +594,7 @@ const ehErroPermissao=(e)=> !!e && (e.code==="permission-denied" || /insufficien
 const erroBanco=(e)=> ehErroPermissao(e)
   ? "o banco de dados (Firebase) ainda não libera este recurso. Atualize as regras em Configurações → Banco de dados."
   : String((e&&e.message)||e);
-const REGRAS_FIRESTORE_NOVAS = '// ===== Regras para as coleções novas do Wilami Ponto & RH =====\n// Cole estes blocos DENTRO do bloco existente:\n//   match /databases/{database}/documents { ... }\n// sem apagar as regras que você já tem.\n// Se você usa vários clientes (tenants) e as regras de /tenants/... NÃO liberam tudo,\n// copie os mesmos blocos também para dentro de: match /tenants/{tenant} { ... }\n\n// Arquivos (pastas, holerites, contratos, documentos do convite)\nmatch /arquivos/{id} {\n  allow read: if true;                       // app "Meus documentos" lê os próprios arquivos\n  allow create: if true;                     // painel e candidato do convite enviam arquivos\n  allow update: if request.auth != null\n    || request.resource.data.diff(resource.data).affectedKeys().hasOnly([\'vistoEm\']);  // colaborador marca "visto"\n  allow delete: if request.auth != null;\n}\nmatch /arquivos_partes/{id} {\n  allow read: if true;\n  allow create: if true;\n  allow update: if false;\n  allow delete: if request.auth != null;\n}\n\n// PIN do app "Meus documentos" (só o hash é guardado)\nmatch /acessosColab/{id} {\n  allow read: if true;\n  allow create, delete: if request.auth != null;\n  allow update: if request.auth != null\n    || request.resource.data.diff(resource.data).affectedKeys().hasOnly([\'hash\',\'cpf\',\'atualizadoEm\',\'trocadoPeloColab\']);\n}\n\n// Convites de cadastro (link enviado ao candidato)\nmatch /convites/{token} {\n  allow read: if true;\n  allow create, delete: if request.auth != null;\n  allow update: if request.auth != null\n    || (resource.data.status == \'aberto\'\n        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([\'status\',\'preenchidoEm\',\'pessoaKey\',\'nome\']));\n}\n';
+const REGRAS_FIRESTORE_NOVAS = '// ===== Regras para as coleções novas do Wilami Ponto & RH =====\n// Cole estes blocos DENTRO do bloco existente:\n//   match /databases/{database}/documents { ... }\n// sem apagar as regras que você já tem.\n// Se você usa vários clientes (tenants) e as regras de /tenants/... NÃO liberam tudo,\n// copie os mesmos blocos também para dentro de: match /tenants/{tenant} { ... }\n\n// Arquivos (pastas, holerites, contratos, documentos do convite)\nmatch /arquivos/{id} {\n  allow read: if true;                       // app "Meus documentos" lê os próprios arquivos\n  allow create: if true;                     // painel e candidato do convite enviam arquivos\n  allow update: if request.auth != null\n    || request.resource.data.diff(resource.data).affectedKeys().hasOnly([\'vistoEm\']);  // colaborador marca "visto"\n  allow delete: if request.auth != null;\n}\nmatch /arquivos_partes/{id} {\n  allow read: if true;\n  allow create: if true;\n  allow update: if false;\n  allow delete: if request.auth != null;\n}\n\n// PIN do app "Meus documentos" (só o hash é guardado). Só o RH (logado) define ou redefine.\nmatch /acessosColab/{id} {\n  allow read: if true;\n  allow write: if request.auth != null;\n}\n\n// Convites de cadastro (link enviado ao candidato)\nmatch /convites/{token} {\n  allow read: if true;\n  allow create, delete: if request.auth != null;\n  allow update: if request.auth != null\n    || (resource.data.status == \'aberto\'\n        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([\'status\',\'preenchidoEm\',\'pessoaKey\',\'nome\']));\n}\n';
 // Testa se cada coleção nova aceita gravação (cria e apaga um documento de teste)
 async function testarPermissoesBanco(){
   const out=[];
@@ -4474,8 +4474,6 @@ function PortalColab({onClose}){
   const [sessao,setSessao]=useState(()=>{ try{ return JSON.parse(sessionStorage.getItem(tKey("portal"))||"null"); }catch(e){ return null; } });
   const [arqs,setArqs]=useState(null);
   const [abrindo,setAbrindo]=useState("");
-  const [trocar,setTrocar]=useState(false);
-  const [np,setNp]=useState({atual:"",novo:"",conf:""}); const [npMsg,setNpMsg]=useState("");
   const todos=[...clts.map(p=>({tipo:"clt",p})), ...freelas.map(p=>({tipo:"free",p})), ...pjs.map(p=>({tipo:"pj",p}))];
   const eu=sessao && todos.find(x=>donoKeyDe(x.tipo,x.p.id)===sessao.key);
   const bloqKey=tKey("portal_bloq");
@@ -4510,15 +4508,6 @@ function PortalColab({onClose}){
     try{ return tCol("arquivos").where("donoKey","==",sessao.key).onSnapshot(function(snap){ const a=[]; snap.forEach(function(d){ const x={...(d.data()||{}),id:d.id}; if(x.visivelColab) a.push(x); }); setArqs(a); }, function(){ setArqs([]); }); }catch(e){ setArqs([]); }
   },[sessao&&sessao.key]);
   const abrir=async(a)=>{ setAbrindo(a.id); try{ await arqAbrir(a); if(!a.vistoEm) arqAtualizar(a.id,{vistoEm:Date.now()}).catch(()=>{}); }catch(e){ alert("Não foi possível abrir o arquivo."); } setAbrindo(""); };
-  const salvarPin=async()=>{
-    setNpMsg("");
-    if(!/^\d{6}$/.test(np.novo)){ setNpMsg("O novo PIN deve ter 6 números."); return; }
-    if(np.novo!==np.conf){ setNpMsg("A confirmação não confere."); return; }
-    try{ const s=await tCol("acessosColab").doc(sessao.key).get(); const h=await pinHash(sessao.doc,np.atual);
-      if(!s.exists||h!==(s.data()||{}).hash){ setNpMsg("PIN atual incorreto."); return; }
-      await definirPinColab(sessao.key,sessao.doc,np.novo,{trocadoPeloColab:true}); setTrocar(false); setNp({atual:"",novo:"",conf:""}); alert("PIN alterado com sucesso.");
-    }catch(e){ setNpMsg("Não foi possível alterar agora."); }
-  };
   const hol=(arqs||[]).filter(a=>a.categoria==="holerite").sort((a,b)=>String(b.competencia||"").localeCompare(String(a.competencia||""))||(b.ts||0)-(a.ts||0));
   const outros=(arqs||[]).filter(a=>a.categoria!=="holerite").sort((a,b)=>(b.ts||0)-(a.ts||0));
   const Linha=({a,destaque})=> <button onClick={()=>abrir(a)} className="w-full flex items-center gap-3 p-3.5 rounded-2xl border border-slate-200 bg-white hover:border-brand-300 hover:bg-brand-50/30 text-left transition">
@@ -4556,16 +4545,7 @@ function PortalColab({onClose}){
             <div className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-2">{eu.tipo==="pj"?"Contratos e documentos":"Documentos"}</div>
             <div className="space-y-2">{outros.length===0 ? <p className="text-sm text-slate-400 text-center py-4 rounded-2xl bg-slate-50">Nenhum documento liberado.</p> : outros.map(a=><Linha key={a.id} a={a}/>)}</div>
           </>}
-          <div className="mt-5 pt-4 border-t border-slate-100">
-            {!trocar ? <button onClick={()=>setTrocar(true)} className="text-sm font-semibold text-brand-700 hover:underline flex items-center gap-1"><Icon d={I.key} className="w-4 h-4"/>Trocar meu PIN</button>
-            : <div className="space-y-2">
-              <Input type="password" inputMode="numeric" placeholder="PIN atual" value={np.atual} onChange={e=>setNp({...np,atual:e.target.value.replace(/\D/g,"")})}/>
-              <Input type="password" inputMode="numeric" maxLength={6} placeholder="Novo PIN (6 números)" value={np.novo} onChange={e=>setNp({...np,novo:e.target.value.replace(/\D/g,"")})}/>
-              <Input type="password" inputMode="numeric" maxLength={6} placeholder="Confirme o novo PIN" value={np.conf} onChange={e=>setNp({...np,conf:e.target.value.replace(/\D/g,"")})}/>
-              {npMsg && <p className="text-xs text-rose-500">{npMsg}</p>}
-              <div className="flex gap-2"><Btn size="sm" variant="ghost" onClick={()=>{setTrocar(false);setNpMsg("");}}>Cancelar</Btn><Btn size="sm" className="flex-1" onClick={salvarPin}>Salvar novo PIN</Btn></div>
-            </div>}
-          </div>
+          <p className="mt-5 pt-4 border-t border-slate-100 text-xs text-slate-400 flex items-center gap-1.5"><Icon d={I.key} className="w-3.5 h-3.5"/>Esqueceu o PIN ou quer trocar? Peça um novo PIN ao RH.</p>
         </>}
       </Card>
     </div>
