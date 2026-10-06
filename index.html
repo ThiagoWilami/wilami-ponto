@@ -4852,7 +4852,7 @@ const CLAUSULAS_PJ_PADRAO = [
 ];
 // Empresa contratante padrão (cartão CNPJ). Campos salvos no painel têm prioridade; os vazios usam estes valores.
 const EMPRESA_CONTRATANTE_PADRAO = { razao:"MASSIMO CASILLI ASSESSORIA EMPRESARIAL LTDA", cnpj:"08.815.275/0001-95",
-  endereco:"Rua Cristalino Rolim de Freitas, nº 121, Sala 04, Jurubatuba, São Paulo/SP, CEP 04696-310", cidade:"São Paulo/SP", foro:"São Paulo/SP", representante:"", avisoPrevio:30 };
+  endereco:"Rua Cristalino Rolim de Freitas, nº 121, Sala 04, Jurubatuba, São Paulo/SP, CEP 04696-310", cidade:"São Paulo/SP", foro:"São Paulo/SP", representante:"Massimo Casilli", avisoPrevio:30 };
 const empresaEfetiva=(e)=>{ const o={...EMPRESA_CONTRATANTE_PADRAO}; Object.entries(e||{}).forEach(([k,v])=>{ if(v!==""&&v!=null) o[k]=v; }); return o; };
 const MODELO_PJ_PADRAO = { titulo:"CONTRATO DE PRESTAÇÃO DE SERVIÇOS DE {{OBJETO}}", intro:"As partes acima qualificadas resolvem celebrar o presente CONTRATO DE PRESTAÇÃO DE SERVIÇOS DE {{OBJETO}}, que se regerá pelas cláusulas e condições abaixo:", clausulas:CLAUSULAS_PJ_PADRAO };
 const ORDINAIS_F=["PRIMEIRA","SEGUNDA","TERCEIRA","QUARTA","QUINTA","SEXTA","SÉTIMA","OITAVA","NONA","DÉCIMA","DÉCIMA PRIMEIRA","DÉCIMA SEGUNDA","DÉCIMA TERCEIRA","DÉCIMA QUARTA","DÉCIMA QUINTA","DÉCIMA SEXTA","DÉCIMA SÉTIMA","DÉCIMA OITAVA","DÉCIMA NONA","VIGÉSIMA","VIGÉSIMA PRIMEIRA","VIGÉSIMA SEGUNDA","VIGÉSIMA TERCEIRA","VIGÉSIMA QUARTA","VIGÉSIMA QUINTA"];
@@ -5006,7 +5006,7 @@ function ModeloContratoPage(){
         <div className="space-y-1 text-xs mb-4">{CAMPOS_CONTRATO.map(([k,l])=><div key={k}><code className="text-brand-700">{"{{"+k+"}}"}</code> <span className="text-slate-500">— {l}</span></div>)}</div>
         <div className="text-xs font-bold text-slate-400 uppercase mb-2">Prévia (exemplo)</div>
         <div className="max-h-[50vh] overflow-y-auto text-[11px] leading-relaxed text-slate-700 bg-slate-50 rounded-xl p-3 font-serif">
-          {exemplo.map((b,i)=> b.t==="titulo"?<p key={i} className="font-bold text-center mb-2">{b.x}</p> : b.t==="clausula"?<p key={i} className="font-bold mt-2">{b.x}</p> : b.t==="subtitulo"?<p key={i} className="font-bold">{b.x}</p> : b.t==="item"?<p key={i} className="pl-3">{b.x}</p> : b.t==="assin"?<p key={i} className="mt-2">______________________<br/>{b.x} — {b.n}</p> : b.t==="testemunhas"?null : <p key={i} className="mb-1">{b.x}</p>)}
+          {exemplo.map((b,i)=> b.t==="titulo"?<p key={i} className="font-bold text-center mb-2">{b.x}</p> : b.t==="clausula"?<p key={i} className="font-bold mt-2">{b.x}</p> : b.t==="subtitulo"?<p key={i} className="font-bold">{b.x}</p> : b.t==="item"?<p key={i} className="pl-3">{b.x}</p> : b.t==="assin"?<p key={i} className="mt-2">______________________<br/>{b.x} — {b.n}{b.r?<><br/>{b.r}</>:null}</p> : b.t==="testemunhas"?null : <p key={i} className="mb-1">{b.x}</p>)}
         </div>
       </Card>
     </div>
@@ -5051,7 +5051,7 @@ function GerarContratoModal({pj,onClose}){
       </div>
       {avisos.length>0 && <div className="mt-3 p-3 rounded-xl bg-amber-50 text-amber-800 text-sm space-y-0.5">{avisos.map((a,i)=><div key={i}>• {a}</div>)}</div>}
       <div className="mt-4 max-h-[45vh] overflow-y-auto rounded-xl border border-slate-200 bg-white p-5 text-[13px] leading-relaxed text-slate-800 font-serif">
-        {blocos.map((b,i)=> b.t==="titulo"?<p key={i} className="font-bold text-center mb-3">{b.x}</p> : b.t==="clausula"?<p key={i} className="font-bold mt-3">{b.x}</p> : b.t==="subtitulo"?<p key={i} className="font-bold mb-1">{b.x}</p> : b.t==="item"?<p key={i} className="pl-4">{b.x}</p> : b.t==="qual"?<p key={i} className="mb-2"><b>{b.x.split(":")[0]}:</b>{b.x.slice(b.x.indexOf(":")+1)}</p> : b.t==="assin"?<div key={i} className="mt-6"><div className="w-64 border-t border-slate-500 pt-1 font-bold">{b.x}</div><div>{b.n}</div><div className="text-xs text-slate-500">{b.d}</div></div> : b.t==="testemunhas"?<p key={i} className="mt-6 font-bold">TESTEMUNHAS: 1. ______________ 2. ______________</p> : <p key={i} className={cx("mb-1", b.t==="local"&&"mt-5")}>{b.x}</p>)}
+        {blocos.map((b,i)=> b.t==="titulo"?<p key={i} className="font-bold text-center mb-3">{b.x}</p> : b.t==="clausula"?<p key={i} className="font-bold mt-3">{b.x}</p> : b.t==="subtitulo"?<p key={i} className="font-bold mb-1">{b.x}</p> : b.t==="item"?<p key={i} className="pl-4">{b.x}</p> : b.t==="qual"?<p key={i} className="mb-2"><b>{b.x.split(":")[0]}:</b>{b.x.slice(b.x.indexOf(":")+1)}</p> : b.t==="assin"?<div key={i} className="mt-6"><div className="w-64 border-t border-slate-500 pt-1 font-bold">{b.x}</div><div>{b.n}</div><div className="text-xs text-slate-500">{b.d}</div>{b.r&&<div className="text-xs text-slate-600">{b.r}</div>}</div> : b.t==="testemunhas"?<p key={i} className="mt-6 font-bold">TESTEMUNHAS: 1. ______________ 2. ______________</p> : <p key={i} className={cx("mb-1", b.t==="local"&&"mt-5")}>{b.x}</p>)}
       </div>
       <div className="flex gap-2 mt-4"><Btn variant="ghost" onClick={onClose}>Cancelar</Btn><Btn className="flex-1" icon={gerando?null:I.doc} disabled={gerando} onClick={gerar}>{gerando?"Gerando…":"Gerar PDF e salvar na pasta do prestador"}</Btn></div>
     </div>
