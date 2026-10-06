@@ -4850,6 +4850,10 @@ const CLAUSULAS_PJ_PADRAO = [
   { id:"gerais", titulo:"DAS DISPOSIÇÕES GERAIS", texto:"{{N}}.1. O presente contrato substitui quaisquer entendimentos anteriores relacionados ao seu objeto.\n{{N}}.2. Alterações somente terão validade mediante instrumento escrito assinado por ambas as partes.\n{{N}}.3. A eventual tolerância de uma parte em relação à outra não representará renúncia de direitos." },
   { id:"foro", titulo:"DO FORO", texto:"{{N}}.1. Fica eleito o Foro da Comarca de {{FORO}}, com renúncia a qualquer outro, por mais privilegiado que seja, para dirimir eventuais controvérsias oriundas deste contrato." },
 ];
+// Empresa contratante padrão (cartão CNPJ). Campos salvos no painel têm prioridade; os vazios usam estes valores.
+const EMPRESA_CONTRATANTE_PADRAO = { razao:"MASSIMO CASILLI ASSESSORIA EMPRESARIAL LTDA", cnpj:"08.815.275/0001-95",
+  endereco:"Rua Cristalino Rolim de Freitas, nº 121, Sala 04, Jurubatuba, São Paulo/SP, CEP 04696-310", cidade:"São Paulo/SP", foro:"São Paulo/SP", representante:"", avisoPrevio:30 };
+const empresaEfetiva=(e)=>{ const o={...EMPRESA_CONTRATANTE_PADRAO}; Object.entries(e||{}).forEach(([k,v])=>{ if(v!==""&&v!=null) o[k]=v; }); return o; };
 const MODELO_PJ_PADRAO = { titulo:"CONTRATO DE PRESTAÇÃO DE SERVIÇOS DE {{OBJETO}}", intro:"As partes acima qualificadas resolvem celebrar o presente CONTRATO DE PRESTAÇÃO DE SERVIÇOS DE {{OBJETO}}, que se regerá pelas cláusulas e condições abaixo:", clausulas:CLAUSULAS_PJ_PADRAO };
 const ORDINAIS_F=["PRIMEIRA","SEGUNDA","TERCEIRA","QUARTA","QUINTA","SEXTA","SÉTIMA","OITAVA","NONA","DÉCIMA","DÉCIMA PRIMEIRA","DÉCIMA SEGUNDA","DÉCIMA TERCEIRA","DÉCIMA QUARTA","DÉCIMA QUINTA","DÉCIMA SEXTA","DÉCIMA SÉTIMA","DÉCIMA OITAVA","DÉCIMA NONA","VIGÉSIMA","VIGÉSIMA PRIMEIRA","VIGÉSIMA SEGUNDA","VIGÉSIMA TERCEIRA","VIGÉSIMA QUARTA","VIGÉSIMA QUINTA"];
 // Número por extenso (pt-BR) — inteiros até 999.999.999
@@ -4945,7 +4949,7 @@ function ModeloContratoPage(){
   const { modeloContratoPJ, setModeloContratoPJ, empresaContratante, setEmpresaContratante, can } = useStore();
   const toast=useContext(ToastCtx);
   const [m,setM]=useState(()=>JSON.parse(JSON.stringify(modeloContratoPJ||MODELO_PJ_PADRAO)));
-  const [emp,setEmp]=useState(()=>({ razao:"", cnpj:"", endereco:"", cidade:"São Paulo/SP", foro:"São Paulo/SP", representante:"", avisoPrevio:30, ...(empresaContratante||{}) }));
+  const [emp,setEmp]=useState(()=>empresaEfetiva(empresaContratante));
   const [aberta,setAberta]=useState(null);
   const editavel=can("documentos");
   const setCl=(i,patch)=>setM(p=>({...p,clausulas:p.clausulas.map((c,j)=>j===i?{...c,...patch}:c)}));
@@ -5011,7 +5015,8 @@ function ModeloContratoPage(){
 
 /* ---------- Gerar contrato de um prestador ---------- */
 function GerarContratoModal({pj,onClose}){
-  const { modeloContratoPJ, empresaContratante, cargosDesc, salvarPj } = useStore();
+  const { modeloContratoPJ, empresaContratante:_empSalva, cargosDesc, salvarPj } = useStore();
+  const empresaContratante=empresaEfetiva(_empSalva);
   const toast=useContext(ToastCtx);
   const cargosPJ=(cargosDesc||[]).filter(c=>c.tipo==="pj");
   const [cargoNome,setCargoNome]=useState(()=> (cargosPJ.find(c=>c.nome===pj.servico)||cargosPJ[0]||{}).nome||"");
