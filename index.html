@@ -4715,11 +4715,16 @@ function ConfigAssinatura(){
 
 /* ============================ CARGOS & FUNÇÕES (descritivo de função) ============================ */
 const DESCRITIVO_LINHAS=(t)=> String(t||"").split(/\n+/).map(l=>l.replace(/^\s*[-•*\d.)]+\s*/,"").trim()).filter(Boolean);
+// Turnos/períodos do cargo (ex.: Manhã 07:00–15:20, Noite 18:00–02:20). Cargos antigos com um só horário viram um turno.
+const TURNOS_SUGERIDOS=["Manhã","Tarde","Noite","Madrugada","Intermediário","Fim de semana"];
+const turnosDe=(c)=>{ if(!c) return []; if(Array.isArray(c.turnos)&&c.turnos.length) return c.turnos; return (c.horario||c.escala)?[{nome:"Padrão",horario:c.horario||"",escala:c.escala||""}]:[]; };
+const rotuloTurno=(t)=>[t.nome, t.horario, t.escala?(ESCALAS[t.escala]||t.escala):""].filter(Boolean).join(" · ");
 const CARGO_VAZIO={ nome:"", tipo:"clt", setor:"salao", escala:"6x1", horario:"", salarioBase:"", beneficios:"", requisitos:"", descritivo:"", obs:"", objetoContrato:"", clausulasOff:[], clausulaEspecifica:"" };
 function CargoForm({inicial,onSalvar,onClose,nomesUsados}){
   const { modeloContratoPJ } = useStore();
   const opcionais=((modeloContratoPJ||MODELO_PJ_PADRAO).clausulas||[]).filter(x=>x.opcional && !x.especifica);
-  const [c,setC]=useState(()=>({...CARGO_VAZIO, ...(inicial||{})}));
+  const [c,setC]=useState(()=>{ const b={...CARGO_VAZIO, ...(inicial||{})}; const ts=turnosDe(inicial).filter(t=>!(t.nome==="Padrão"&&!t.horario)); return {...b, turnos: ts.length?ts.map(t=>({...t})):[{nome:"Manhã",horario:"",escala:b.escala||"6x1"}]}; });
+  const setTurno=(i,k,v)=>setC(p=>({...p,turnos:p.turnos.map((t,j)=>j===i?{...t,[k]:v}:t)}));
   const set=(k,v)=>setC(p=>({...p,[k]:v}));
   const nomeOk=c.nome.trim().length>=2 && !(nomesUsados||[]).some(n=>n.toLowerCase()===c.nome.trim().toLowerCase() && (!inicial||n!==inicial.nome));
   const ta="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-brand-400 text-sm";
@@ -4729,9 +4734,19 @@ function CargoForm({inicial,onSalvar,onClose,nomesUsados}){
       <Field label="Nome do cargo *"><Input value={c.nome} onChange={e=>set("nome",e.target.value)} placeholder="Ex.: Auxiliar de Cozinha" disabled={!!(inicial&&inicial._padrao)}/></Field>
       <Field label="Vínculo"><Select value={c.tipo} onChange={e=>set("tipo",e.target.value)}><option value="clt">CLT</option><option value="pj">Prestador PJ</option></Select></Field>
       <Field label="Setor"><Select value={c.setor} onChange={e=>set("setor",e.target.value)}>{SETORES.map(([k,l])=><option key={k} value={k}>{l}</option>)}</Select></Field>
-      <Field label="Escala"><Select value={c.escala} onChange={e=>set("escala",e.target.value)}>{Object.entries(ESCALAS).map(([k,l])=><option key={k} value={k}>{l}</option>)}<option value="">— não se aplica —</option></Select></Field>
-      <Field label="Horário de trabalho"><Input value={c.horario} onChange={e=>set("horario",e.target.value)} placeholder="Ex.: 08:00 às 16:20, 1h de intervalo"/></Field>
       <Field label={c.tipo==="pj"?"Valor mensal (R$)":"Salário base (R$)"}><Input type="number" value={c.salarioBase} onChange={e=>set("salarioBase",e.target.value)}/></Field>
+    </div>
+    <div className="mt-4 p-4 rounded-2xl border border-slate-200 bg-slate-50/50">
+      <div className="flex items-center justify-between mb-1"><div className="text-xs font-bold text-slate-500 uppercase tracking-wide flex items-center gap-1.5"><Icon d={I.clock} className="w-3.5 h-3.5"/>Turnos / períodos</div>
+        <button type="button" onClick={()=>setC(p=>({...p,turnos:[...p.turnos,{nome:TURNOS_SUGERIDOS.find(n=>!p.turnos.some(t=>t.nome===n))||"",horario:"",escala:(p.turnos[0]&&p.turnos[0].escala)||"6x1"}]}))} className="text-xs font-semibold text-brand-700 hover:underline flex items-center gap-1"><Icon d={I.plus} className="w-3.5 h-3.5"/>Adicionar turno</button></div>
+      <p className="text-xs text-slate-400 mb-3">O mesmo cargo pode ter pessoas de manhã, à tarde ou à noite. Cadastre cada período; no convite você escolhe o turno da vaga.</p>
+      <datalist id="turnos-sugeridos">{TURNOS_SUGERIDOS.map(n=><option key={n} value={n}/>)}</datalist>
+      <div className="space-y-2">{c.turnos.map((t,i)=><div key={i} className="grid grid-cols-[1fr_1.4fr_1.2fr_auto] gap-2 items-center">
+        <Input value={t.nome} onChange={e=>setTurno(i,"nome",e.target.value)} list="turnos-sugeridos" placeholder="Turno" aria-label="Nome do turno"/>
+        <Input value={t.horario} onChange={e=>setTurno(i,"horario",e.target.value)} placeholder="Ex.: 07:00 às 15:20" aria-label="Horário do turno"/>
+        <Select value={t.escala} onChange={e=>setTurno(i,"escala",e.target.value)} aria-label="Escala do turno">{Object.entries(ESCALAS).map(([k,l])=><option key={k} value={k}>{l}</option>)}<option value="">— não se aplica —</option></Select>
+        <button type="button" title="Remover turno" disabled={c.turnos.length<=1} onClick={()=>setC(p=>({...p,turnos:p.turnos.filter((_,j)=>j!==i)}))} className="w-8 h-8 rounded-lg grid place-items-center text-slate-400 hover:text-rose-500 hover:bg-rose-50 disabled:opacity-30"><Icon d={I.trash} className="w-4 h-4"/></button>
+      </div>)}</div>
     </div>
     <div className="grid gap-3 mt-3">
       <Field label="Descritivo de função — uma atividade por linha *"><textarea rows={7} value={c.descritivo} onChange={e=>set("descritivo",e.target.value)} className={ta} placeholder={"Preparar os insumos conforme ficha técnica\nManter a praça limpa e organizada\nControlar validade e etiquetagem dos produtos"}/></Field>
@@ -4750,7 +4765,8 @@ function CargoForm({inicial,onSalvar,onClose,nomesUsados}){
     {DESCRITIVO_LINHAS(c.descritivo).length>0 && <div className="mt-3 p-3 rounded-xl bg-slate-50 text-sm"><div className="text-xs font-bold text-slate-400 uppercase mb-1">Como o candidato vai ver</div>
       <ul className="list-disc pl-5 text-slate-700 space-y-0.5">{DESCRITIVO_LINHAS(c.descritivo).map((l,i)=><li key={i}>{l}</li>)}</ul></div>}
     <div className="flex gap-2 mt-5"><Btn variant="ghost" onClick={onClose}>Cancelar</Btn>
-      <Btn className="flex-1" icon={I.check} disabled={!nomeOk || !DESCRITIVO_LINHAS(c.descritivo).length} onClick={()=>onSalvar({...c, nome:c.nome.trim(), salarioBase:Number(c.salarioBase)||0})}>Salvar cargo</Btn></div>
+      <Btn className="flex-1" icon={I.check} disabled={!nomeOk || !DESCRITIVO_LINHAS(c.descritivo).length} onClick={()=>{ const turnos=c.turnos.map(t=>({nome:String(t.nome||"").trim(),horario:String(t.horario||"").trim(),escala:t.escala||""})).filter(t=>t.nome||t.horario);
+        onSalvar({...c, nome:c.nome.trim(), salarioBase:Number(c.salarioBase)||0, turnos, escala:(turnos[0]&&turnos[0].escala)||"", horario:(turnos[0]&&turnos[0].horario)||""}); }}>Salvar cargo</Btn></div>
     {!nomeOk && c.nome.trim().length>=2 && <p className="text-xs text-rose-500 mt-2">Já existe um cargo com esse nome.</p>}
   </div>;
 }
@@ -4775,7 +4791,8 @@ function CargosPage(){
           <div className="flex items-start gap-3">
             <div className="w-10 h-10 rounded-xl grid place-items-center text-white shrink-0" style={{background:(st&&st.c)||"#2f6f2a"}}><Icon d={c.tipo==="pj"?I.briefcase:I.user} className="w-5 h-5"/></div>
             <div className="flex-1 min-w-0"><div className="font-bold text-slate-900">{c.nome}</div>
-              <div className="text-xs text-slate-500">{c.tipo==="pj"?"PJ":"CLT"} · {(st&&st.l)||"—"}{c.escala?" · "+c.escala:""} · {qtd(c)} pessoa(s)</div></div>
+              <div className="text-xs text-slate-500">{c.tipo==="pj"?"PJ":"CLT"} · {(st&&st.l)||"—"} · {qtd(c)} pessoa(s)</div>
+              {turnosDe(c).length>0 && <div className="flex flex-wrap gap-1 mt-1.5">{turnosDe(c).map((t,i)=><span key={i} className="text-[11px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-600" title={rotuloTurno(t)}>{t.nome||"Turno"}{t.horario?" · "+t.horario:""}</span>)}</div>}</div>
           </div>
           {linhas.length ? <ul className="mt-3 text-sm text-slate-600 list-disc pl-5 space-y-0.5 flex-1">{linhas.slice(0,4).map((l,i)=><li key={i} className="truncate">{l}</li>)}{linhas.length>4&&<li className="list-none -ml-5 text-xs text-slate-400">+ {linhas.length-4} atividade(s)</li>}</ul>
             : <p className="mt-3 text-sm text-amber-600 flex-1">Sem descritivo de função ainda.</p>}
@@ -4812,6 +4829,7 @@ async function pdfTermoFuncao({nome, cpf, empresa, vaga, aceitoEm}){
   linha("Colaborador(a): "+nome,{f:bold});
   if(cpf) linha("CPF: "+cpf);
   linha("Cargo: "+vaga.cargo+(vaga.setorNome?" · Setor: "+vaga.setorNome:""));
+  if(vaga.turno) linha("Turno: "+vaga.turno);
   if(vaga.escala) linha("Escala: "+vaga.escala+(vaga.horario?" · Horário: "+vaga.horario:""));
   else if(vaga.horario) linha("Horário: "+vaga.horario);
   if(vaga.salario) linha("Remuneração: "+fmtBRL(Number(vaga.salario)));
@@ -5348,7 +5366,8 @@ function ConvitesPage(){
   const criar=async()=>{
     const token=gerarTokenConvite();
     const ci=cargoInfo(novo.tipo==="clt"?novo.cargo:novo.servico);
-    const vaga = ci ? { cargo:ci.nome, setorNome:(SETOR_MAP[ci.setor]||{}).l||"", escala:ci.escala?ESCALAS[ci.escala]||ci.escala:"", horario:ci.horario||"", beneficios:ci.beneficios||"",
+    const tns=turnosDe(ci); const tn=tns[Number(novo.turno)||0]||{};
+    const vaga = ci ? { cargo:ci.nome, setorNome:(SETOR_MAP[ci.setor]||{}).l||"", turno:tns.length>1||tn.nome!=="Padrão"?(tn.nome||""):"", escala:tn.escala?ESCALAS[tn.escala]||tn.escala:"", horario:tn.horario||"", beneficios:ci.beneficios||"",
       requisitos:ci.requisitos||"", descritivo:ci.descritivo||"", unidadeNome:novo.unidade==="todas"?"Todas as casas":unidadeNome(novo.unidade,unidades),
       salario: novo.mostrarSalario ? (Number(novo.tipo==="clt"?novo.salario:novo.valor)||0) : 0, empresa:(marca&&marca.nome)||"WILAMI" } : null;
     const doc={ vaga, tipo:novo.tipo, nome:(novo.nome||"").trim(), tel:soDigitos(novo.tel), unidade:novo.unidade, cargo:novo.tipo==="clt"?novo.cargo:"", servico:novo.tipo==="pj"?(novo.servico||""):"",
@@ -5407,14 +5426,15 @@ function ConvitesPage(){
           <Field label="WhatsApp do candidato (opcional)"><Input value={novo.tel} onChange={e=>setNovo({...novo,tel:e.target.value})} placeholder="(11) 90000-0000"/></Field>
           <Field label="Unidade"><Select value={novo.unidade} onChange={e=>setNovo({...novo,unidade:e.target.value==="todas"?"todas":Number(e.target.value)})}>{novo.tipo==="pj"&&<option value="todas">Todas as casas</option>}{unidades.map(u=><option key={u.id} value={u.id}>{u.nome}</option>)}</Select></Field>
           {novo.tipo==="clt" ? <div className="grid grid-cols-2 gap-3">
-            <Field label="Cargo"><Select value={novo.cargo} onChange={e=>{ const ci=cargoInfo(e.target.value); setNovo({...novo,cargo:e.target.value, salario:ci&&ci.salarioBase?ci.salarioBase:novo.salario}); }}>{cargosLista.map(c=><option key={c}>{c}</option>)}</Select></Field>
+            <Field label="Cargo"><Select value={novo.cargo} onChange={e=>{ const ci=cargoInfo(e.target.value); setNovo({...novo,cargo:e.target.value, turno:0, salario:ci&&ci.salarioBase?ci.salarioBase:novo.salario}); }}>{cargosLista.map(c=><option key={c}>{c}</option>)}</Select></Field>
             <Field label="Salário (R$, opcional)"><Input type="number" value={novo.salario} onChange={e=>setNovo({...novo,salario:e.target.value})}/></Field>
           </div> : <div className="grid grid-cols-2 gap-3">
-            <Field label="Serviço"><Input list="cargos-pj" value={novo.servico} onChange={e=>{ const ci=cargoInfo(e.target.value); setNovo({...novo,servico:e.target.value, valor:ci&&ci.salarioBase?ci.salarioBase:novo.valor}); }} placeholder="Ex.: consultoria"/>
+            <Field label="Serviço"><Input list="cargos-pj" value={novo.servico} onChange={e=>{ const ci=cargoInfo(e.target.value); setNovo({...novo,servico:e.target.value, turno:0, valor:ci&&ci.salarioBase?ci.salarioBase:novo.valor}); }} placeholder="Ex.: consultoria"/>
               <datalist id="cargos-pj">{cargosPJ.map(c=><option key={c.nome} value={c.nome}/>)}</datalist></Field>
             <Field label="Valor mensal (R$, opcional)"><Input type="number" value={novo.valor} onChange={e=>setNovo({...novo,valor:e.target.value})}/></Field>
           </div>}
         </div>
+        {(()=>{ const tns=turnosDe(cargoInfo(novo.tipo==="clt"?novo.cargo:novo.servico)); return tns.length>1 && <div className="mt-3"><Field label="Turno / período da vaga"><Select value={Number(novo.turno)||0} onChange={e=>setNovo({...novo,turno:Number(e.target.value)})}>{tns.map((t,i)=><option key={i} value={i}>{rotuloTurno(t)}</option>)}</Select></Field></div>; })()}
         {(()=>{ const ci=cargoInfo(novo.tipo==="clt"?novo.cargo:novo.servico); const n=ci?DESCRITIVO_LINHAS(ci.descritivo).length:0;
           return <div className={cx("mt-3 p-3 rounded-xl text-sm flex items-start gap-2", n?"bg-brand-50 text-brand-800":"bg-amber-50 text-amber-800")}>
             <Icon d={n?I.check:I.doc} className="w-4 h-4 mt-0.5 shrink-0"/>
@@ -5549,7 +5569,8 @@ function ConviteCadastro({onClose}){
       const comum={ tel:f.telefone||"", email:(f.email||"").trim().toLowerCase(), tipoPix:f.tipoPix||"CPF", pix:f.pix||"", banco:[f.banco,f.agencia&&("ag. "+f.agencia),f.conta&&("c/c "+f.conta)].filter(Boolean).join(" "),
         endereco, ficha, docs, origem:"convite", conviteId:token, status:"ativo", criadoEm:Date.now() };
       if(temVaga){
-        comum.aceiteFuncao={ cargo:vaga.cargo, descritivo:vaga.descritivo, aceitoEm:Date.now(), nome:nomePessoa };
+        comum.aceiteFuncao={ cargo:vaga.cargo, turno:vaga.turno||"", horario:vaga.horario||"", descritivo:vaga.descritivo, aceitoEm:Date.now(), nome:nomePessoa };
+        if(vaga.turno) comum.turno=vaga.turno; if(vaga.horario) comum.horario=vaga.horario;
         try{ const du=await pdfTermoFuncao({ nome:nomePessoa, cpf:f.cpf||"", empresa:vaga.empresa, vaga, aceitoEm:comum.aceiteFuncao.aceitoEm });
           comum.aceiteFuncao.arquivoId=await arqSalvar({ nome:"Termo de ciência - descritivo de função ("+vaga.cargo+").pdf", donoKey, donoTipo:tipo, donoId:"auto_"+ref.id, donoNome:nomePessoa, cpf:soDigitos(f.cpf||f.cnpj),
             pasta:tipo==="pj"?"Contrato de prestação de serviço":"Contratos", categoria:"termo_funcao", visivelColab:true, origem:"convite" }, du);
@@ -5602,6 +5623,7 @@ function ConviteCadastro({onClose}){
         <div className="text-lg font-extrabold text-slate-900">{vaga.cargo}</div>
         <div className="text-sm text-slate-500">{[vaga.unidadeNome, vaga.setorNome].filter(Boolean).join(" · ")}</div>
         <div className="flex flex-wrap gap-1.5 mt-2">
+          {vaga.turno && <Badge tone="amber"><Icon d={I.clock} className="w-3 h-3"/>Turno: {vaga.turno}</Badge>}
           {vaga.escala && <Badge tone="brand"><Icon d={I.calendar} className="w-3 h-3"/>{vaga.escala}</Badge>}
           {vaga.horario && <Badge tone="slate"><Icon d={I.clock} className="w-3 h-3"/>{vaga.horario}</Badge>}
           {Number(vaga.salario)>0 && <Badge tone="green"><Icon d={I.wallet} className="w-3 h-3"/>{fmtBRL(Number(vaga.salario))}</Badge>}
