@@ -12,6 +12,7 @@ Ponto digital, escala e RH para restaurantes. O app é um único `index.html` (R
   - **Arquivos & pastas:** uma pasta por pessoa (CLT, freela e PJ), com pastas padrão e pastas personalizadas.
   - **Holerites:** você sobe os PDFs da contabilidade, seja um por colaborador ou um único PDF com todos. O sistema separa as páginas pelo CPF ou pelo nome, você confere e publica no app de cada colaborador.
   - **Dossiê:** além das abas que já existiam, ganhou a aba "Pastas & holerites".
+- **Cargos & funções:** o ADM cria cargos com descritivo de função (atividades), escala, horário, salário base, requisitos e benefícios. No convite, o candidato vê a vaga e o descritivo e precisa marcar "Li e estou de acordo" para continuar. O aceite fica registrado (data e hora) e um termo em PDF é salvo na pasta *Contratos* do colaborador.
 - **Convites de cadastro:** gere um link (CLT ou PJ) e envie pelo WhatsApp. O candidato manda fotos ou PDFs dos documentos, a leitura automática (Claude) preenche o cadastro, ele confere e envia. O cadastro entra direto em Colaboradores CLT ou Prestadores PJ, com os documentos guardados na pasta da pessoa.
 - **App "Meus documentos"** (`#meus-docs`): o colaborador ou PJ entra com CPF/CNPJ + PIN e vê os holerites e contratos liberados. O RH gera o PIN em *Arquivos & pastas → Liberar acesso*.
 
