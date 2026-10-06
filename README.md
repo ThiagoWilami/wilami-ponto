@@ -8,11 +8,14 @@ Ponto digital, escala e RH para restaurantes. O app é um único `index.html` (R
 
 - **Operação:** painel, escala por unidade, ponto ao vivo, ajustes de ponto.
 - **Pessoas:** colaboradores CLT, freelancers, **prestadores PJ** (não batem ponto) e equipe.
+- **Salário combinado com a Diretoria (CLT):** no cadastro do colaborador CLT há o campo *Salário combinado c/ Diretoria*. Em *Financeiro → Folha CLT* você lança as gorjetas do mês de cada um. Se salário + horas extras + adicional noturno + gorjetas não chegarem ao combinado, a coluna **Reposição** mostra a diferença, que já entra no líquido a pagar. As gorjetas não somam no líquido, porque são repassadas à parte. A reposição também aparece no Excel e no texto do WhatsApp.
 - **Documentos:**
   - **Arquivos & pastas:** uma pasta por pessoa (CLT, freela e PJ), com pastas padrão e pastas personalizadas.
   - **Holerites:** você sobe os PDFs da contabilidade, seja um por colaborador ou um único PDF com todos. O sistema separa as páginas pelo CPF ou pelo nome, você confere e publica no app de cada colaborador.
   - **Dossiê:** além das abas que já existiam, ganhou a aba "Pastas & holerites".
 - **Cargos & funções:** o ADM cria cargos com descritivo de função (atividades), escala, horário, salário base, requisitos e benefícios. No convite, o candidato vê a vaga e o descritivo e precisa marcar "Li e estou de acordo" para continuar. O aceite fica registrado (data e hora) e um termo em PDF é salvo na pasta *Contratos* do colaborador.
+- **Modelo de contrato PJ** (*Documentos → Modelo de contrato PJ*): fica cadastrado no sistema um contrato-base (prestação de serviços, 14 cláusulas mais a cláusula específica do cargo) e os dados da empresa contratante. Cada cargo PJ define o que muda no contrato: o objeto, as atribuições (vêm do descritivo de função), as cláusulas opcionais que entram ou saem (ex.: estoques, não concorrência) e uma cláusula específica da função. No cadastro do prestador, **Gerar contrato** monta o PDF com valor por extenso, dia de pagamento e numeração automática das cláusulas, e salva na pasta *Contrato de prestação de serviço*. De lá ele segue para o DocuSign.
+- **Termos e assinaturas** (*Documentos → Termos e assinaturas*): Termo de Autorização de Uso de Imagem, Voz e Nome. Todo novo cadastro pelo convite lê o termo, marca "Li e autorizo" e assina com o dedo antes de enviar. Para quem já está cadastrado, a tela mostra quem assinou e quem está pendente e gera um link individual para mandar pelo WhatsApp (`#termo/<token>`). O PDF assinado (texto, dados, assinatura e data/hora) vai para a pasta *Termos assinados* da pessoa e aparece no app "Meus documentos". O texto do termo pode ser editado no painel.
 - **Convites de cadastro:** gere um link (CLT ou PJ) e envie pelo WhatsApp. O candidato manda fotos ou PDFs dos documentos, a leitura automática (Claude) preenche o cadastro, ele confere e envia. O cadastro entra direto em Colaboradores CLT ou Prestadores PJ, com os documentos guardados na pasta da pessoa.
 - **App "Meus documentos"** (`#meus-docs`): o colaborador ou PJ entra com CPF/CNPJ + PIN e vê os holerites e contratos liberados. O RH gera o PIN em *Arquivos & pastas → Liberar acesso*.
 
@@ -56,6 +59,7 @@ Os dados novos ficam na coleção `ajustes`, que as regras do Firestore já libe
 | Conteúdo do arquivo (base64 fatiado, ~525 KB por parte, até 12 MB) | `arqp_<id>_<n>` | `arquivo_parte` |
 | PIN do app do colaborador (só o hash SHA-256) | `pin_<pessoa>` | `pin` |
 | Convite de cadastro | `conv_<token>` | `convite` |
+| Pedido de assinatura de termo | `ter_<token>` | `termo_pedido` |
 
 Esses documentos guardam o horário em `_ts`, e não em `ts`, para não aparecerem na lista de *Ajustes de ponto* (que é ordenada por `ts`). O acesso é feito pela função `nCol()` no `index.html`. Se um dia as regras liberarem coleções próprias, basta trocar `nCol` por `tCol`. As regras sugeridas para isso estão em `docs/firestore-regras-novas.rules`.
 

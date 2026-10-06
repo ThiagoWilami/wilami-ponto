@@ -540,7 +540,7 @@ function faltasAutoDe(pessoa, ctx){
 }
 // Calcula UMA linha da folha (salário + extras + adicional noturno − descontos, com falta automática e DSR)
 function calcFolhaLinha(c, ctx){
-  const {apurCLT, cltExtraAjuste, ymRef, getDossie, naData, faltasCtx}=ctx;
+  const {apurCLT, cltExtraAjuste, ymRef, getDossie, naData, faltasCtx}=ctx; const gorjetasCLT=ctx.gorjetasCLT||{};
   const meus=apurCLT.filter(x=>x.nome===c.nome);
   const extrasMin=meus.reduce((s,x)=>s+(x.extras||0),0);
   const extras100Min=meus.reduce((s,x)=>s+(x.extras100||0),0);
@@ -568,8 +568,13 @@ function calcFolhaLinha(c, ctx){
   const vt=Number(c.vt||0);
   const vtDesconto = vt>0 ? Math.min(salario*0.06, vt) : 0;
   const descontos=descFaltas+descDSR+descAtrasos+vtDesconto;
-  const liquido=salario+extrasVal+notVal-descontos;
-  return { id:c.id, nome:c.nome, foto:c.foto, pix:c.pix, escala:c.escala, salario, vHora,
+  // Salário combinado com a Diretoria: se salário + extras + adicional noturno + gorjetas do mês não alcançarem o combinado, a diferença vira "reposição".
+  const gorjeta=Number(gorjetasCLT[c.id+"|"+ymRef]||0);
+  const combinado=Number(c.salarioCombinado||0);
+  const recebido=salario+extrasVal+notVal+gorjeta;
+  const reposicao=combinado>0 ? Math.max(0, Math.round((combinado-recebido)*100)/100) : 0;
+  const liquido=salario+extrasVal+notVal+reposicao-descontos;
+  return { id:c.id, nome:c.nome, foto:c.foto, pix:c.pix, escala:c.escala, salario, vHora, gorjeta, combinado, recebido, reposicao,
     extrasMin, extras100Min, extrasHoras:extrasMin+extras100Min, extrasVal, extrasEditado, notMin, notVal,
     faltasQtd:nFaltas, dsrQtd:nDSR, faltaDatas, descFaltas, descDSR, atrasosQtd:atrasosD.length,
     vt, vtDesconto, descontos, liquido, semSalario:!salario };
@@ -595,7 +600,7 @@ const escalaInicial = () => {
 // Esses documentos não têm o campo "ts" (é guardado como "_ts"), então NÃO aparecem na lista de
 // ajustes de ponto, que é ordenada por "ts".
 const COL_HOSPEDEIRA="ajustes";
-const COL_VIRTUAL={ arquivos:["arq_","arquivo"], arquivos_partes:["arqp_","arquivo_parte"], acessosColab:["pin_","pin"], convites:["conv_","convite"] };
+const COL_VIRTUAL={ arquivos:["arq_","arquivo"], arquivos_partes:["arqp_","arquivo_parte"], acessosColab:["pin_","pin"], convites:["conv_","convite"], termos:["ter_","termo_pedido"] };
 const _vEntrada=(nome,data)=>{ const o={...data, _t:COL_VIRTUAL[nome][1]}; if("ts" in o){ o._ts=o.ts; delete o.ts; } return o; };
 const _vSaida=(data)=>{ const o={...(data||{})}; if("_ts" in o){ o.ts=o._ts; delete o._ts; } delete o._t; return o; };
 function nCol(nome){
@@ -636,9 +641,9 @@ const ARQ_PARTE = 700000;                  // caracteres base64 por parte (~525 
 const ARQ_MAX_BYTES = 12*1024*1024;        // limite por arquivo
 // Pastas padrão por tipo de vínculo (o gestor pode criar outras)
 const PASTAS_PADRAO = {
-  clt:  ["Documentos pessoais","Holerites","Contratos","Atestados","Advertências","Outros"],
-  free: ["Documentos pessoais","Recibos","Contratos","Outros"],
-  pj:   ["Contrato de prestação de serviço","Notas fiscais","Documentos da empresa","Outros"],
+  clt:  ["Documentos pessoais","Holerites","Contratos","Termos assinados","Atestados","Advertências","Outros"],
+  free: ["Documentos pessoais","Recibos","Contratos","Termos assinados","Outros"],
+  pj:   ["Contrato de prestação de serviço","Notas fiscais","Documentos da empresa","Termos assinados","Outros"],
 };
 const TIPO_ROTULO = { clt:"CLT", free:"Freelancer", pj:"PJ" };
 const HOLERITE_TIPOS = [["mensal","Folha mensal"],["adiantamento","Adiantamento"],["ferias","Férias"],["13_1","13º — 1ª parcela"],["13_2","13º — 2ª parcela"],["plr","PLR"],["rescisao","Rescisão"]];
@@ -1003,6 +1008,9 @@ function StoreProvider({children}) {
   const excluirCargoDesc=(nome)=>setCargosDesc(prev=>prev.filter(x=>x.nome!==nome));
   const cargosLista=useMemo(()=>[...new Set([...CARGOS, ...cargosDesc.filter(c=>c.tipo!=="pj").map(c=>c.nome)])],[cargosDesc]);
   const cargoInfo=(nome)=> cargosDesc.find(c=>c.nome===nome) || null;     // { "clt-1": ["Minha pasta", …] }
+  const [modeloContratoPJ,setModeloContratoPJ]=usePersist("modeloContratoPJ",null);   // null = modelo padrão
+  const [empresaContratante,setEmpresaContratante]=usePersist("empresaContratante",{});
+  const [termoImagemCfg,setTermoImagemCfg]=usePersist("termoImagemCfg",null);         // null = termo padrão
   const [assinaturaCfg,setAssinaturaCfg]=usePersist("assinaturaCfg",{signatarios:[]}); // signatários padrão da empresa
   const logado = !!authUser || !window.__WPAUTH;
   const [arquivos]=useArquivosMeta(logado);                            // metadados dos arquivos (só no painel)
@@ -1114,6 +1122,9 @@ function StoreProvider({children}) {
   // Override manual do valor das horas extras do CLT por mês: { "<cid>|<AAAA-MM>": valor }
   const [cltExtraAjuste,setCltExtraMap]=usePersist("cltExtraAjuste",{});
   const setCltExtra=(cid,ym,valor)=>setCltExtraMap(prev=>{ const k=cid+"|"+ym; const n={...prev}; if(valor==null||valor==="") delete n[k]; else n[k]=Number(valor); return n; });
+  // Gorjetas do CLT por mês (entram na conta do salário combinado): { "<cid>|<AAAA-MM>": valor }
+  const [gorjetasCLT,setGorjetasMap]=usePersist("gorjetasCLT",{});
+  const setGorjetaCLT=(cid,ym,valor)=>setGorjetasMap(prev=>{ const k=cid+"|"+ym; const n={...prev}; if(valor==null||valor===""||!Number(valor)) delete n[k]; else n[k]=Number(valor); return n; });
   // Pagamentos (parciais/adiantamentos) registrados por freela: { "<fid>": [ {id,data,valor,semana,obs} ] }
   const [pagamentosFreela,setPagFreela]=usePersist("pagamentosFreela",{});
   const addPagamentoFreela=(fid,obj)=>setPagFreela(prev=>{ const arr=prev[String(fid)]||[]; return {...prev,[String(fid)]:[{...obj,id:Math.random().toString(36).slice(2)},...arr]}; });
@@ -1206,13 +1217,13 @@ function StoreProvider({children}) {
   const registrosVis = casaRestrita!=null ? registros.filter(r=>_nomesVis.has(r.nome)) : registros;
 
   const value={ unidades:unidadesVis,salvarUnidade,excluirUnidade, clts:cltsVis,freelas:freelasVis,freelasComPagamentos:freelasPagVis,salvarClt,salvarFreela,excluirColab,cadastrarPublico, anexarDoc,
-    escala,setEscala, escalaOv,setEscalaOv, registros:registrosVis,addRegistro, pontoHist, freelancerEscaladoHoje, valorFreela, setFreelaAjuste, cltExtraAjuste,setCltExtra, pagamentosFreela,addPagamentoFreela,removePagamentoFreela, pagamentosCLT,addPagamentoCLT,removePagamentoCLT, faltaDescontoDesde,setFaltaDescontoDesde, vtDiaPagamento,setVtDiaPagamento,
+    escala,setEscala, escalaOv,setEscalaOv, registros:registrosVis,addRegistro, pontoHist, freelancerEscaladoHoje, valorFreela, setFreelaAjuste, cltExtraAjuste,setCltExtra, gorjetasCLT,setGorjetaCLT, pagamentosFreela,addPagamentoFreela,removePagamentoFreela, pagamentosCLT,addPagamentoCLT,removePagamentoCLT, faltaDescontoDesde,setFaltaDescontoDesde, vtDiaPagamento,setVtDiaPagamento,
     cargosFreela,salvarCargoFreela,excluirCargoFreela, atestados,enviarAtestado, ajustes,enviarAjuste,resolverAjuste,
     dossie,getDossie,addFalta,addFeedback,addAnexo, perfil,setPerfil, perms,setPerms, can,
     clientes,clienteAtivo,tenantAtual,criarCliente,trocarCliente,
     acesso,donos,setDonos,acessos,acessosOps,
     marca,setMarca, pjs:(casaRestrita!=null?pjsTodos.filter(x=>x.unidade==null||x.unidade==="todas"||_mesmaCasa(x.unidade)):pjsTodos), salvarPj,excluirPj, pagamentosPJ,addPagamentoPJ,removePagamentoPJ,
-    pastasExtra,criarPasta,removerPasta, cargosDesc,salvarCargoDesc,excluirCargoDesc,cargosLista,cargoInfo, assinaturaCfg,setAssinaturaCfg, arquivos, acessosColab };
+    pastasExtra,criarPasta,removerPasta, cargosDesc,salvarCargoDesc,excluirCargoDesc,cargosLista,cargoInfo, assinaturaCfg,setAssinaturaCfg, arquivos, acessosColab, modeloContratoPJ,setModeloContratoPJ, empresaContratante,setEmpresaContratante, termoImagemCfg,setTermoImagemCfg };
   return <StoreCtx.Provider value={value}>{children}</StoreCtx.Provider>;
 }
 const pessoaNome = (pid,tipo,clts,freelas,pjs)=> (tipo==="clt"?clts:tipo==="pj"?(pjs||[]):freelas).find(p=>String(p.id)===String(pid))?.nome || "—";
@@ -2338,6 +2349,8 @@ function ColabForm({ tipo, inicial, onSalvar, onClose, vinculo }) {
         </Select></Field>
         <Field label="Admissão"><Input type="date" value={f.admissao} onChange={e=>set("admissao",e.target.value)}/></Field>
         <Field label="Salário mensal (R$)"><Input type="number" value={f.salario||0} onChange={e=>set("salario",Number(e.target.value))} placeholder="Ex.: 2200"/></Field>
+        <Field label="Salário combinado c/ Diretoria (R$)"><Input type="number" value={f.salarioCombinado||""} onChange={e=>set("salarioCombinado",Number(e.target.value)||0)} placeholder="Ex.: 3500 (opcional)"/>
+          <span className="block text-[11px] text-slate-400 mt-1 normal-case font-normal tracking-normal">Se salário + extras + gorjetas do mês não chegarem a esse valor, a folha mostra a reposição.</span></Field>
         <Field label="Vale Transporte (R$/mês)"><Input type="number" value={f.vt||0} onChange={e=>set("vt",Number(e.target.value))} placeholder="Ex.: 220"/></Field>
       </> : <>
         <Field label={req("Cargo")}><Select value={f.cargo} onChange={e=>setCargoFree(e.target.value)}>{cargosFreela.map(c=><option key={c.id} value={c.nome}>{c.nome}</option>)}</Select></Field>
@@ -2668,7 +2681,7 @@ function Relatorios() {
 /* ============================ PAGAMENTOS (FREELANCERS) ============================ */
 // Pagamentos de SALARIADOS (CLT ou Cargos de confiança) — parcelado/adiantamento + saldo, modelo dos freelancers.
 function PagamentoSalariados({ modo, ini, fim, uni }){
-  const { clts, pjs, unidades, registros, pontoHist, getDossie, cltExtraAjuste, escala, escalaOv, atestados, acesso, pagamentosCLT, addPagamentoCLT, removePagamentoCLT, pagamentosPJ, addPagamentoPJ, removePagamentoPJ, faltaDescontoDesde } = useStore();
+  const { clts, pjs, unidades, registros, pontoHist, getDossie, cltExtraAjuste, gorjetasCLT, escala, escalaOv, atestados, acesso, pagamentosCLT, addPagamentoCLT, removePagamentoCLT, pagamentosPJ, addPagamentoPJ, removePagamentoPJ, faltaDescontoDesde } = useStore();
   const ehPJ = modo==="pj";
   const pagMap = ehPJ ? pagamentosPJ : pagamentosCLT;
   const addPag = ehPJ ? addPagamentoPJ : addPagamentoCLT;
@@ -2683,7 +2696,7 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
   const _nowMin=_clock.getHours()*60+_clock.getMinutes();
   const apurCLT=apurarHoras([...pontoHist,...registros]).filter(x=>x.tipo==="clt"&&x.completo&&naData(x.dia));
   const faltasCtx={ escala, escalaOv, registros:[...pontoHist,...registros], atestados, ini, fim, hoje:hojeStr(), nowMin:_nowMin, desde:faltaDescontoDesde };
-  const folhaCtx={ apurCLT, cltExtraAjuste, ymRef, getDossie, naData, faltasCtx };
+  const folhaCtx={ apurCLT, cltExtraAjuste, gorjetasCLT, ymRef, getDossie, naData, faltasCtx };
   const naCasa=(c)=> uni==="todas" || c.unidade===Number(uni) || ((modo==="confianca"||ehPJ) && (c.unidade==="todas"||c.unidade==null));
   const lista = (ehPJ
     ? (pjs||[]).filter(pj=>pjAtivoNoPeriodo(pj,ini,fim))
@@ -3134,7 +3147,7 @@ function LinksQR() {
 
 /* ============================ RELATÓRIOS FINANCEIROS ============================ */
 function Financeiro() {
-  const { freelasComPagamentos:freelas, clts, pjs, pagamentosPJ, unidades, registros, pontoHist, getDossie, cltExtraAjuste, setCltExtra, acesso, escala, escalaOv, atestados, faltaDescontoDesde, vtDiaPagamento } = useStore();
+  const { freelasComPagamentos:freelas, clts, pjs, pagamentosPJ, unidades, registros, pontoHist, getDossie, cltExtraAjuste, setCltExtra, gorjetasCLT, setGorjetaCLT, acesso, escala, escalaOv, atestados, faltaDescontoDesde, vtDiaPagamento } = useStore();
   const podeSigilo = !acesso || acesso.podeSigilo;   // sem contexto (offline) → mostra tudo
   const _clock=useClock(60000);
   const toast=useContext(ToastCtx);
@@ -3153,7 +3166,7 @@ function Financeiro() {
   const ymRef=(ini||hojeStr()).slice(0,7);
   const _nowMin=_clock.getHours()*60+_clock.getMinutes();
   const faltasCtx={ escala, escalaOv, registros:[...pontoHist,...registros], atestados, ini, fim, hoje:hojeStr(), nowMin:_nowMin, desde:faltaDescontoDesde };
-  const folhaCtx={ apurCLT, cltExtraAjuste, ymRef, getDossie, naData, faltasCtx };
+  const folhaCtx={ apurCLT, cltExtraAjuste, gorjetasCLT, ymRef, getDossie, naData, faltasCtx };
   const folhaDe=(lista)=> lista.filter(c=>uni==="todas"||c.unidade===Number(uni)).map(c=>calcFolhaLinha(c, folhaCtx));
   const cltsReais = clts.filter(c=>c.vinculo!=="fixo" && c.vinculo!=="confianca");
   const fixos = clts.filter(c=>c.vinculo==="fixo");
@@ -3165,6 +3178,8 @@ function Financeiro() {
   const cltExtras=linhasCLT.reduce((s,l)=>s+l.extrasVal,0);
   const cltSalarios=linhasCLT.reduce((s,l)=>s+l.salario,0);
   const cltVT=linhasCLT.reduce((s,l)=>s+(l.vt||0),0);
+  const cltGorjetas=linhasCLT.reduce((s,l)=>s+(l.gorjeta||0),0);
+  const cltReposicao=linhasCLT.reduce((s,l)=>s+(l.reposicao||0),0);
 
   /* ===================== GERÊNCIA & DIRETORIA (cargo de confiança, sem ponto) ===================== */
   // Salário mensal fixo, sem apuração de ponto. Filtro por casa considera "todas as casas".
@@ -3206,7 +3221,7 @@ function Financeiro() {
 
   /* ===================== WhatsApp ===================== */
   const rotuloFolha = aba==="fixo"?"Freela Fixo":"CLT";
-  const whatsCLT=(l)=>`*${l.nome}* (${rotuloFolha})\nSalário base: ${fmtBRL(l.salario)}\nHoras extras: ${fmtHoras(l.extrasHoras)} = ${fmtBRL(l.extrasVal)}${l.notVal?`\nAdic. noturno: ${fmtBRL(l.notVal)}`:""}${l.vt?`\nVale Transporte: ${fmtBRL(l.vt)} (desconto 6%: -${fmtBRL(l.vtDesconto)})`:""}${l.faltasQtd?`\nFaltas: ${l.faltasQtd} = -${fmtBRL(l.descFaltas)}`:""}${l.dsrQtd?`\nDSR perdido (${l.dsrQtd} sem.): -${fmtBRL(l.descDSR)}`:""}${l.descontos?`\nDescontos totais: -${fmtBRL(l.descontos)}`:""}\n*Líquido a pagar: ${fmtBRL(l.liquido)}*\nPix: ${l.pix||"—"}`;
+  const whatsCLT=(l)=>`*${l.nome}* (${rotuloFolha})\nSalário base: ${fmtBRL(l.salario)}\nHoras extras: ${fmtHoras(l.extrasHoras)} = ${fmtBRL(l.extrasVal)}${l.notVal?`\nAdic. noturno: ${fmtBRL(l.notVal)}`:""}${l.gorjeta?`\nGorjetas: ${fmtBRL(l.gorjeta)}`:""}${l.reposicao?`\nReposição (salário combinado ${fmtBRL(l.combinado)}): +${fmtBRL(l.reposicao)}`:""}${l.vt?`\nVale Transporte: ${fmtBRL(l.vt)} (desconto 6%: -${fmtBRL(l.vtDesconto)})`:""}${l.faltasQtd?`\nFaltas: ${l.faltasQtd} = -${fmtBRL(l.descFaltas)}`:""}${l.dsrQtd?`\nDSR perdido (${l.dsrQtd} sem.): -${fmtBRL(l.descDSR)}`:""}${l.descontos?`\nDescontos totais: -${fmtBRL(l.descontos)}`:""}\n*Líquido a pagar: ${fmtBRL(l.liquido)}*\nPix: ${l.pix||"—"}`;
   const whatsFree=(l)=>`*${l.nome}*\nValor acumulado: ${fmtBRL(l.total)}\nDias trabalhados: ${l.dias}\nDatas: ${fmtD(l.datas)}\nPix: ${l.pix||"—"}`;
   const whatsPJ=(l)=>`*${l.nome}* (PJ${l.cnpj?" · CNPJ "+l.cnpj:""})\nServiço: ${l.servico}\nValor: ${fmtBRL(l.total)}${l.meses>1?` (${l.meses} meses × ${fmtBRL(l.valorMensal)})`:""}\nVencimento: ${l.venc?fmtDataBR(l.venc):"—"} · ${l.forma}\nPix: ${l.pix||"—"}`;
   const whatsConf=(l)=>`*${l.nome}* (${l.cargo})\nSalário mensal: ${fmtBRL(l.salario)}\nPix: ${l.pix||"—"}`;
@@ -3231,16 +3246,17 @@ function Financeiro() {
     // helper: escreve uma folha (CLT ou Freela Fixo) com salário + extras
     const addFolha=(nomeAba,titulo,linhas,cabecor)=>{
       const wc=wb.addWorksheet(nomeAba);
-      wc.columns=[{width:30},{width:16},{width:14},{width:18},{width:16},{width:16},{width:18},{width:22}];
-      wc.mergeCells("A1:H1"); const tc=wc.getCell("A1"); tc.value=`${titulo} — ${uNome}`; tc.font={bold:true,size:15,color:{argb:"FF1E1B4B"}};
-      wc.mergeCells("A2:H2"); wc.getCell("A2").value=`Período: ${fmtDataBR(ini)} a ${fmtDataBR(fim)}`; wc.getCell("A2").font={italic:true,color:{argb:"FF64748B"}};
-      const hc=wc.addRow(["Colaborador","Salário base","Horas extras","Valor extras","Adic. noturno","Descontos","Líquido a pagar","Pix"]);
+      wc.columns=[{width:30},{width:16},{width:14},{width:18},{width:16},{width:14},{width:16},{width:16},{width:18},{width:22}];
+      wc.mergeCells("A1:J1"); const tc=wc.getCell("A1"); tc.value=`${titulo} — ${uNome}`; tc.font={bold:true,size:15,color:{argb:"FF1E1B4B"}};
+      wc.mergeCells("A2:J2"); wc.getCell("A2").value=`Período: ${fmtDataBR(ini)} a ${fmtDataBR(fim)}`; wc.getCell("A2").font={italic:true,color:{argb:"FF64748B"}};
+      const hc=wc.addRow(["Colaborador","Salário base","Horas extras","Valor extras","Adic. noturno","Gorjetas","Reposição","Descontos","Líquido a pagar","Pix"]);
       hc.eachCell(cell=>{ cell.font={bold:true,color:{argb:"FFFFFFFF"}}; cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:cabecor}}; cell.alignment={horizontal:"center"}; });
-      linhas.forEach(l=>{ const r=wc.addRow([l.nome,l.salario,fmtHoras(l.extrasHoras),l.extrasVal,l.notVal,-l.descontos,l.liquido,l.pix||""]);
-        [2,4,5,6,7].forEach(i=>r.getCell(i).numFmt='"R$" #,##0.00'); r.getCell(7).font={bold:true}; });
+      linhas.forEach(l=>{ const r=wc.addRow([l.nome,l.salario,fmtHoras(l.extrasHoras),l.extrasVal,l.notVal,l.gorjeta||0,l.reposicao||0,-l.descontos,l.liquido,l.pix||""]);
+        [2,4,5,6,7,8,9].forEach(i=>r.getCell(i).numFmt='"R$" #,##0.00'); r.getCell(9).font={bold:true}; });
       const T=linhas.reduce((s,l)=>s+l.liquido,0), S=linhas.reduce((s,l)=>s+l.salario,0), E=linhas.reduce((s,l)=>s+l.extrasVal,0);
-      const tot=wc.addRow(["TOTAL",S,"",E,"","",T,""]); tot.eachCell(cell=>{ cell.font={bold:true}; cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:cinza}}; });
-      [2,4,7].forEach(i=>tot.getCell(i).numFmt='"R$" #,##0.00');
+      const RP=linhas.reduce((s,l)=>s+(l.reposicao||0),0);
+      const tot=wc.addRow(["TOTAL",S,"",E,"","",RP,"",T,""]); tot.eachCell(cell=>{ cell.font={bold:true}; cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:cinza}}; });
+      [2,4,7,9].forEach(i=>tot.getCell(i).numFmt='"R$" #,##0.00');
     };
     addFolha("Folha CLT","Folha de fechamento CLT",linhasCLTreais,"FF6366F1");
     addFolha("Freela Fixo","Folha Freela Fixo",linhasFixo,"FFEA580C");
@@ -3352,10 +3368,10 @@ function Financeiro() {
       <div className="grid sm:grid-cols-3 gap-3 mb-4">
         <StatCard icon={I.wallet} label={aba==="fixo"?"Folha líquida Freela Fixo":"Folha líquida CLT"} value={fmtBRL(cltFolha)} tone={aba==="fixo"?"free":"brand"}/>
         <StatCard icon={I.chart} label="Valor em horas extras" value={fmtBRL(cltExtras)} tone="amber"/>
-        <StatCard icon={I.user} label={aba==="fixo"?"Freelas fixos":"Colaboradores CLT"} value={linhasCLT.length} tone="green"/>
+        <StatCard icon={I.refresh} label="Reposição (salário combinado)" value={fmtBRL(cltReposicao)} tone={cltReposicao>0?"amber":"green"}/>
       </div>
-      <Card className="overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm min-w-[860px]">
-        <thead><tr className="text-left text-slate-400 border-b border-slate-100">{["Colaborador","Salário base","Horas extras","Adic. noturno","VT","Descontos","Líquido a pagar","Pix","WhatsApp"].map(h=><th key={h} className="px-4 py-3 font-semibold">{h}</th>)}</tr></thead>
+      <Card className="overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm min-w-[1100px]">
+        <thead><tr className="text-left text-slate-400 border-b border-slate-100">{["Colaborador","Salário base","Horas extras","Adic. noturno","Gorjetas","Reposição","VT","Descontos","Líquido a pagar","Pix","WhatsApp"].map(h=><th key={h} className="px-4 py-3 font-semibold">{h}</th>)}</tr></thead>
         <tbody className="divide-y divide-slate-50">
           {linhasCLT.map(l=><tr key={l.id} className="hover:bg-slate-50/70">
             <td className="px-4 py-3"><div className="flex items-center gap-2"><Avatar name={l.nome} src={l.foto} tone="brand" size="w-7 h-7"/><div><div className="font-semibold text-slate-800">{l.nome}</div>{l.semSalario && <div className="text-[11px] text-amber-600">defina o salário no cadastro</div>}</div></div></td>
@@ -3367,6 +3383,11 @@ function Financeiro() {
                 {l.extrasEditado && <span className="text-[10px] text-amber-600" title="Ajustado manualmente">editado</span>}
               </div></td>
             <td className="px-4 py-3 tabular-nums text-slate-600">{l.notVal>0?fmtBRL(l.notVal):"—"}</td>
+            <td className="px-4 py-3 tabular-nums"><div className="flex items-center gap-1"><span className="text-slate-400 text-xs">R$</span>
+              <input type="number" min="0" defaultValue={l.gorjeta||""} key={"g"+l.id+ymRef+l.gorjeta} placeholder="0" onBlur={e=>setGorjetaCLT(l.id,ymRef,e.target.value)} title="Gorjetas do mês" className="w-20 px-2 py-1 rounded-lg border border-slate-200 text-sm"/></div></td>
+            <td className="px-4 py-3 tabular-nums" title={l.combinado>0?`Combinado ${fmtBRL(l.combinado)} − recebido ${fmtBRL(l.recebido)} (salário + extras + noturno + gorjetas)`:""}>
+              {l.combinado>0 ? (l.reposicao>0 ? <div><span className="font-bold text-amber-600 whitespace-nowrap">+{fmtBRL(l.reposicao)}</span><div className="text-[10px] text-slate-400">combinado {fmtBRL(l.combinado)}</div></div>
+                : <div><span className="text-emerald-600 text-xs font-semibold">atingiu</span><div className="text-[10px] text-slate-400">combinado {fmtBRL(l.combinado)}</div></div>) : <span className="text-slate-300">—</span>}</td>
             <td className="px-4 py-3 tabular-nums text-slate-600">{l.vt>0?<div><span className="text-slate-700 font-semibold">{fmtBRL(l.vt)}</span><div className="text-[10px] font-normal text-slate-400">−6% = {fmtBRL(l.vtDesconto)}</div></div>:"—"}</td>
             <td className={cx("px-4 py-3 tabular-nums",l.descontos>0?"text-rose-600 font-semibold":"text-slate-400")} title={l.descontos>0?`${l.faltasQtd} falta(s)=-${fmtBRL(l.descFaltas)} · DSR ${l.dsrQtd} sem.=-${fmtBRL(l.descDSR)}${l.vtDesconto>0?` · VT 6%=-${fmtBRL(l.vtDesconto)}`:""}`:""}>
               {l.descontos>0?"-"+fmtBRL(l.descontos):"—"}
@@ -3376,15 +3397,17 @@ function Financeiro() {
             <td className="px-4 py-3 font-mono text-xs text-slate-500">{l.pix||"—"}</td>
             <td className="px-4 py-3"><Btn size="sm" variant="soft" icon={I.copy} onClick={()=>copiarUm(whatsCLT(l))}>Copiar</Btn></td>
           </tr>)}
-          {linhasCLT.length===0 && <tr><td colSpan="9" className="px-4 py-8 text-center text-slate-400">Nenhum {aba==="fixo"?"freela fixo":"colaborador CLT"} nesta casa.</td></tr>}
+          {linhasCLT.length===0 && <tr><td colSpan="11" className="px-4 py-8 text-center text-slate-400">Nenhum {aba==="fixo"?"freela fixo":"colaborador CLT"} nesta casa.</td></tr>}
         </tbody>
         {linhasCLT.length>0 && <tfoot><tr className="border-t-2 border-slate-100 bg-slate-50/60">
           <td className="px-4 py-3 font-bold">Total</td><td className="px-4 py-3 font-bold tabular-nums">{fmtBRL(cltSalarios)}</td>
           <td className="px-4 py-3 font-bold text-emerald-700 tabular-nums">{fmtBRL(cltExtras)}</td><td/>
+          <td className="px-4 py-3 font-bold text-slate-600 tabular-nums">{cltGorjetas>0?fmtBRL(cltGorjetas):""}</td>
+          <td className="px-4 py-3 font-bold text-amber-600 tabular-nums">{cltReposicao>0?fmtBRL(cltReposicao):""}</td>
           <td className="px-4 py-3 font-bold text-slate-600 tabular-nums">{cltVT>0?fmtBRL(cltVT):""}</td>
           <td/><td className="px-4 py-3 font-extrabold text-brand-700 tabular-nums">{fmtBRL(cltFolha)}</td><td colSpan="2"/></tr></tfoot>}
       </table></div></Card>
-      <p className="text-xs text-slate-400 mt-3">{aba==="fixo"?"Freela Fixo: salário mensal definido pelo gerente + extras (50% dia útil, 100% folga) e adicional noturno 20%. ":"Extras: 50% em dia útil e 100% em folga trabalhada (Art. 59) · adicional noturno 20% entre 22h e 5h (Art. 73) · base da hora = salário ÷ 220. "}O valor das horas extras é editável. Cadastre em “Colaboradores CLT & Freela Fixo”.</p>
+      <p className="text-xs text-slate-400 mt-3">{aba==="fixo"?"Freela Fixo: salário mensal definido pelo gerente + extras (50% dia útil, 100% folga) e adicional noturno 20%. ":"Extras: 50% em dia útil e 100% em folga trabalhada (Art. 59) · adicional noturno 20% entre 22h e 5h (Art. 73) · base da hora = salário ÷ 220. "}O valor das horas extras é editável. Gorjetas: lance o valor do mês de cada um. Reposição = salário combinado com a Diretoria − (salário + extras + adicional noturno + gorjetas), quando faltar; ela já entra no líquido (as gorjetas não, pois são repassadas à parte). Cadastre em “Colaboradores CLT & Freela Fixo”.</p>
       {cltVT>0 && <div className="mt-2 p-3 rounded-xl bg-brand-50 text-brand-700 text-xs flex items-center gap-2"><Icon d={I.wallet} className="w-4 h-4"/> Vale Transporte: total de {fmtBRL(cltVT)} no período · desconto legal de 6% já aplicado no líquido · <b>pagamento no dia {vtDiaPagamento} de cada mês</b> (ajuste em Configurações).</div>}
     </> : aba==="confianca" ? <>
       <div className="grid sm:grid-cols-3 gap-3 mb-4">
@@ -4386,7 +4409,7 @@ function pjVencimento(pj, ym){
 const pjAtivoNoPeriodo=(pj,ini,fim)=> pj.status!=="encerrado" || pjMesesNoPeriodo(pj,ini,fim).length>0;
 
 function PjForm({inicial,onSalvar,onClose}){
-  const { unidades } = useStore();
+  const { unidades, cargosDesc } = useStore();
   const [f,setF]=useState(()=>({ nome:"", cnpj:"", responsavel:"", cpf:"", email:"", tel:"", servico:"", valor:0, diaPagamento:5, formaPagamento:"Pix", unidade:"todas", inicio:"", fim:"", tipoPix:"CNPJ", pix:"", banco:"", obs:"", ...(inicial||{}) }));
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
   const falta=[]; if(!f.nome.trim()) falta.push("razão social / nome"); if(soDigitos(f.cnpj).length!==14) falta.push("CNPJ (14 dígitos)"); if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email||"")) falta.push("e-mail"); if(!(Number(f.valor)>0)) falta.push("valor mensal"); if(!(Number(f.diaPagamento)>=1&&Number(f.diaPagamento)<=31)) falta.push("dia de pagamento");
@@ -4399,9 +4422,11 @@ function PjForm({inicial,onSalvar,onClose}){
       <Field label="CNPJ *"><Input value={f.cnpj} onChange={e=>set("cnpj",e.target.value)} placeholder="00.000.000/0000-00"/></Field>
       <Field label="Responsável (quem assina)"><Input value={f.responsavel} onChange={e=>set("responsavel",e.target.value)}/></Field>
       <Field label="CPF do responsável"><Input value={f.cpf} onChange={e=>set("cpf",e.target.value)} placeholder="000.000.000-00"/></Field>
+      <Field label="RG do responsável"><Input value={f.rg||""} onChange={e=>set("rg",e.target.value)}/></Field>
+      <Field label="Endereço (sai no contrato)"><Input value={f.endereco||""} onChange={e=>set("endereco",e.target.value)} placeholder="Rua, nº, bairro, cidade/UF, CEP"/></Field>
       <Field label="E-mail * (recebe o contrato)"><Input type="email" value={f.email} onChange={e=>set("email",e.target.value)}/></Field>
       <Field label="Telefone"><Input value={f.tel} onChange={e=>set("tel",e.target.value)}/></Field>
-      <Field label="Serviço prestado"><Input value={f.servico} onChange={e=>set("servico",e.target.value)} placeholder="Ex.: consultoria, contabilidade, manutenção"/></Field>
+      <Field label="Serviço prestado / cargo PJ"><Input value={f.servico} onChange={e=>set("servico",e.target.value)} list="cargos-pj-lista" placeholder="Ex.: Gestão e Operação de Bar"/><datalist id="cargos-pj-lista">{(cargosDesc||[]).filter(c=>c.tipo==="pj").map(c=><option key={c.nome} value={c.nome}/>)}</datalist></Field>
       <Field label="Setor (escala)"><Select value={f.setor||"salao"} onChange={e=>set("setor",e.target.value)}>{SETORES.map(([k,l])=><option key={k} value={k}>{l}</option>)}</Select></Field>
     </div>
     <div className="mt-4 mb-1 text-xs font-bold text-slate-400 uppercase tracking-wide flex items-center gap-1.5"><Icon d={I.wallet} className="w-3.5 h-3.5"/>Financeiro</div>
@@ -4429,6 +4454,7 @@ function PrestadoresPJ(){
   const toast=useContext(ToastCtx);
   const [form,setForm]=useState(null);   // null | {} (novo) | pj
   const [sel,setSel]=useState(null);
+  const [gerarPj,setGerarPj]=useState(null);
   const [q,setQ]=useState("");
   const pjAtual=sel && pjs.find(x=>x.id===sel);
   const statusContrato=(pj)=>{ const k=donoKeyDe("pj",pj.id); const docs=arquivos.filter(a=>a.donoKey===k && a.pasta==="Contrato de prestação de serviço");
@@ -4486,18 +4512,20 @@ function PrestadoresPJ(){
             <div className="rounded-xl bg-white/10 px-3 py-2"><div className="text-white/50 text-xs">Pix / banco</div><span className="break-all">{pjAtual.pix||pjAtual.banco||"—"}</span></div>
           </div>
           <div className="flex gap-2 mt-4">
+            {can("documentos") && <Btn size="sm" icon={I.doc} onClick={()=>setGerarPj(pjAtual)}>Gerar contrato</Btn>}
             {can("colaboradores") && <Btn size="sm" variant="soft" icon={I.edit} onClick={()=>setForm(pjAtual)}>Editar dados</Btn>}
             {can("excluir") && <Btn size="sm" variant="danger" icon={I.trash} onClick={()=>{ if(confirm("Excluir o prestador "+pjAtual.nome+"? Os arquivos da pasta continuam guardados.")){ excluirPj(pjAtual.id); setSel(null); toast("Prestador excluído"); } }}>Excluir</Btn>}
           </div>
         </div>
         <div className="p-6 space-y-4">
           <div className="p-3 rounded-xl bg-slate-50 text-sm text-slate-600 flex items-start gap-2"><Icon d={I.sign} className="w-4 h-4 mt-0.5 text-brand-600 shrink-0"/>
-            <span>Abra a pasta <b>Contrato de prestação de serviço</b>, envie o PDF do contrato e clique em <b>Assinar</b> para mandar ao prestador e aos representantes da empresa pelo DocuSign. Quando todos assinarem, a via assinada é salva na pasta automaticamente.</span></div>
+            <span>Clique em <b>Gerar contrato</b> para montar o contrato a partir do modelo-base com as cláusulas do cargo. Ele é salvo na pasta <b>Contrato de prestação de serviço</b>; lá, clique em <b>Assinar</b> para mandar ao prestador e aos representantes da empresa pelo DocuSign. Quando todos assinarem, a via assinada é salva na pasta automaticamente.</span></div>
           <AcessoAppColab tipo="pj" pessoa={pjAtual}/>
           <PastasPessoa key={"pj"+pjAtual.id} tipo="pj" pessoa={pjAtual}/>
         </div>
       </div>}
     </Modal>
+    {gerarPj && <GerarContratoModal pj={gerarPj} onClose={()=>setGerarPj(null)}/>}
   </div>;
 }
 
@@ -4687,8 +4715,10 @@ function ConfigAssinatura(){
 
 /* ============================ CARGOS & FUNÇÕES (descritivo de função) ============================ */
 const DESCRITIVO_LINHAS=(t)=> String(t||"").split(/\n+/).map(l=>l.replace(/^\s*[-•*\d.)]+\s*/,"").trim()).filter(Boolean);
-const CARGO_VAZIO={ nome:"", tipo:"clt", setor:"salao", escala:"6x1", horario:"", salarioBase:"", beneficios:"", requisitos:"", descritivo:"", obs:"" };
+const CARGO_VAZIO={ nome:"", tipo:"clt", setor:"salao", escala:"6x1", horario:"", salarioBase:"", beneficios:"", requisitos:"", descritivo:"", obs:"", objetoContrato:"", clausulasOff:[], clausulaEspecifica:"" };
 function CargoForm({inicial,onSalvar,onClose,nomesUsados}){
+  const { modeloContratoPJ } = useStore();
+  const opcionais=((modeloContratoPJ||MODELO_PJ_PADRAO).clausulas||[]).filter(x=>x.opcional && !x.especifica);
   const [c,setC]=useState(()=>({...CARGO_VAZIO, ...(inicial||{})}));
   const set=(k,v)=>setC(p=>({...p,[k]:v}));
   const nomeOk=c.nome.trim().length>=2 && !(nomesUsados||[]).some(n=>n.toLowerCase()===c.nome.trim().toLowerCase() && (!inicial||n!==inicial.nome));
@@ -4708,6 +4738,15 @@ function CargoForm({inicial,onSalvar,onClose,nomesUsados}){
       <Field label="Requisitos da vaga"><textarea rows={3} value={c.requisitos} onChange={e=>set("requisitos",e.target.value)} className={ta} placeholder="Ex.: experiência de 6 meses em cozinha; disponibilidade aos finais de semana"/></Field>
       <Field label="Benefícios"><textarea rows={2} value={c.beneficios} onChange={e=>set("beneficios",e.target.value)} className={ta} placeholder="Ex.: vale-transporte, refeição no local, uniforme"/></Field>
     </div>
+    {c.tipo==="pj" && <div className="mt-4 p-4 rounded-2xl border border-brand-200 bg-brand-50/40">
+      <div className="text-xs font-bold text-brand-700 uppercase mb-1 flex items-center gap-1.5"><Icon d={I.doc} className="w-3.5 h-3.5"/>Contrato PJ deste cargo</div>
+      <p className="text-xs text-slate-500 mb-3">O contrato usa o modelo-base (Documentos → Modelo de contrato PJ). Aqui você define o que muda para este cargo. As atribuições do contrato vêm do descritivo de função acima.</p>
+      <Field label="Objeto do contrato (serviço)"><Input value={c.objetoContrato||""} onChange={e=>set("objetoContrato",e.target.value)} placeholder={"Ex.: Gestão e Operação de Bar"}/></Field>
+      {opcionais.length>0 && <div className="mt-3"><div className="text-xs font-semibold text-slate-600 mb-1.5">Cláusulas que entram neste contrato</div>
+        <div className="grid sm:grid-cols-2 gap-1.5">{opcionais.map(o=>{ const on=!(c.clausulasOff||[]).includes(o.id);
+          return <label key={o.id} className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={on} onChange={e=>set("clausulasOff", e.target.checked?(c.clausulasOff||[]).filter(x=>x!==o.id):[...(c.clausulasOff||[]),o.id])} className="w-4 h-4 accent-green-700"/>{o.titulo.charAt(0)+o.titulo.slice(1).toLowerCase()}</label>; })}</div></div>}
+      <div className="mt-3"><Field label="Cláusula específica da função (opcional, uma regra por linha)"><textarea rows={4} value={c.clausulaEspecifica||""} onChange={e=>set("clausulaEspecifica",e.target.value)} className={ta} placeholder={"Ex.: A CONTRATADA será responsável pelo fechamento de caixa do bar ao final de cada evento.\nA CONTRATADA deverá manter o cardápio de drinks atualizado."}/></Field></div>
+    </div>}
     {DESCRITIVO_LINHAS(c.descritivo).length>0 && <div className="mt-3 p-3 rounded-xl bg-slate-50 text-sm"><div className="text-xs font-bold text-slate-400 uppercase mb-1">Como o candidato vai ver</div>
       <ul className="list-disc pl-5 text-slate-700 space-y-0.5">{DESCRITIVO_LINHAS(c.descritivo).map((l,i)=><li key={i}>{l}</li>)}</ul></div>}
     <div className="flex gap-2 mt-5"><Btn variant="ghost" onClick={onClose}>Cancelar</Btn>
@@ -4784,6 +4823,456 @@ async function pdfTermoFuncao({nome, cpf, empresa, vaga, aceitoEm}){
   linha("Aceite registrado eletronicamente em "+new Date(aceitoEm).toLocaleString("pt-BR")+" pelo link de cadastro enviado pela empresa.",{size:9.5,cor:[0.4,0.45,0.5]});
   return bytesParaDataUrl(await doc.save(),"application/pdf");
 }
+
+/* ============================ MODELOS DE CONTRATO PJ ============================ */
+// Campos automáticos: {{N}} = número da cláusula; demais vêm da empresa, do prestador e do cargo.
+const CAMPOS_CONTRATO = [
+  ["OBJETO","Objeto do contrato (do cargo)"],["ATRIBUICOES","Atribuições: lista a), b), c)… (do descritivo do cargo)"],
+  ["CONTRATANTE_QUALIFICACAO","Qualificação completa da empresa contratante"],["CONTRATADA_QUALIFICACAO","Qualificação completa do prestador"],
+  ["CONTRATANTE_NOME","Razão social da contratante"],["CONTRATADA_NOME","Nome/razão social do prestador"],
+  ["VALOR","Valor mensal (R$ 0,00)"],["VALOR_EXTENSO","Valor por extenso"],["DIA_PAGAMENTO","Dia de pagamento"],["DIA_PAGAMENTO_EXTENSO","Dia por extenso"],
+  ["AVISO_PREVIO","Dias de aviso prévio"],["AVISO_PREVIO_EXTENSO","Aviso prévio por extenso"],["FORO","Comarca do foro"],["CIDADE","Cidade da assinatura"],["DATA","Data por extenso"],
+];
+const CLAUSULAS_PJ_PADRAO = [
+  { id:"objeto", titulo:"DO OBJETO", texto:"{{N}}.1. O presente contrato tem por objeto a prestação de serviços de {{OBJETO}} pela CONTRATADA à CONTRATANTE.\n{{N}}.2. Constituem atribuições da CONTRATADA:\n{{ATRIBUICOES}}" },
+  { id:"execucao", titulo:"DA EXECUÇÃO DOS SERVIÇOS", texto:"{{N}}.1. Os serviços serão executados com autonomia técnica e profissional.\n{{N}}.2. A CONTRATADA exercerá suas atividades sem subordinação jurídica, inexistindo vínculo empregatício entre as partes.\n{{N}}.3. Os serviços poderão ser prestados nas dependências da CONTRATANTE, em eventos organizados por ela ou em quaisquer locais necessários ao cumprimento do objeto contratual." },
+  { id:"obrig_contratada", titulo:"DAS OBRIGAÇÕES DA CONTRATADA", texto:"{{N}}.1. Constituem obrigações da CONTRATADA:\na) Executar os serviços com diligência, responsabilidade e boa-fé;\nb) Zelar pelo patrimônio da CONTRATANTE;\nc) Cumprir os procedimentos operacionais definidos pela CONTRATANTE;\nd) Manter absoluto sigilo sobre informações comerciais e operacionais;\ne) Apresentar relatórios sempre que solicitado;\nf) Comunicar imediatamente qualquer ocorrência que possa causar prejuízo à CONTRATANTE;\ng) Manter controles atualizados de estoque e movimentação de mercadorias;\nh) Cumprir a legislação aplicável às atividades exercidas." },
+  { id:"obrig_contratante", titulo:"DAS OBRIGAÇÕES DA CONTRATANTE", texto:"{{N}}.1. Constituem obrigações da CONTRATANTE:\na) Disponibilizar as informações necessárias à execução dos serviços;\nb) Efetuar o pagamento da remuneração ajustada;\nc) Disponibilizar os equipamentos e materiais necessários para a execução dos serviços;\nd) Fornecer acesso aos controles operacionais necessários para o desempenho das atividades." },
+  { id:"remuneracao", titulo:"DA REMUNERAÇÃO", texto:"{{N}}.1. Pela prestação dos serviços objeto deste contrato, a CONTRATANTE pagará à CONTRATADA a quantia mensal de {{VALOR}} ({{VALOR_EXTENSO}}).\n{{N}}.2. O pagamento será efetuado no dia {{DIA_PAGAMENTO}} ({{DIA_PAGAMENTO_EXTENSO}}) do mês subsequente à prestação dos serviços, mediante apresentação da respectiva Nota Fiscal com 10 (dez) dias de antecedência.\n{{N}}.3. Estão incluídos no valor contratado todos os custos, despesas operacionais, tributos, encargos e demais obrigações da CONTRATADA.\n{{N}}.4. Eventuais despesas extraordinárias somente serão reembolsadas quando previamente autorizadas pela CONTRATANTE e devidamente comprovadas." },
+  { id:"vigencia", titulo:"DA VIGÊNCIA", texto:"{{N}}.1. O presente contrato terá prazo indeterminado, iniciando-se na data de sua assinatura.\n{{N}}.2. Qualquer das partes poderá rescindir o presente contrato mediante aviso prévio escrito de {{AVISO_PREVIO}} ({{AVISO_PREVIO_EXTENSO}}) dias." },
+  { id:"estoques", opcional:true, titulo:"DA RESPONSABILIDADE SOBRE ESTOQUES E MATERIAIS", texto:"{{N}}.1. A CONTRATADA será responsável pela gestão e acompanhamento dos estoques de insumos e materiais sob sua supervisão.\n{{N}}.2. A CONTRATADA realizará conferências periódicas e deverá informar imediatamente qualquer divergência identificada.\n{{N}}.3. A CONTRATADA deverá adotar medidas para redução de perdas, desperdícios e avarias.\n{{N}}.4. A CONTRATADA deverá apresentar inventário físico sempre que solicitado pela CONTRATANTE e obrigatoriamente ao término deste contrato.\n{{N}}.5. A CONTRATADA responderá por prejuízos decorrentes de dolo, fraude, desvio de mercadorias, apropriação indevida ou atos comprovadamente praticados com culpa grave.\n{{N}}.6. Equipamentos, utensílios, ferramentas e materiais fornecidos pela CONTRATANTE deverão ser utilizados exclusivamente em suas atividades." },
+  { id:"especifica", especifica:true, titulo:"DAS CONDIÇÕES ESPECÍFICAS DA FUNÇÃO", texto:"{{CLAUSULA_ESPECIFICA}}" },
+  { id:"confidencialidade", titulo:"DA CONFIDENCIALIDADE", texto:"{{N}}.1. A CONTRATADA compromete-se a manter absoluto sigilo sobre todas as informações comerciais, financeiras, operacionais e estratégicas da CONTRATANTE.\n{{N}}.2. A obrigação de confidencialidade permanecerá válida mesmo após o encerramento deste contrato.\n{{N}}.3. Consideram-se informações confidenciais, entre outras:\na) Relação de clientes e fornecedores;\nb) Estrutura de custos;\nc) Fichas técnicas e receitas;\nd) Estratégias comerciais;\ne) Planilhas, relatórios e documentos internos." },
+  { id:"nao_concorrencia", opcional:true, titulo:"DA NÃO CONCORRÊNCIA E NÃO ALICIAMENTO", texto:"{{N}}.1. Durante a vigência deste contrato, a CONTRATADA compromete-se a não utilizar informações obtidas junto à CONTRATANTE para beneficiar concorrentes diretos.\n{{N}}.2. A CONTRATADA não poderá captar ou desviar clientes da CONTRATANTE utilizando informações obtidas em razão deste contrato.\n{{N}}.3. É vedado à CONTRATADA negociar diretamente com clientes da CONTRATANTE para prestação dos mesmos serviços sem autorização expressa da CONTRATANTE." },
+  { id:"vinculo", titulo:"DA INEXISTÊNCIA DE VÍNCULO EMPREGATÍCIO", texto:"{{N}}.1. O presente contrato possui natureza exclusivamente civil e comercial.\n{{N}}.2. Não existe relação de emprego entre as partes.\n{{N}}.3. A CONTRATADA exercerá suas atividades com autonomia organizacional, financeira e técnica.\n{{N}}.4. A CONTRATADA é integralmente responsável pelos recolhimentos fiscais, previdenciários e tributários decorrentes de sua atividade empresarial." },
+  { id:"rescisao", titulo:"DA RESCISÃO IMEDIATA", texto:"{{N}}.1. O presente contrato poderá ser rescindido imediatamente nas seguintes hipóteses:\na) Descumprimento de qualquer cláusula contratual;\nb) Violação do dever de confidencialidade;\nc) Fraude ou desvio de mercadorias;\nd) Condutas que causem prejuízo material ou moral à CONTRATANTE;\ne) Prática de ato ilícito relacionado à execução dos serviços." },
+  { id:"dados", titulo:"DA PROTEÇÃO DE DADOS", texto:"{{N}}.1. As partes comprometem-se a observar a legislação vigente sobre proteção de dados pessoais.\n{{N}}.2. Os dados acessados pela CONTRATADA deverão ser utilizados exclusivamente para execução das atividades contratadas." },
+  { id:"gerais", titulo:"DAS DISPOSIÇÕES GERAIS", texto:"{{N}}.1. O presente contrato substitui quaisquer entendimentos anteriores relacionados ao seu objeto.\n{{N}}.2. Alterações somente terão validade mediante instrumento escrito assinado por ambas as partes.\n{{N}}.3. A eventual tolerância de uma parte em relação à outra não representará renúncia de direitos." },
+  { id:"foro", titulo:"DO FORO", texto:"{{N}}.1. Fica eleito o Foro da Comarca de {{FORO}}, com renúncia a qualquer outro, por mais privilegiado que seja, para dirimir eventuais controvérsias oriundas deste contrato." },
+];
+const MODELO_PJ_PADRAO = { titulo:"CONTRATO DE PRESTAÇÃO DE SERVIÇOS DE {{OBJETO}}", intro:"As partes acima qualificadas resolvem celebrar o presente CONTRATO DE PRESTAÇÃO DE SERVIÇOS DE {{OBJETO}}, que se regerá pelas cláusulas e condições abaixo:", clausulas:CLAUSULAS_PJ_PADRAO };
+const ORDINAIS_F=["PRIMEIRA","SEGUNDA","TERCEIRA","QUARTA","QUINTA","SEXTA","SÉTIMA","OITAVA","NONA","DÉCIMA","DÉCIMA PRIMEIRA","DÉCIMA SEGUNDA","DÉCIMA TERCEIRA","DÉCIMA QUARTA","DÉCIMA QUINTA","DÉCIMA SEXTA","DÉCIMA SÉTIMA","DÉCIMA OITAVA","DÉCIMA NONA","VIGÉSIMA","VIGÉSIMA PRIMEIRA","VIGÉSIMA SEGUNDA","VIGÉSIMA TERCEIRA","VIGÉSIMA QUARTA","VIGÉSIMA QUINTA"];
+// Número por extenso (pt-BR) — inteiros até 999.999.999
+function extensoNum(n){
+  n=Math.floor(Math.abs(Number(n)||0)); if(n===0) return "zero";
+  const U=["","um","dois","três","quatro","cinco","seis","sete","oito","nove","dez","onze","doze","treze","quatorze","quinze","dezesseis","dezessete","dezoito","dezenove"];
+  const D=["","","vinte","trinta","quarenta","cinquenta","sessenta","setenta","oitenta","noventa"];
+  const C=["","cento","duzentos","trezentos","quatrocentos","quinhentos","seiscentos","setecentos","oitocentos","novecentos"];
+  const ate999=(x)=>{ if(x===100) return "cem"; const c=Math.floor(x/100), r=x%100, p=[]; if(c) p.push(C[c]); if(r){ if(r<20) p.push(U[r]); else { p.push(D[Math.floor(r/10)]+(r%10?" e "+U[r%10]:"")); } } return p.join(" e "); };
+  const partes=[]; const mi=Math.floor(n/1e6), mil=Math.floor((n%1e6)/1000), r=n%1000;
+  if(mi) partes.push(mi===1?"um milhão":ate999(mi)+" milhões");
+  if(mil) partes.push(mil===1?"mil":ate999(mil)+" mil");
+  if(r) partes.push(ate999(r));
+  if(partes.length>1){ const ult=partes.pop(); return partes.join(", ")+((r<100||r%100===0)&&r?" e ":" ")+ult; }
+  return partes[0];
+}
+function extensoReais(v){
+  v=Math.round((Number(v)||0)*100); const re=Math.floor(v/100), ce=v%100;
+  const pr=re? extensoNum(re)+(re===1?" real":(re%1e6===0?" de reais":" reais")) : "";
+  const pc=ce? extensoNum(ce)+(ce===1?" centavo":" centavos") : "";
+  return [pr,pc].filter(Boolean).join(" e ") || "zero reais";
+}
+const dataExtenso=(d)=>{ const x=d?new Date(d+"T12:00:00"):new Date(); return x.getDate()+" de "+MESES_LONGO[x.getMonth()]+" de "+x.getFullYear(); };
+// Monta o texto do contrato (lista de blocos) a partir do modelo, da empresa, do prestador e do cargo
+function montarContratoPJ({modelo, empresa, pj, cargo, extras}){
+  modelo=modelo||MODELO_PJ_PADRAO; empresa=empresa||{}; cargo=cargo||{}; extras=extras||{};
+  const ficha=pj.ficha||{};
+  const objeto=(cargo.objetoContrato||cargo.nome||pj.servico||"prestação de serviços").trim();
+  const atividades=DESCRITIVO_LINHAS(cargo.descritivo);
+  const letras="abcdefghijklmnopqrstuvwxyz";
+  const atrib=(atividades.length?atividades:["Executar as atividades inerentes ao serviço contratado."]).map((l,i)=>letras[i%26]+") "+l.replace(/[.;]\s*$/,"")+(i===atividades.length-1||!atividades.length?".":";")).join("\n");
+  const endPj=pj.endereco || [ficha.logradouro&&(ficha.logradouro+(ficha.numero?", nº "+ficha.numero:"")), ficha.complemento, ficha.bairro, ficha.cidade&&(ficha.cidade+(ficha.uf?"/"+ficha.uf:"")), ficha.cep&&("CEP "+ficha.cep)].filter(Boolean).join(", ");
+  const resp=pj.responsavel||ficha.responsavel||"";
+  const rg=pj.rg||ficha.rg||"";
+  const qualContratada=[(pj.nome||"").toUpperCase(), pj.cnpj?"inscrita no CNPJ nº "+pj.cnpj:"",
+    resp && resp.toUpperCase()!==String(pj.nome||"").toUpperCase() ? "neste ato representada por "+resp : "",
+    pj.cpf?"portador(a) do CPF nº "+pj.cpf:"", rg?"RG nº "+rg:"", endPj?"com endereço na "+endPj:""].filter(Boolean).join(", ")+", doravante denominada simplesmente CONTRATADA.";
+  const qualContratante=[(empresa.razao||"[RAZÃO SOCIAL DA EMPRESA]").toUpperCase()+", pessoa jurídica de direito privado", "inscrita no CNPJ nº "+(empresa.cnpj||"[CNPJ]"),
+    "com sede na "+(empresa.endereco||"[ENDEREÇO]")].join(", ")+", doravante denominada simplesmente CONTRATANTE.";
+  const valor=Number(extras.valor!=null?extras.valor:pj.valor)||0, dia=Number(extras.diaPagamento||pj.diaPagamento)||10, aviso=Number(extras.avisoPrevio||empresa.avisoPrevio)||30;
+  const campos={ OBJETO:objeto.toUpperCase(), ATRIBUICOES:atrib, CONTRATANTE_QUALIFICACAO:qualContratante, CONTRATADA_QUALIFICACAO:qualContratada,
+    CONTRATANTE_NOME:(empresa.razao||"").toUpperCase(), CONTRATADA_NOME:(pj.nome||"").toUpperCase(), VALOR:fmtBRL(valor), VALOR_EXTENSO:extensoReais(valor),
+    DIA_PAGAMENTO:String(dia).padStart(2,"0"), DIA_PAGAMENTO_EXTENSO:extensoNum(dia), AVISO_PREVIO:String(aviso), AVISO_PREVIO_EXTENSO:extensoNum(aviso),
+    FORO:empresa.foro||"São Paulo/SP", CIDADE:empresa.cidade||"São Paulo/SP", DATA:dataExtenso(extras.data), CLAUSULA_ESPECIFICA:"" };
+  const sub=(t,N)=> String(t||"").replace(/\{\{N\}\}/g,String(N)).replace(/\{\{([A-Z_]+)\}\}/g,(m,k)=> campos[k]!=null?campos[k]:m);
+  const off=new Set(cargo.clausulasOff||[]);
+  const especifica=String(cargo.clausulaEspecifica||"").trim();
+  const ativas=(modelo.clausulas||[]).filter(c=> c.especifica ? !!especifica : !(c.opcional && off.has(c.id)));
+  const blocos=[{t:"titulo",x:sub(modelo.titulo)},{t:"qual",x:"CONTRATANTE: "+qualContratante},{t:"qual",x:"CONTRATADA: "+qualContratada},{t:"p",x:sub(modelo.intro)}];
+  ativas.forEach((c,i)=>{ const N=i+1;
+    blocos.push({t:"clausula",x:"CLÁUSULA "+(ORDINAIS_F[i]||String(N))});
+    blocos.push({t:"subtitulo",x:sub(c.titulo)});
+    const corpo = c.especifica ? especifica.split(/\n+/).map((l,j)=> /^\d+\.\d+\.|^[a-z]\)/.test(l.trim())?l.trim():(N+"."+(j+1)+". "+l.trim())).join("\n") : sub(c.texto,N);
+    corpo.split("\n").filter(l=>l.trim()).forEach(l=>blocos.push({t:/^[a-z]\)/.test(l.trim())?"item":"p",x:sub(l,N)}));
+  });
+  blocos.push({t:"local",x:campos.CIDADE+", "+campos.DATA+"."});
+  blocos.push({t:"assin",x:"CONTRATANTE",n:(empresa.razao||"").toUpperCase(),d:empresa.cnpj?"CNPJ: "+empresa.cnpj:"",r:empresa.representante||"Representante Legal"});
+  blocos.push({t:"assin",x:"CONTRATADA",n:(pj.nome||"").toUpperCase(),d:[pj.cnpj&&"CNPJ: "+pj.cnpj, pj.cpf&&"CPF: "+pj.cpf].filter(Boolean).join(" · "),r:resp||pj.nome||""});
+  blocos.push({t:"testemunhas"});
+  return blocos;
+}
+async function pdfContratoPJ(blocos){
+  const PDFLib=await carregarPdfLib();
+  const doc=await PDFLib.PDFDocument.create();
+  const font=await doc.embedFont(PDFLib.StandardFonts.TimesRoman), bold=await doc.embedFont(PDFLib.StandardFonts.TimesRomanBold);
+  const limpo=(t)=>String(t||"").replace(/[^\x20-\x7E\u00A0-\u00FF–—‘’“”•…]/g,"");
+  const X=64, W=467; let pg=doc.addPage([595,842]); let y=780;
+  const nova=()=>{ pg=doc.addPage([595,842]); y=780; };
+  const escrever=(txt,{f=font,size=11,gap=3.5,indent=0,centro=false}={})=>{
+    const palavras=limpo(txt).split(/\s+/).filter(Boolean); let atual=""; const linhas=[];
+    palavras.forEach(w=>{ const t=atual?atual+" "+w:w; if(f.widthOfTextAtSize(t,size)>W-indent && atual){ linhas.push(atual); atual=w; } else atual=t; });
+    if(atual) linhas.push(atual);
+    linhas.forEach(l=>{ if(y<64) nova(); const lw=f.widthOfTextAtSize(l,size); pg.drawText(l,{x:centro?X+(W-lw)/2:X+indent,y,size,font:f}); y-=size+gap; });
+  };
+  blocos.forEach(b=>{
+    if(b.t==="titulo"){ escrever(b.x,{f:bold,size:13,centro:true,gap:6}); y-=10; }
+    else if(b.t==="qual"){ escrever(b.x,{gap:3.5}); y-=6; }
+    else if(b.t==="clausula"){ y-=10; if(y<120) nova(); escrever(b.x,{f:bold,size:11.5}); }
+    else if(b.t==="subtitulo"){ escrever(b.x,{f:bold,size:11.5,gap:6}); }
+    else if(b.t==="item"){ escrever(b.x,{indent:18}); }
+    else if(b.t==="p"){ escrever(b.x); y-=2; }
+    else if(b.t==="local"){ y-=16; escrever(b.x); y-=20; }
+    else if(b.t==="assin"){ if(y<150) nova(); y-=26; pg.drawLine({start:{x:X,y},end:{x:X+280,y},thickness:0.7}); y-=14;
+      escrever(b.x,{f:bold,size:10.5}); if(b.n) escrever(b.n,{size:10.5}); if(b.d) escrever(b.d,{size:10}); if(b.r) escrever(b.r,{size:10}); y-=6; }
+    else if(b.t==="testemunhas"){ if(y<170) nova(); y-=14; escrever("TESTEMUNHAS",{f:bold,size:10.5,gap:10});
+      ["1.","2."].forEach(n=>{ escrever(n+" Nome: ___________________________________",{size:10.5,gap:8}); escrever("CPF: ______________________   Assinatura: ______________________",{size:10.5,gap:14}); }); }
+  });
+  return bytesParaDataUrl(await doc.save(),"application/pdf");
+}
+
+/* ---------- Tela: modelo de contrato + dados da empresa ---------- */
+function ModeloContratoPage(){
+  const { modeloContratoPJ, setModeloContratoPJ, empresaContratante, setEmpresaContratante, can } = useStore();
+  const toast=useContext(ToastCtx);
+  const [m,setM]=useState(()=>JSON.parse(JSON.stringify(modeloContratoPJ||MODELO_PJ_PADRAO)));
+  const [emp,setEmp]=useState(()=>({ razao:"", cnpj:"", endereco:"", cidade:"São Paulo/SP", foro:"São Paulo/SP", representante:"", avisoPrevio:30, ...(empresaContratante||{}) }));
+  const [aberta,setAberta]=useState(null);
+  const editavel=can("documentos");
+  const setCl=(i,patch)=>setM(p=>({...p,clausulas:p.clausulas.map((c,j)=>j===i?{...c,...patch}:c)}));
+  const mover=(i,d)=>setM(p=>{ const a=[...p.clausulas]; const j=i+d; if(j<0||j>=a.length) return p; [a[i],a[j]]=[a[j],a[i]]; return {...p,clausulas:a}; });
+  const salvar=()=>{ setModeloContratoPJ(m); setEmpresaContratante(emp); toast("Modelo de contrato salvo"); };
+  const ta="w-full px-3 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-brand-400 text-sm font-mono";
+  const exemplo=useMemo(()=>montarContratoPJ({modelo:m, empresa:emp, pj:{nome:"Nome do Prestador LTDA", cnpj:"00.000.000/0001-00", responsavel:"Nome do Responsável", cpf:"000.000.000-00", valor:5000, diaPagamento:10, endereco:"Rua Exemplo, nº 100, São Paulo/SP"}, cargo:{nome:"Gestão e Operação de Bar", descritivo:"Gerenciar as operações do bar\nControlar estoque de bebidas", clausulaEspecifica:""}}),[m,emp]);
+  return <div className="fade-in">
+    <PageHeader title="Modelo de contrato PJ" sub="Base usada para gerar os contratos dos prestadores — as atribuições e as cláusulas variáveis vêm de cada cargo">
+      {editavel && <Btn variant="ghost" icon={I.refresh} onClick={()=>{ if(confirm("Voltar ao modelo original? As alterações nas cláusulas serão perdidas.")) setM(JSON.parse(JSON.stringify(MODELO_PJ_PADRAO))); }}>Restaurar original</Btn>}
+      {editavel && <Btn icon={I.check} onClick={salvar}>Salvar modelo</Btn>}
+    </PageHeader>
+    <div className="grid lg:grid-cols-[1fr_380px] gap-4 items-start">
+      <div className="space-y-4">
+        <Card className="p-5">
+          <h3 className="font-bold text-slate-900 mb-3">Empresa contratante</h3>
+          <div className="grid sm:grid-cols-2 gap-3">
+            <Field label="Razão social"><Input value={emp.razao} onChange={e=>setEmp({...emp,razao:e.target.value})}/></Field>
+            <Field label="CNPJ"><Input value={emp.cnpj} onChange={e=>setEmp({...emp,cnpj:e.target.value})}/></Field>
+            <div className="sm:col-span-2"><Field label="Endereço da sede"><Input value={emp.endereco} onChange={e=>setEmp({...emp,endereco:e.target.value})} placeholder="Rua, nº, bairro, cidade/UF"/></Field></div>
+            <Field label="Representante legal (quem assina)"><Input value={emp.representante} onChange={e=>setEmp({...emp,representante:e.target.value})}/></Field>
+            <Field label="Cidade da assinatura"><Input value={emp.cidade} onChange={e=>setEmp({...emp,cidade:e.target.value})}/></Field>
+            <Field label="Foro (comarca)"><Input value={emp.foro} onChange={e=>setEmp({...emp,foro:e.target.value})}/></Field>
+            <Field label="Aviso prévio (dias)"><Input type="number" value={emp.avisoPrevio} onChange={e=>setEmp({...emp,avisoPrevio:Number(e.target.value)})}/></Field>
+          </div>
+        </Card>
+        <Card className="p-5">
+          <h3 className="font-bold text-slate-900 mb-1">Cláusulas</h3>
+          <p className="text-sm text-slate-500 mb-3">A numeração é automática. Cláusulas <b>opcionais</b> podem ser desligadas em cada cargo. A cláusula de <b>condições específicas</b> só entra quando o cargo tiver texto próprio.</p>
+          <div className="space-y-2">
+            {m.clausulas.map((c,i)=><div key={c.id+i} className="rounded-xl border border-slate-200">
+              <div className="flex items-center gap-2 p-2.5">
+                <span className="w-7 text-xs font-bold text-slate-400 text-center">{i+1}</span>
+                <button onClick={()=>setAberta(aberta===i?null:i)} className="flex-1 text-left text-sm font-semibold text-slate-800">{c.titulo}</button>
+                {c.opcional && <Badge tone="amber">opcional</Badge>}{c.especifica && <Badge tone="blue">do cargo</Badge>}
+                {editavel && <><button title="Subir" onClick={()=>mover(i,-1)} className="w-7 h-7 rounded-lg text-slate-400 hover:bg-slate-100">↑</button><button title="Descer" onClick={()=>mover(i,1)} className="w-7 h-7 rounded-lg text-slate-400 hover:bg-slate-100">↓</button></>}
+              </div>
+              {aberta===i && <div className="p-3 border-t border-slate-100 space-y-2">
+                <Field label="Título"><Input value={c.titulo} onChange={e=>setCl(i,{titulo:e.target.value})} disabled={!editavel}/></Field>
+                {!c.especifica && <Field label="Texto (use {{N}} para o número da cláusula)"><textarea rows={8} value={c.texto} onChange={e=>setCl(i,{texto:e.target.value})} className={ta} disabled={!editavel}/></Field>}
+                {c.especifica && <p className="text-xs text-slate-500">O texto desta cláusula é escrito em cada cargo (Cargos & funções → cargo PJ → “Cláusula específica”).</p>}
+                {editavel && !c.especifica && <div className="flex items-center gap-3">
+                  <label className="flex items-center gap-2 text-sm text-slate-600"><input type="checkbox" checked={!!c.opcional} onChange={e=>setCl(i,{opcional:e.target.checked})}/> Opcional (o cargo pode desligar)</label>
+                  {!["objeto","remuneracao","foro"].includes(c.id) && <button onClick={()=>{ if(confirm("Remover a cláusula "+c.titulo+"?")) setM(p=>({...p,clausulas:p.clausulas.filter((_,j)=>j!==i)})); setAberta(null); }} className="ml-auto text-sm text-rose-500 hover:underline">Remover cláusula</button>}
+                </div>}
+              </div>}
+            </div>)}
+          </div>
+          {editavel && <Btn size="sm" variant="soft" icon={I.plus} className="mt-3" onClick={()=>{ setM(p=>({...p,clausulas:[...p.clausulas.slice(0,-1),{id:"c"+Date.now(),titulo:"NOVA CLÁUSULA",texto:"{{N}}.1. ",opcional:true},p.clausulas[p.clausulas.length-1]]})); setAberta(m.clausulas.length-1); }}>Nova cláusula</Btn>}
+        </Card>
+      </div>
+      <Card className="p-4 lg:sticky lg:top-16">
+        <div className="text-xs font-bold text-slate-400 uppercase mb-2">Campos automáticos</div>
+        <div className="space-y-1 text-xs mb-4">{CAMPOS_CONTRATO.map(([k,l])=><div key={k}><code className="text-brand-700">{"{{"+k+"}}"}</code> <span className="text-slate-500">— {l}</span></div>)}</div>
+        <div className="text-xs font-bold text-slate-400 uppercase mb-2">Prévia (exemplo)</div>
+        <div className="max-h-[50vh] overflow-y-auto text-[11px] leading-relaxed text-slate-700 bg-slate-50 rounded-xl p-3 font-serif">
+          {exemplo.map((b,i)=> b.t==="titulo"?<p key={i} className="font-bold text-center mb-2">{b.x}</p> : b.t==="clausula"?<p key={i} className="font-bold mt-2">{b.x}</p> : b.t==="subtitulo"?<p key={i} className="font-bold">{b.x}</p> : b.t==="item"?<p key={i} className="pl-3">{b.x}</p> : b.t==="assin"?<p key={i} className="mt-2">______________________<br/>{b.x} — {b.n}</p> : b.t==="testemunhas"?null : <p key={i} className="mb-1">{b.x}</p>)}
+        </div>
+      </Card>
+    </div>
+  </div>;
+}
+
+/* ---------- Gerar contrato de um prestador ---------- */
+function GerarContratoModal({pj,onClose}){
+  const { modeloContratoPJ, empresaContratante, cargosDesc, salvarPj } = useStore();
+  const toast=useContext(ToastCtx);
+  const cargosPJ=(cargosDesc||[]).filter(c=>c.tipo==="pj");
+  const [cargoNome,setCargoNome]=useState(()=> (cargosPJ.find(c=>c.nome===pj.servico)||cargosPJ[0]||{}).nome||"");
+  const [extras,setExtras]=useState({ valor:pj.valor||0, diaPagamento:pj.diaPagamento||10, avisoPrevio:(empresaContratante&&empresaContratante.avisoPrevio)||30, data:hojeStr() });
+  const [gerando,setGerando]=useState(false);
+  const cargo=cargosPJ.find(c=>c.nome===cargoNome)||{nome:pj.servico||"prestação de serviços", descritivo:""};
+  const blocos=montarContratoPJ({modelo:modeloContratoPJ, empresa:empresaContratante, pj, cargo, extras});
+  const avisos=[]; if(!(empresaContratante&&empresaContratante.razao)) avisos.push("Preencha os dados da empresa contratante em Documentos → Modelo de contrato PJ.");
+  if(!pj.cnpj) avisos.push("O prestador está sem CNPJ."); if(!pj.endereco && !(pj.ficha&&pj.ficha.logradouro)) avisos.push("O prestador está sem endereço (edite os dados dele).");
+  if(!DESCRITIVO_LINHAS(cargo.descritivo).length) avisos.push("O cargo não tem descritivo — as atribuições sairão genéricas.");
+  const gerar=async()=>{
+    setGerando(true);
+    try{
+      const du=await pdfContratoPJ(blocos);
+      const tipoKey=String(pj.id).indexOf("auto_")===0?"pj-"+pj.id:"pj-"+pj.id;
+      await arqSalvar({ nome:"Contrato de prestação de serviços - "+cargo.nome+" - "+pj.nome+".pdf", donoKey:tipoKey, donoTipo:"pj", donoId:String(pj.id), donoNome:pj.nome, cpf:soDigitos(pj.cpf||pj.cnpj),
+        pasta:"Contrato de prestação de serviço", categoria:"contrato", visivelColab:true, origem:"modelo" }, du);
+      if(cargo.nome && pj.servico!==cargo.nome) salvarPj({...pj, servico:cargo.nome});
+      toast("Contrato gerado e salvo na pasta — clique em Assinar para enviar pelo DocuSign"); onClose();
+    }catch(e){ toast("Não foi possível gerar o contrato: "+erroBanco(e)); }
+    setGerando(false);
+  };
+  return <Modal open onClose={onClose} wide>
+    <div className="p-6">
+      <div className="flex items-center justify-between mb-4"><h3 className="text-lg font-bold text-slate-900">Gerar contrato — {pj.nome}</h3><button onClick={onClose} className="text-slate-400 hover:text-slate-600"><Icon d={I.x}/></button></div>
+      <div className="grid sm:grid-cols-4 gap-3">
+        <div className="sm:col-span-2"><Field label="Cargo / serviço (define as cláusulas)"><Select value={cargoNome} onChange={e=>setCargoNome(e.target.value)}>{cargosPJ.length===0&&<option value="">— crie cargos PJ em Cargos & funções —</option>}{cargosPJ.map(c=><option key={c.nome}>{c.nome}</option>)}</Select></Field></div>
+        <Field label="Valor mensal (R$)"><Input type="number" value={extras.valor} onChange={e=>setExtras({...extras,valor:Number(e.target.value)})}/></Field>
+        <Field label="Dia do pagamento"><Input type="number" min="1" max="31" value={extras.diaPagamento} onChange={e=>setExtras({...extras,diaPagamento:Number(e.target.value)})}/></Field>
+        <Field label="Aviso prévio (dias)"><Input type="number" value={extras.avisoPrevio} onChange={e=>setExtras({...extras,avisoPrevio:Number(e.target.value)})}/></Field>
+        <Field label="Data do contrato"><Input type="date" value={extras.data} onChange={e=>setExtras({...extras,data:e.target.value})}/></Field>
+      </div>
+      {avisos.length>0 && <div className="mt-3 p-3 rounded-xl bg-amber-50 text-amber-800 text-sm space-y-0.5">{avisos.map((a,i)=><div key={i}>• {a}</div>)}</div>}
+      <div className="mt-4 max-h-[45vh] overflow-y-auto rounded-xl border border-slate-200 bg-white p-5 text-[13px] leading-relaxed text-slate-800 font-serif">
+        {blocos.map((b,i)=> b.t==="titulo"?<p key={i} className="font-bold text-center mb-3">{b.x}</p> : b.t==="clausula"?<p key={i} className="font-bold mt-3">{b.x}</p> : b.t==="subtitulo"?<p key={i} className="font-bold mb-1">{b.x}</p> : b.t==="item"?<p key={i} className="pl-4">{b.x}</p> : b.t==="qual"?<p key={i} className="mb-2"><b>{b.x.split(":")[0]}:</b>{b.x.slice(b.x.indexOf(":")+1)}</p> : b.t==="assin"?<div key={i} className="mt-6"><div className="w-64 border-t border-slate-500 pt-1 font-bold">{b.x}</div><div>{b.n}</div><div className="text-xs text-slate-500">{b.d}</div></div> : b.t==="testemunhas"?<p key={i} className="mt-6 font-bold">TESTEMUNHAS: 1. ______________ 2. ______________</p> : <p key={i} className={cx("mb-1", b.t==="local"&&"mt-5")}>{b.x}</p>)}
+      </div>
+      <div className="flex gap-2 mt-4"><Btn variant="ghost" onClick={onClose}>Cancelar</Btn><Btn className="flex-1" icon={gerando?null:I.doc} disabled={gerando} onClick={gerar}>{gerando?"Gerando…":"Gerar PDF e salvar na pasta do prestador"}</Btn></div>
+    </div>
+  </Modal>;
+}
+
+
+/* ============================ TERMOS PARA ACEITE E ASSINATURA (ex.: uso de imagem) ============================ */
+// Texto padrão do Termo de Autorização para Uso de Imagem, Voz e Nome. {{GRUPO}} = nome do grupo (editável no painel).
+const TERMO_IMAGEM_PADRAO = {
+  id:"imagem",
+  titulo:"TERMO DE AUTORIZAÇÃO PARA USO DE IMAGEM, VOZ E NOME",
+  texto:`Pelo presente instrumento particular, de um lado, {{GRUPO}}, compreendendo todas as empresas, marcas, restaurantes, unidades e demais estabelecimentos integrantes do grupo econômico, atuais ou que venham a integrá-lo, doravante denominado "{{GRUPO}}"; e, de outro lado, o(a) colaborador(a) abaixo identificado(a), doravante denominado(a) "COLABORADOR(A)", têm entre si justo e acordado o presente Termo, mediante as cláusulas e condições seguintes.
+# 1. DO OBJETO
+1.1. O(A) COLABORADOR(A), de forma livre, informada e inequívoca, autoriza o {{GRUPO}} a captar, reproduzir, editar, armazenar, publicar, divulgar e utilizar sua imagem, voz e nome, individualmente ou em conjunto com outras pessoas, em fotografias, vídeos, gravações audiovisuais, materiais gráficos e demais conteúdos produzidos no contexto das atividades profissionais, institucionais, promocionais, publicitárias e de comunicação do {{GRUPO}}.
+1.2. A presente autorização abrange materiais produzidos em ambientes profissionais, eventos, treinamentos, campanhas, ações internas ou externas, confraternizações, registros institucionais, conteúdos para redes sociais, materiais de comunicação interna e externa e demais situações relacionadas às atividades do {{GRUPO}}.
+# 2. DAS FINALIDADES DE UTILIZAÇÃO
+2.1. A imagem, voz e nome do(a) COLABORADOR(A) poderão ser utilizados para: (a) comunicação institucional e corporativa; (b) divulgação das marcas, restaurantes, unidades e serviços do {{GRUPO}}; (c) campanhas publicitárias e promocionais; (d) conteúdos para redes sociais e plataformas digitais; (e) materiais impressos e digitais; (f) websites e canais oficiais do {{GRUPO}}; (g) materiais de recrutamento, treinamento, cultura e comunicação interna; (h) registros e divulgação de eventos e ações institucionais; (i) materiais de apresentação, portfólio institucional, comunicação corporativa e relacionamento com clientes; e (j) demais ações de comunicação relacionadas às atividades e à identidade institucional do {{GRUPO}}, desde que compatíveis com as finalidades aqui estabelecidas.
+# 3. DA AUTORIZAÇÃO APÓS O ENCERRAMENTO DO VÍNCULO
+3.1. O(A) COLABORADOR(A) declara estar ciente e concorda expressamente que o encerramento, por qualquer motivo, de seu vínculo empregatício, contratual, de estágio, prestação de serviços ou qualquer outra relação profissional com o {{GRUPO}} não implicará, por si só, na obrigação de retirada ou exclusão dos materiais de comunicação, publicidade, divulgação ou registros institucionais que tenham sido produzidos e publicados durante a vigência do vínculo.
+3.2. Dessa forma, o {{GRUPO}} poderá continuar utilizando, após o desligamento do(a) COLABORADOR(A), materiais contendo sua imagem, voz ou nome que tenham sido produzidos durante a vigência do vínculo e dentro das finalidades autorizadas neste Termo.
+3.3. A autorização prevista nesta cláusula aplica-se inclusive a materiais que, após o desligamento, permaneçam disponíveis nos canais oficiais do {{GRUPO}}, tais como websites, redes sociais, plataformas digitais, materiais institucionais, campanhas arquivadas, portfólios e demais meios de comunicação.
+3.4. O(A) COLABORADOR(A) declara compreender que o simples encerramento do vínculo profissional não constitui, por si só, revogação retroativa das autorizações concedidas neste instrumento nem obriga o {{GRUPO}} a remover imediatamente materiais já produzidos ou publicados, ressalvados os direitos assegurados pela legislação aplicável.
+# 4. DA AUSÊNCIA DE EXCLUSIVIDADE E DE REMUNERAÇÃO ESPECÍFICA
+4.1. A presente autorização é concedida de forma gratuita, não gerando ao(à) COLABORADOR(A) qualquer remuneração adicional, participação financeira, royalty ou indenização exclusivamente em razão das utilizações autorizadas neste Termo, salvo se houver instrumento específico dispondo de maneira diversa.
+4.2. A autorização ora concedida não implica cessão de outros direitos decorrentes da relação profissional mantida entre as partes.
+# 5. DA FORMA DE UTILIZAÇÃO
+5.1. O {{GRUPO}} poderá realizar cortes, ajustes de duração, edição, tratamento de imagem, montagem, inserção de textos, legendas, elementos gráficos, trilhas e demais procedimentos técnicos necessários à adequação do material aos diferentes formatos de comunicação.
+5.2. A utilização deverá respeitar a dignidade, honra, reputação e integridade do(a) COLABORADOR(A), sendo vedada a utilização da imagem, voz ou nome em contexto ilícito, ofensivo, difamatório ou incompatível com as finalidades previstas neste Termo.
+# 6. DO PRAZO DA AUTORIZAÇÃO
+6.1. A presente autorização produzirá efeitos durante o período de vínculo do(a) COLABORADOR(A) com o {{GRUPO}} e permanecerá aplicável ao uso dos materiais produzidos durante esse período mesmo após o encerramento do vínculo, observadas as finalidades e condições previstas neste instrumento e a legislação aplicável.
+6.2. A autorização não significa que o {{GRUPO}} esteja obrigado a manter determinado conteúdo publicado ou disponível por prazo específico, cabendo ao {{GRUPO}} decidir sobre a permanência, atualização, substituição ou retirada dos materiais de seus canais.
+# 7. DA PROTEÇÃO DE DADOS PESSOAIS
+7.1. O tratamento dos dados pessoais relacionados a este Termo será realizado em conformidade com a Lei nº 13.709/2018 – Lei Geral de Proteção de Dados Pessoais (LGPD) e demais normas aplicáveis.
+7.2. Para os fins deste Termo, o(a) COLABORADOR(A) declara ter recebido informações claras quanto às finalidades, formas e duração do tratamento de sua imagem, voz e nome.
+7.3. O consentimento para tratamento de dados pessoais deverá observar as disposições da LGPD, especialmente seus arts. 5º, XII, 7º, I, 8º e 9º.
+7.4. O(A) COLABORADOR(A) poderá exercer os direitos previstos na legislação de proteção de dados pessoais mediante solicitação ao canal oficial indicado pelo {{GRUPO}} para atendimento aos titulares de dados.
+# 8. DO FUNDAMENTO LEGAL
+8.1. A presente autorização observa, especialmente: (I) Constituição Federal de 1988, art. 5º, incisos V e X, que asseguram a proteção da imagem, da honra, da intimidade e da vida privada; (II) Código Civil (Lei nº 10.406/2002), especialmente os arts. 18, 20 e 21, relativos à proteção do nome, da imagem e da vida privada; e (III) Lei nº 13.709/2018 – Lei Geral de Proteção de Dados Pessoais (LGPD), especialmente os arts. 5º, XII, 7º, 8º, 9º e 18, relativos ao consentimento, às finalidades do tratamento, à transparência e aos direitos do titular.
+8.2. O(A) COLABORADOR(A) declara que recebeu informações suficientes sobre a finalidade e as condições de utilização de sua imagem, voz e nome, manifestando sua concordância de forma livre, informada e inequívoca.
+# 9. DA REVOGAÇÃO DO CONSENTIMENTO
+9.1. O(A) COLABORADOR(A) reconhece que, nos casos em que o tratamento estiver fundamentado em consentimento, poderá exercer os direitos que lhe são assegurados pela legislação aplicável, inclusive quanto à revogação do consentimento, mediante manifestação expressa.
+9.2. A revogação do consentimento não prejudicará os tratamentos realizados anteriormente de forma legítima, observadas as disposições da LGPD e demais normas aplicáveis.
+9.3. Eventual solicitação de retirada ou interrupção de utilização será analisada pelo {{GRUPO}} de acordo com a finalidade, o material, o meio de divulgação, a base legal aplicável e os direitos envolvidos.
+# 10. DA DECLARAÇÃO DE CIÊNCIA E CONCORDÂNCIA
+10.1. O(A) COLABORADOR(A) declara que: (a) leu integralmente este Termo; (b) compreendeu suas condições; (c) teve oportunidade de esclarecer eventuais dúvidas antes de sua assinatura; (d) está ciente de que sua imagem, voz e nome poderão aparecer em materiais de comunicação do {{GRUPO}}; e (e) está expressamente ciente de que o término de seu vínculo profissional com o {{GRUPO}} não impede, por si só, a continuidade da utilização de materiais produzidos durante o período em que mantinha vínculo com o grupo, desde que a utilização permaneça dentro das finalidades autorizadas neste Termo e respeite a legislação aplicável.
+# 11. DISPOSIÇÕES FINAIS
+11.1. Este Termo constitui autorização específica para as finalidades nele descritas e deverá ser interpretado em conjunto com a legislação brasileira aplicável.
+11.2. Caso qualquer disposição deste Termo seja considerada inválida ou inexigível, as demais disposições permanecerão válidas naquilo que não forem afetadas.
+11.3. Este documento deverá ser mantido pelo {{GRUPO}} como comprovação da manifestação de vontade do(a) COLABORADOR(A).
+11.4. O presente Termo não substitui eventuais contratos de trabalho, contratos de prestação de serviços, contratos de estágio, contratos de cessão de direitos ou outros instrumentos jurídicos específicos que venham a ser celebrados entre as partes.
+E, por estar de acordo com as condições acima, o(a) COLABORADOR(A) firma o presente Termo.`
+};
+const termoTexto=(cfg)=> String((cfg&&cfg.texto)||TERMO_IMAGEM_PADRAO.texto).replace(/\{\{GRUPO\}\}/g, ((cfg&&cfg.grupo)||"GRUPO SKY HALL").toUpperCase());
+// Bloco de leitura do termo (usado no link de cadastro e no link avulso)
+const TermoLeitura=({cfg})=> <div className="max-h-[42vh] overflow-y-auto rounded-2xl border border-slate-200 bg-white p-4 text-[13px] leading-relaxed text-slate-700">
+  <p className="font-bold text-slate-900 text-center mb-3">{(cfg&&cfg.titulo)||TERMO_IMAGEM_PADRAO.titulo}</p>
+  {termoTexto(cfg).split("\n").filter(Boolean).map((l,i)=> l.startsWith("# ") ? <p key={i} className="font-bold text-slate-900 mt-3 mb-1">{l.slice(2)}</p> : <p key={i} className="mb-2">{l}</p>)}
+</div>;
+// Assinatura desenhada com o dedo/mouse
+function AssinaturaPad({onChange}){
+  const ref=useRef(null); const desenhando=useRef(false); const [vazio,setVazio]=useState(true);
+  useEffect(()=>{ const c=ref.current; if(!c) return; const r=c.getBoundingClientRect(); const dpr=window.devicePixelRatio||1;
+    c.width=r.width*dpr; c.height=r.height*dpr; const ctx=c.getContext("2d"); ctx.scale(dpr,dpr); ctx.lineWidth=2.4; ctx.lineCap="round"; ctx.lineJoin="round"; ctx.strokeStyle="#0f172a"; },[]);
+  const pos=(e)=>{ const r=ref.current.getBoundingClientRect(); const t=e.touches?e.touches[0]:e; return {x:t.clientX-r.left, y:t.clientY-r.top}; };
+  const ini=(e)=>{ e.preventDefault(); desenhando.current=true; const ctx=ref.current.getContext("2d"); const p=pos(e); ctx.beginPath(); ctx.moveTo(p.x,p.y); };
+  const mov=(e)=>{ if(!desenhando.current) return; e.preventDefault(); const ctx=ref.current.getContext("2d"); const p=pos(e); ctx.lineTo(p.x,p.y); ctx.stroke(); if(vazio) setVazio(false); };
+  const fim=()=>{ if(!desenhando.current) return; desenhando.current=false; onChange && onChange(vazio?null:ref.current.toDataURL("image/png")); };
+  const limpar=()=>{ const c=ref.current; c.getContext("2d").clearRect(0,0,c.width,c.height); setVazio(true); onChange && onChange(null); };
+  useEffect(()=>{ if(!vazio && !desenhando.current) onChange && onChange(ref.current.toDataURL("image/png")); },[vazio]); // eslint-disable-line
+  return <div>
+    <div className="relative rounded-2xl border-2 border-dashed border-slate-300 bg-white">
+      <canvas ref={ref} className="w-full h-40 touch-none rounded-2xl cursor-crosshair" onMouseDown={ini} onMouseMove={mov} onMouseUp={fim} onMouseLeave={fim} onTouchStart={ini} onTouchMove={mov} onTouchEnd={fim}/>
+      {vazio && <div className="absolute inset-0 grid place-items-center pointer-events-none text-slate-300 text-sm">Assine aqui com o dedo</div>}
+      <div className="absolute left-6 right-6 bottom-8 border-b border-slate-300 pointer-events-none"/>
+    </div>
+    <div className="flex justify-end mt-1"><button onClick={limpar} className="text-xs font-semibold text-slate-500 hover:text-slate-800">Limpar assinatura</button></div>
+  </div>;
+}
+// PDF do termo assinado (texto + dados + assinatura desenhada + registro eletrônico)
+async function pdfTermoAssinado({cfg, nome, cpf, rg, cargo, unidade, assinatura, em}){
+  const PDFLib=await carregarPdfLib();
+  const doc=await PDFLib.PDFDocument.create();
+  const font=await doc.embedFont(PDFLib.StandardFonts.Helvetica), bold=await doc.embedFont(PDFLib.StandardFonts.HelveticaBold);
+  const limpo=(t)=>String(t||"").replace(/[^\x20-\x7E -ÿ–—‘’“”•…]/g,"").replace(/[“”]/g,'"');
+  const X=56, W=483; let pg=doc.addPage([595,842]); let y=790;
+  const nova=()=>{ pg=doc.addPage([595,842]); y=790; };
+  const esc=(txt,{f=font,size=9.8,gap=3,centro=false}={})=>{ const ws=limpo(txt).split(/\s+/).filter(Boolean); let a=""; const ls=[];
+    ws.forEach(w=>{ const t=a?a+" "+w:w; if(f.widthOfTextAtSize(t,size)>W&&a){ ls.push(a); a=w; } else a=t; }); if(a) ls.push(a);
+    ls.forEach(l=>{ if(y<60) nova(); const lw=f.widthOfTextAtSize(l,size); pg.drawText(l,{x:centro?X+(W-lw)/2:X,y,size,font:f}); y-=size+gap; }); };
+  esc((cfg&&cfg.titulo)||TERMO_IMAGEM_PADRAO.titulo,{f:bold,size:12.5,centro:true,gap:8}); y-=6;
+  const dados=[["NOME COMPLETO",nome],["CPF",cpf],["RG",rg],["CARGO/FUNÇÃO",cargo],["EMPRESA / UNIDADE",unidade]];
+  termoTexto(cfg).split("\n").filter(Boolean).forEach((l,i)=>{
+    if(l.startsWith("# ")){ y-=5; esc(l.slice(2),{f:bold,size:10.5,gap:4}); }
+    else { esc(l); y-=2; }
+    if(i===0){ y-=4; dados.forEach(([k,v])=>esc(k+": "+(v||"—"),{f:bold,size:9.8})); y-=4; }
+  });
+  y-=14; if(y<230) nova();
+  esc((cfg&&cfg.cidade||"São Paulo")+", "+dataExtenso(ymd(new Date(em)))+".",{size:10}); y-=12;
+  try{ const png=await doc.embedPng(assinatura); const h=60, w=Math.min(220, png.width*(h/png.height)); pg.drawImage(png,{x:X,y:y-h,width:w,height:h}); y-=h+2; }catch(e){}
+  pg.drawLine({start:{x:X,y},end:{x:X+260,y},thickness:0.7}); y-=13;
+  esc("COLABORADOR(A): "+nome,{f:bold,size:10}); if(cpf) esc("CPF: "+cpf,{size:9.5});
+  y-=10; esc("Assinado eletronicamente em "+new Date(em).toLocaleString("pt-BR")+" pelo link enviado pela empresa, com aceite expresso (\"Li e autorizo\") e assinatura desenhada pelo(a) próprio(a) colaborador(a).",{size:8.5,gap:2});
+  return bytesParaDataUrl(await doc.save(),"application/pdf");
+}
+// Salva o termo assinado na pasta da pessoa e devolve o id do arquivo
+async function salvarTermoAssinado({cfg, donoKey, donoTipo, donoId, nome, cpf, rg, cargo, unidade, assinatura}){
+  const em=Date.now();
+  const du=await pdfTermoAssinado({cfg,nome,cpf,rg,cargo,unidade,assinatura,em});
+  const arquivoId=await arqSalvar({ nome:"Termo de uso de imagem (assinado) - "+nome+".pdf", donoKey, donoTipo, donoId, donoNome:nome, cpf:soDigitos(cpf),
+    pasta:"Termos assinados", categoria:"termo_imagem", visivelColab:true, termoId:"imagem", assinadoEm:em }, du);
+  return {arquivoId, em};
+}
+// Etapa de aceite + assinatura (componente reutilizado)
+function EtapaTermoImagem({cfg, nome, onAssinar, onVoltar, enviando}){
+  const [ok,setOk]=useState(false); const [ass,setAss]=useState(null);
+  return <div>
+    <p className="text-sm text-slate-500 mb-3">Leia o termo abaixo. Para continuar, marque que autoriza e assine com o dedo.</p>
+    <TermoLeitura cfg={cfg}/>
+    <label className={cx("mt-4 flex items-start gap-3 p-4 rounded-2xl border-2 cursor-pointer transition", ok?"border-brand-400 bg-brand-50/50":"border-slate-200")}>
+      <input type="checkbox" checked={ok} onChange={e=>setOk(e.target.checked)} className="mt-0.5 w-5 h-5 accent-green-700 shrink-0"/>
+      <span className="text-sm text-slate-700"><b>Li e autorizo</b> o uso da minha imagem, voz e nome nas condições deste termo.</span>
+    </label>
+    <div className="mt-4"><div className="text-xs font-bold text-slate-400 uppercase mb-1.5">Sua assinatura{nome?" — "+nome:""}</div><AssinaturaPad onChange={setAss}/></div>
+    <div className="flex gap-2 mt-4">{onVoltar && <Btn variant="ghost" onClick={onVoltar}>Voltar</Btn>}
+      <Btn className="flex-1" size="lg" icon={enviando?null:I.sign} disabled={!ok||!ass||enviando} onClick={()=>onAssinar(ass)}>{enviando?"Assinando…":"Assinar e continuar"}</Btn></div>
+  </div>;
+}
+
+/* ---------- Painel: status de todos + links individuais ---------- */
+const linkTermo=(token)=> comTenantUrl(location.origin+location.pathname, "termo/"+token);
+function usePedidosTermo(ativo){
+  const [items,setItems]=useState([]);
+  useEffect(()=>{ if(!window.__WPDB||!ativo) return; try{ return nCol("termos").onSnapshot(function(snap){ const a=[]; snap.forEach(function(d){ a.push({...(d.data()||{}),id:d.id}); }); setItems(a); }, function(){}); }catch(e){} },[ativo]);
+  return items;
+}
+function TermosPage(){
+  const { clts, freelas, pjs, unidades, termoImagemCfg, setTermoImagemCfg, arquivos, can } = useStore();
+  const toast=useContext(ToastCtx);
+  const pedidos=usePedidosTermo(true);
+  const [filtro,setFiltro]=useState("pendente");
+  const [editar,setEditar]=useState(false);
+  const [cfg,setCfg]=useState(()=>({grupo:"GRUPO SKY HALL", cidade:"São Paulo", titulo:TERMO_IMAGEM_PADRAO.titulo, texto:TERMO_IMAGEM_PADRAO.texto, ...(termoImagemCfg||{})}));
+  const pessoas=[...clts.map(p=>({tipo:"clt",p})), ...freelas.map(p=>({tipo:"free",p})), ...pjs.map(p=>({tipo:"pj",p}))];
+  const assinadoDe=(k)=> arquivos.find(a=>a.donoKey===k && a.categoria==="termo_imagem");
+  const pedidoDe=(k)=> pedidos.filter(x=>x.pessoaKey===k && x.status==="aberto").sort((a,b)=>(b.criadoEm||0)-(a.criadoEm||0))[0];
+  const linhas=pessoas.map(({tipo,p})=>{ const k=donoKeyDe(tipo,p.id); const a=assinadoDe(k); return {tipo,p,k,a,ped:!a&&pedidoDe(k)}; });
+  const vis=linhas.filter(l=> filtro==="todos" || (filtro==="assinado"?!!l.a:!l.a));
+  const gerar=async(l)=>{
+    const token=gerarTokenConvite();
+    try{ await nCol("termos").doc(token).set({ pessoaKey:l.k, tipo:l.tipo, nome:l.p.nome, cpf:l.p.cpf||"", rg:l.p.rg||(l.p.ficha&&l.p.ficha.rg)||"",
+      cargo:l.tipo==="pj"?(l.p.servico||"Prestador de serviço"):(l.p.cargo||""), unidade:l.p.unidade==="todas"||l.p.unidade==null?"Todas as casas":unidadeNome(l.p.unidade,unidades),
+      tel:soDigitos(l.p.tel), termoId:"imagem", status:"aberto", criadoEm:Date.now(), expira:Date.now()+30*864e5 });
+      return token; }catch(e){ toast("Não foi possível gerar o link: "+erroBanco(e)); return null; }
+  };
+  const msg=(nome,token)=>`Olá, ${String(nome||"").split(" ")[0]}! Por favor, leia e assine o Termo de Autorização de Uso de Imagem pelo link abaixo (leva 1 minuto):\n${linkTermo(token)}`;
+  const enviar=async(l)=>{ const token=(l.ped&&l.ped.id)||await gerar(l); if(!token) return; const tel=soDigitos(l.p.tel); const t=tel?(tel.length<=11?"55"+tel:tel):"";
+    window.open("https://wa.me/"+t+"?text="+encodeURIComponent(msg(l.p.nome,token)),"_blank"); };
+  const copiar=async(l)=>{ const token=(l.ped&&l.ped.id)||await gerar(l); if(!token) return; copyText(msg(l.p.nome,token)); toast("Mensagem com o link copiada"); };
+  const nAss=linhas.filter(l=>l.a).length;
+  return <div className="fade-in">
+    <PageHeader title="Termos e assinaturas" sub="Termo de Autorização de Uso de Imagem — todos precisam ler, autorizar e assinar">
+      {can("documentos") && <Btn variant="ghost" icon={I.edit} onClick={()=>setEditar(true)}>Editar termo</Btn>}
+    </PageHeader>
+    <div className="grid grid-cols-3 gap-3 mb-4">
+      <StatCard icon={I.check} label="Assinaram" value={nAss} tone="green"/>
+      <StatCard icon={I.sign} label="Pendentes" value={linhas.length-nAss} tone="amber"/>
+      <StatCard icon={I.users} label="Total de pessoas" value={linhas.length} tone="brand"/>
+    </div>
+    <Card className="p-3 mb-3 text-sm text-slate-600 flex items-start gap-2"><Icon d={I.link} className="w-4 h-4 mt-0.5 text-brand-600 shrink-0"/>
+      <span>Novos cadastros pelo <b>convite</b> já assinam o termo no próprio link. Para quem já está cadastrado, clique em <b>WhatsApp</b>: a pessoa abre o link, lê, marca “Li e autorizo” e assina com o dedo. O PDF assinado vai para a pasta <b>Termos assinados</b> dela.</span></Card>
+    <div className="flex gap-2 mb-3">{[["pendente","Pendentes"],["assinado","Assinados"],["todos","Todos"]].map(([k,l])=><button key={k} onClick={()=>setFiltro(k)} className={cx("px-3 py-1.5 rounded-lg text-xs font-semibold border", filtro===k?"grad-brand text-white border-transparent":"bg-white border-slate-200 text-slate-600")}>{l}</button>)}</div>
+    <div className="space-y-2">
+      {vis.length===0 && <Card className="p-8 text-center text-sm text-slate-400">{filtro==="pendente"?"Todos já assinaram 🎉":"Ninguém aqui."}</Card>}
+      {vis.map(l=><Card key={l.k} className="p-3 flex flex-wrap items-center gap-3">
+        <Avatar name={l.p.nome} src={l.p.foto} tone={l.tipo==="clt"?"brand":l.tipo==="free"?"free":"slate"} size="w-9 h-9"/>
+        <div className="flex-1 min-w-[160px]"><div className="font-semibold text-slate-800 text-sm">{l.p.nome}</div><div className="text-xs text-slate-400">{TIPO_ROTULO[l.tipo]} · {l.tipo==="pj"?(l.p.servico||"PJ"):(l.p.cargo||"")}{l.p.tel?" · "+l.p.tel:" · sem telefone"}</div></div>
+        {l.a ? <><Badge tone="green"><Icon d={I.check} className="w-3 h-3"/>Assinado em {new Date(l.a.assinadoEm||l.a.ts||0).toLocaleDateString("pt-BR")}</Badge>
+            <button title="Ver termo assinado" onClick={()=>arqAbrir(l.a).catch(e=>toast(e.message))} className="w-8 h-8 rounded-lg grid place-items-center text-slate-500 hover:bg-slate-100"><Icon d={I.eye} className="w-4 h-4"/></button></>
+          : <>{l.ped && <Badge tone="amber">Link enviado</Badge>}
+            <Btn size="sm" variant="soft" icon={I.copy} onClick={()=>copiar(l)}>Copiar</Btn>
+            <Btn size="sm" icon={I.arrow} onClick={()=>enviar(l)}>WhatsApp</Btn></>}
+      </Card>)}
+    </div>
+    <Modal open={editar} onClose={()=>setEditar(false)} wide>
+      <div className="p-6">
+        <h3 className="text-lg font-bold text-slate-900 mb-3">Editar Termo de Uso de Imagem</h3>
+        <div className="grid sm:grid-cols-2 gap-3">
+          <Field label="Nome do grupo (aparece no texto)"><Input value={cfg.grupo} onChange={e=>setCfg({...cfg,grupo:e.target.value})}/></Field>
+          <Field label="Cidade da assinatura"><Input value={cfg.cidade} onChange={e=>setCfg({...cfg,cidade:e.target.value})}/></Field>
+        </div>
+        <div className="mt-3"><Field label="Título"><Input value={cfg.titulo} onChange={e=>setCfg({...cfg,titulo:e.target.value})}/></Field></div>
+        <div className="mt-3"><Field label="Texto (linhas com # viram títulos; {{GRUPO}} = nome do grupo)"><textarea rows={14} value={cfg.texto} onChange={e=>setCfg({...cfg,texto:e.target.value})} className="w-full px-3 py-2 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-brand-400 text-xs font-mono"/></Field></div>
+        <div className="flex gap-2 mt-4"><Btn variant="ghost" onClick={()=>setCfg({...cfg,titulo:TERMO_IMAGEM_PADRAO.titulo,texto:TERMO_IMAGEM_PADRAO.texto})}>Restaurar original</Btn>
+          <Btn className="flex-1" icon={I.check} onClick={()=>{ setTermoImagemCfg(cfg); setEditar(false); toast("Termo salvo"); }}>Salvar termo</Btn></div>
+      </div>
+    </Modal>
+  </div>;
+}
+/* ---------- Página pública: assinar o termo (#termo/<token>) ---------- */
+function TermoAssinatura({onClose}){
+  const { termoImagemCfg } = useStore();
+  const token=(location.hash.replace("#","").split("/")[1]||"").trim();
+  const [ped,setPed]=useState(undefined); const [enviando,setEnviando]=useState(false); const [feito,setFeito]=useState(false); const [erro,setErro]=useState("");
+  useEffect(()=>{ if(!window.__WPDB||!token){ setPed(null); return; }
+    nCol("termos").doc(token).get().then(s=>setPed(s.exists?s.data():null)).catch(()=>setPed(null)); },[token]);
+  const assinar=async(ass)=>{ setEnviando(true); setErro("");
+    try{ const r=await salvarTermoAssinado({ cfg:termoImagemCfg, donoKey:ped.pessoaKey, donoTipo:ped.tipo, donoId:ped.pessoaKey.split("-").slice(1).join("-"), nome:ped.nome, cpf:ped.cpf, rg:ped.rg, cargo:ped.cargo, unidade:ped.unidade, assinatura:ass });
+      await nCol("termos").doc(token).set({status:"assinado", assinadoEm:r.em, arquivoId:r.arquivoId},{merge:true}).catch(()=>{});
+      setFeito(true); }
+    catch(e){ setErro("Não foi possível enviar agora. Verifique sua internet e tente de novo."); }
+    setEnviando(false); };
+  const casca=(c)=> <div className="min-h-screen grad-ink grad-hero flex items-start justify-center p-4 py-8"><div className="w-full max-w-2xl"><div className="flex justify-center mb-5"><Logo light/></div><Card className="p-6">{c}</Card></div></div>;
+  if(ped===undefined) return casca(<div className="py-10 text-center"><div className="w-8 h-8 mx-auto rounded-full border-2 border-slate-200 border-t-brand-600 animate-spin"/></div>);
+  if(feito || (ped && ped.status==="assinado")) return casca(<div className="py-8 text-center"><div className="w-20 h-20 mx-auto rounded-full bg-emerald-500 grid place-items-center text-white mb-4 shadow-glow"><Icon d={I.check} className="w-10 h-10" stroke={3}/></div>
+    <h2 className="text-2xl font-extrabold text-slate-900">Termo assinado!</h2><p className="text-slate-500 mt-1">Obrigado. Uma cópia fica disponível no app “Meus documentos”.</p></div>);
+  if(!ped || ped.status!=="aberto" || ped.expira<Date.now()) return casca(<div className="py-6 text-center"><h2 className="text-xl font-bold text-slate-900">Link indisponível</h2><p className="text-slate-500 text-sm mt-1">Este link expirou ou foi cancelado. Peça um novo à empresa.</p><Btn variant="ghost" className="mt-4" onClick={onClose}>Fechar</Btn></div>);
+  return casca(<>
+    <div className="text-xs font-bold uppercase tracking-wide text-free-600">Assinatura de termo</div>
+    <h2 className="text-xl font-extrabold text-slate-900 mt-1 mb-1">Olá, {String(ped.nome||"").split(" ")[0]}!</h2>
+    <div className="text-xs text-slate-500 mb-3">{ped.nome}{ped.cpf?" · CPF "+ped.cpf:""}{ped.cargo?" · "+ped.cargo:""}</div>
+    <EtapaTermoImagem cfg={termoImagemCfg} nome={ped.nome} enviando={enviando} onAssinar={assinar}/>
+    {erro && <p className="text-sm text-rose-500 mt-3">{erro}</p>}
+  </>);
+}
+
 
 /* ============================ CONVITES DE CADASTRO (link + leitura automática dos documentos) ============================ */
 // Documentos pedidos no link, por tipo de vínculo. "chave" casa com DOC_TIPOS (pasta do colaborador) quando existir.
@@ -4984,9 +5473,10 @@ function FichaCadastro({convite, pessoa, onClose}){
 
 /* ---------- Página pública: o candidato envia documentos e confere os dados ---------- */
 function ConviteCadastro({onClose}){
+  const { termoImagemCfg, unidades } = useStore();
   const token=(location.hash.replace("#","").split("/")[1]||"").trim();
   const [conv,setConv]=useState(undefined);  // undefined = carregando · null = inválido
-  const [etapa,setEtapa]=useState("inicio"); // inicio | vaga | docs | lendo | form | enviando | ok
+  const [etapa,setEtapa]=useState("inicio"); // inicio | vaga | docs | lendo | form | termo | enviando | ok
   const [aceiteFn,setAceiteFuncao]=useState(false);
   const [arqs,setArqs]=useState({});         // { slot: [{nome,mime,dados}] }
   const [foto,setFoto]=useState("");
@@ -5037,7 +5527,7 @@ function ConviteCadastro({onClose}){
   const faltaForm=obrigForm.filter(([k])=>!String(f[k]||"").trim()).map(([,l])=>l);
   if(tipo==="clt" && !foto) faltaForm.push("selfie");
   if(!aceite) faltaForm.push("aceite LGPD");
-  const enviar=async()=>{
+  const enviar=async(assinaturaTermo)=>{
     setEtapa("enviando"); setErro("");
     try{
       const ref=tCol("cadastros").doc();
@@ -5060,13 +5550,20 @@ function ConviteCadastro({onClose}){
             pasta:tipo==="pj"?"Contrato de prestação de serviço":"Contratos", categoria:"termo_funcao", visivelColab:true, origem:"convite" }, du);
         }catch(e){ /* o aceite fica registrado mesmo se o PDF falhar */ }
       }
+      // Termo de uso de imagem assinado no próprio link
+      if(assinaturaTermo){
+        try{ const r=await salvarTermoAssinado({ cfg:termoImagemCfg, donoKey, donoTipo:tipo, donoId:"auto_"+ref.id, nome:tipo==="pj"?(f.responsavel||nomePessoa):nomePessoa, cpf:f.cpf||"", rg:f.rg||"",
+            cargo:(vaga&&vaga.cargo)||conv.cargo||conv.servico||"", unidade:(vaga&&vaga.unidadeNome)||(conv.unidade==null||conv.unidade==="todas"?"Todas as casas":unidadeNome(conv.unidade,unidades))||"", assinatura:assinaturaTermo });
+          comum.termoImagem={ assinadoEm:r.em, arquivoId:r.arquivoId };
+        }catch(e){ comum.termoImagem={ assinadoEm:Date.now(), erroPdf:true }; }
+      }
       const dados = tipo==="pj"
         ? { ...comum, tipo:"pj", nome:nomePessoa, cnpj:f.cnpj||"", responsavel:f.responsavel||"", cpf:f.cpf||"", servico:conv.servico||f.atividade||"", valor:Number(conv.valor)||0, diaPagamento:5, formaPagamento:"Pix", unidade:conv.unidade==null?"todas":conv.unidade, inicio:hojeStr() }
         : { ...comum, tipo:"clt", nome:nomePessoa, cpf:f.cpf||"", cargo:conv.cargo||CARGOS[0], setor:SETOR_POR_CARGO[conv.cargo]||"salao", escala:"6x1", folgaDia:6, unidade:conv.unidade, salario:Number(conv.salario)||0, vt:0, admissao:"", foto };
       await ref.set(dados);
       await nCol("convites").doc(token).set({ status:"preenchido", preenchidoEm:Date.now(), pessoaKey:donoKey, nome:nomePessoa },{merge:true}).catch(()=>{});
       setEtapa("ok");
-    }catch(e){ setErro("Não foi possível enviar agora. Verifique sua internet e tente novamente."); setEtapa("form"); }
+    }catch(e){ setErro("Não foi possível enviar agora. Verifique sua internet e tente novamente."); setEtapa("termo"); }
   };
   const Campo=({k,l,tipoInput,col})=> <Field label={<span className="flex items-center gap-1">{l}{auto[k]&&f[k]&&<span className="text-[10px] normal-case font-bold text-brand-600 bg-brand-50 px-1.5 rounded">lido do documento</span>}</span>}>
     <Input type={tipoInput||"text"} value={f[k]||""} onChange={e=>set(k,e.target.value)} className={cx(col, auto[k]&&f[k]?"!border-brand-200 bg-brand-50/30":"")}/></Field>;
@@ -5089,8 +5586,8 @@ function ConviteCadastro({onClose}){
 
   const cabec=<div className="mb-5">
     <div className="text-xs font-bold uppercase tracking-wide text-free-600">Cadastro {tipo==="pj"?"de prestador PJ":"de colaborador CLT"}</div>
-    <h2 className="text-xl font-extrabold text-slate-900 mt-1">{etapaVis==="vaga"?"Conheça a vaga":etapaVis==="docs"?"Envie seus documentos":"Confira seus dados"}</h2>
-    {(()=>{ const passos=temVaga?["vaga","docs","form"]:["docs","form"]; const at=passos.indexOf(etapaVis);
+    <h2 className="text-xl font-extrabold text-slate-900 mt-1">{etapaVis==="vaga"?"Conheça a vaga":etapaVis==="docs"?"Envie seus documentos":etapaVis==="termo"?"Termo de uso de imagem":"Confira seus dados"}</h2>
+    {(()=>{ const passos=temVaga?["vaga","docs","form","termo"]:["docs","form","termo"]; const at=passos.indexOf(etapaVis);
       return <div className="flex gap-2 mt-3">{passos.map((t,i)=><div key={t} className={cx("flex-1 h-1.5 rounded-full", at>=i?"grad-brand":"bg-slate-200")}/>)}</div>; })()}
   </div>;
 
@@ -5138,6 +5635,11 @@ function ConviteCadastro({onClose}){
     <div className="flex gap-2 mt-4">{temVaga && <Btn variant="ghost" onClick={()=>setEtapa("vaga")}>Voltar</Btn>}<Btn className="flex-1" size="lg" icon={I.arrow} disabled={faltaObrig.length>0} onClick={lerTudo}>Ler meus documentos e continuar</Btn></div>
   </>);
 
+  if(etapaVis==="termo") return casca(<>{cabec}
+    <EtapaTermoImagem cfg={termoImagemCfg} nome={tipo==="pj"?(f.responsavel||f.razaoSocial):f.nome} onVoltar={()=>setEtapa("form")} onAssinar={(ass)=>enviar(ass)}/>
+    {erro && <p className="text-sm text-rose-500 mt-3">{erro}</p>}
+  </>);
+
   // etapa === "form"
   return casca(<>{cabec}
     {avisos.length>0 && <div className="mb-4 p-3 rounded-xl bg-amber-50 text-amber-800 text-sm space-y-1">{avisos.map((a,i)=><div key={i}>• {a}</div>)}</div>}
@@ -5166,7 +5668,7 @@ function ConviteCadastro({onClose}){
       <span>Autorizo o uso dos meus dados e documentos para fins de cadastro, admissão e cumprimento de obrigações legais (LGPD).</span></label>
     {erro && <p className="text-sm text-rose-500 mt-3">{erro}</p>}
     {faltaForm.length>0 && <p className="text-xs text-slate-400 mt-3">Falta: {faltaForm.join(", ")}</p>}
-    <div className="flex gap-2 mt-4"><Btn variant="ghost" onClick={()=>setEtapa("docs")}>Voltar</Btn><Btn className="flex-1" size="lg" icon={I.check} disabled={faltaForm.length>0} onClick={enviar}>Enviar cadastro</Btn></div>
+    <div className="flex gap-2 mt-4"><Btn variant="ghost" onClick={()=>setEtapa("docs")}>Voltar</Btn><Btn className="flex-1" size="lg" icon={I.arrow} disabled={faltaForm.length>0} onClick={()=>{ setErro(""); setEtapa("termo"); }}>Continuar</Btn></div>
   </>);
 }
 
@@ -5257,6 +5759,8 @@ const NAV = [
   {sec:"Documentos", items:[
     {k:"arquivos",l:"Arquivos & pastas",d:I.folder},
     {k:"holerites",l:"Holerites",d:I.receipt},
+    {k:"termos",l:"Termos e assinaturas",d:I.sign},
+    {k:"modeloContrato",l:"Modelo de contrato PJ",d:I.doc},
     {k:"dossie",l:"Dossiê",d:I.doc},
   ]},
   {sec:"Gestão", items:[
@@ -5272,7 +5776,7 @@ const NAV = [
     {k:"ajuda",l:"Ajuda",d:I.help},
   ]},
 ];
-const TITULOS={dashboard:"Painel",escala:"Escala por unidade",ponto:"Ponto ao vivo",ajustes:"Ajustes de ponto",clt:"Colaboradores CLT",freelas:"Freelancers",pjs:"Prestadores PJ",cargos:"Cargos & funções",convites:"Convites de cadastro",arquivos:"Arquivos & pastas",holerites:"Holerites",dossie:"Dossiê do colaborador",equipe:"Equipe & permissões",relatorios:"Relatórios",financeiro:"Financeiro",pagamentos:"Pagamentos",unidades:"Unidades",links:"Links & QR",acessos:"Gerentes & acessos",config:"Configurações",ajuda:"Ajuda"};
+const TITULOS={dashboard:"Painel",escala:"Escala por unidade",ponto:"Ponto ao vivo",ajustes:"Ajustes de ponto",clt:"Colaboradores CLT",freelas:"Freelancers",pjs:"Prestadores PJ",cargos:"Cargos & funções",convites:"Convites de cadastro",arquivos:"Arquivos & pastas",holerites:"Holerites",termos:"Termos e assinaturas",modeloContrato:"Modelo de contrato PJ",dossie:"Dossiê do colaborador",equipe:"Equipe & permissões",relatorios:"Relatórios",financeiro:"Financeiro",pagamentos:"Pagamentos",unidades:"Unidades",links:"Links & QR",acessos:"Gerentes & acessos",config:"Configurações",ajuda:"Ajuda"};
 
 // Seletor de cliente (multiempresa) — troca entre grupos de restaurantes e cria novo cliente.
 function ClienteSwitcher(){
@@ -5534,7 +6038,7 @@ function Shell({ onLogout }) {
   if(acesso && acesso.semAcesso) return <TelaBloqueio icone={I.shield} titulo="Sua conta ainda não tem acesso" texto="Peça ao administrador para vincular seu e-mail a um cliente. Assim que ele liberar, é só entrar novamente." onLogout={onLogout}/>;
   if(acesso && acesso.tenantBind!=null && acesso.tenantBind!==tenantAtual) return <TelaBloqueio spin titulo="Abrindo seu cliente…"/>;
   const views={ dashboard:<Dashboard go={setView}/>, escala:<EscalaVisual/>, ponto:<PontoLive/>, ajustes:<AjustesPonto/>, clt:<ColaboradoresCLT/>, freelas:<Freelancers/>,
-    dossie:<Dossie/>, pjs:<PrestadoresPJ/>, cargos:<CargosPage/>, convites:<ConvitesPage/>, arquivos:<ArquivosPage/>, holerites:<HoleritesPage/>, equipe:<Equipe/>, relatorios:<Relatorios/>, financeiro:<Financeiro/>, pagamentos:<Pagamentos/>, unidades:<Unidades/>, links:<LinksQR/>, acessos:<GerentesAcesso/>, config:<Configuracoes/>, ajuda:<Ajuda/> };
+    dossie:<Dossie/>, pjs:<PrestadoresPJ/>, cargos:<CargosPage/>, convites:<ConvitesPage/>, arquivos:<ArquivosPage/>, holerites:<HoleritesPage/>, termos:<TermosPage/>, modeloContrato:<ModeloContratoPage/>, equipe:<Equipe/>, relatorios:<Relatorios/>, financeiro:<Financeiro/>, pagamentos:<Pagamentos/>, unidades:<Unidades/>, links:<LinksQR/>, acessos:<GerentesAcesso/>, config:<Configuracoes/>, ajuda:<Ajuda/> };
   return <ToastCtx.Provider value={pushToast}>
     <div className="flex min-h-screen">
       <Sidebar view={view} setView={setView} open={sbOpen} setOpen={setSbOpen} onLogout={onLogout}/>
@@ -5562,7 +6066,7 @@ function Shell({ onLogout }) {
 // Roteamento por hash para os LINKS de cadastro/ponto (CLT e Freelancer).
 // Ex.: abrir  ...wilami-ponto-app.html#ponto-clt  já abre o quiosque CLT (público).
 function usePontoHash() {
-  const read=()=>{ const h=(window.location.hash||"").replace("#",""); return h==="ponto-clt"?"clt": h==="ponto-free"?"free": h==="meus-docs"?"docs": h.indexOf("convite/")===0?"convite": null; };
+  const read=()=>{ const h=(window.location.hash||"").replace("#",""); return h==="ponto-clt"?"clt": h==="ponto-free"?"free": h==="meus-docs"?"docs": h.indexOf("convite/")===0?"convite": h.indexOf("termo/")===0?"termo": null; };
   const [mode,setMode]=useState(read());
   useEffect(()=>{ const on=()=>setMode(read()); window.addEventListener("hashchange",on); return ()=>window.removeEventListener("hashchange",on); },[]);
   return [mode, ()=>{ if(window.location.hash){ window.history.replaceState(null,"",window.location.pathname+window.location.search); } setMode(null); }];
@@ -5604,6 +6108,7 @@ function App() {
   const logout=()=>{ try{ window.__WPAUTH&&window.__WPAUTH.signOut(); }catch(e){} setLocalLogged(false); };
   return <StoreProvider>
     {pontoMode==="convite" ? <ConviteCadastro onClose={fecharPonto}/>
+     : pontoMode==="termo" ? <TermoAssinatura onClose={fecharPonto}/>
      : pontoMode==="docs" ? <PortalColab onClose={fecharPonto}/>
      : pontoMode ? <PontoKiosk mode={pontoMode} onClose={fecharPonto}/>
      : !authReady ? <div className="min-h-screen grad-ink grad-hero grid place-items-center text-white"><div className="text-center"><div className="w-10 h-10 mx-auto rounded-full border-2 border-white/30 border-t-white animate-spin mb-3"/><Logo light/></div></div>
