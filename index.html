@@ -585,7 +585,13 @@ function calcFolhaLinha(c, ctx){
   // Vale Transporte: benefício mensal fixo; desconto legal = menor entre 6% do salário base e o valor do VT (Lei 7.418/85).
   const vt=Number(c.vt||0);
   const vtDesconto = vt>0 ? Math.min(salario*0.06, vt) : 0;
-  const descontos=descFaltas+descDSR+descAtrasos+vtDesconto;
+  // VT dos dias de FALTA: o VT é só para os dias trabalhados → desconta o valor diário × faltas.
+  // Valor diário = VT do mês ÷ dias escalados (sem folga) no período; sem escala, ÷ 22.
+  let diasEscalados=0;
+  if(vt>0 && faltasCtx && c.unidade!=null){ datasEntre(faltasCtx.ini,faltasCtx.fim).forEach(ds=>{ const a=diaEscala(faltasCtx.escala,faltasCtx.escalaOv,c.unidade,ds,wdDe(ds)).find(x=>String(x.pid)===String(c.id)&&x.tipo==="clt"); if(a && a.turno!=="folga") diasEscalados++; }); }
+  const vtDia = vt>0 ? vt/(diasEscalados||22) : 0;
+  const descVTFaltas = vt>0 ? Math.min(Math.max(0,vt-vtDesconto), nFaltas*vtDia) : 0;
+  const descontos=descFaltas+descDSR+descAtrasos+vtDesconto+descVTFaltas;
   // Salário combinado com a Diretoria: se salário + extras + adicional noturno + gorjetas do mês não alcançarem o combinado, a diferença vira "reposição".
   const gorjeta=Number(gorjetasCLT[c.id+"|"+ymRef]||0);
   const combinado=Number(c.salarioCombinado||0);
@@ -595,7 +601,7 @@ function calcFolhaLinha(c, ctx){
   return { id:c.id, nome:c.nome, foto:c.foto, pix:c.pix, escala:c.escala, salario, vHora, gorjeta, combinado, recebido, reposicao,
     extrasMin, extras100Min, extrasHoras:extrasMin+extras100Min, extrasVal, extrasEditado, notMin, notVal,
     faltasQtd:nFaltas, dsrQtd:nDSR, faltaDatas, descFaltas, descDSR, atrasosQtd:atrasosD.length,
-    vt, vtDesconto, descontos, liquido, semSalario:!salario };
+    vt, vtDesconto, vtDia, descVTFaltas, descontos, liquido, semSalario:!salario };
 }
 const escalaInicial = () => {
   const esc={};
@@ -3406,7 +3412,7 @@ function Financeiro() {
 
   /* ===================== WhatsApp ===================== */
   const rotuloFolha = aba==="fixo"?"Freela Fixo":"CLT";
-  const whatsCLT=(l)=>`*${l.nome}* (${rotuloFolha})\nSalário base: ${fmtBRL(l.salario)}\nHoras extras: ${fmtHoras(l.extrasHoras)} = ${fmtBRL(l.extrasVal)}${l.notVal?`\nAdic. noturno: ${fmtBRL(l.notVal)}`:""}${l.gorjeta?`\nGorjetas: ${fmtBRL(l.gorjeta)}`:""}${l.reposicao?`\nReposição (salário combinado ${fmtBRL(l.combinado)}): +${fmtBRL(l.reposicao)}`:""}${l.vt?`\nVale Transporte: ${fmtBRL(l.vt)} (desconto 6%: -${fmtBRL(l.vtDesconto)})`:""}${l.faltasQtd?`\nFaltas: ${l.faltasQtd} = -${fmtBRL(l.descFaltas)}`:""}${l.dsrQtd?`\nDSR perdido (${l.dsrQtd} sem.): -${fmtBRL(l.descDSR)}`:""}${l.descontos?`\nDescontos totais: -${fmtBRL(l.descontos)}`:""}\n*Líquido a pagar: ${fmtBRL(l.liquido)}*\nPix: ${l.pix||"—"}`;
+  const whatsCLT=(l)=>`*${l.nome}* (${rotuloFolha})\nSalário base: ${fmtBRL(l.salario)}\nHoras extras: ${fmtHoras(l.extrasHoras)} = ${fmtBRL(l.extrasVal)}${l.notVal?`\nAdic. noturno: ${fmtBRL(l.notVal)}`:""}${l.gorjeta?`\nGorjetas: ${fmtBRL(l.gorjeta)}`:""}${l.reposicao?`\nReposição (salário combinado ${fmtBRL(l.combinado)}): +${fmtBRL(l.reposicao)}`:""}${l.vt?`\nVale Transporte: ${fmtBRL(l.vt)} (desconto 6%: -${fmtBRL(l.vtDesconto)})`:""}${l.faltasQtd?`\nFaltas: ${l.faltasQtd} = -${fmtBRL(l.descFaltas)}`:""}${l.dsrQtd?`\nDSR perdido (${l.dsrQtd} sem.): -${fmtBRL(l.descDSR)}`:""}${l.descVTFaltas?`\nVT dos dias de falta: -${fmtBRL(l.descVTFaltas)}`:""}${l.descontos?`\nDescontos totais: -${fmtBRL(l.descontos)}`:""}\n*Líquido a pagar: ${fmtBRL(l.liquido)}*\nPix: ${l.pix||"—"}`;
   const whatsFree=(l)=>`*${l.nome}*\nValor acumulado: ${fmtBRL(l.total)}\nDias trabalhados: ${l.dias}\nDatas: ${fmtD(l.datas)}\nPix: ${l.pix||"—"}`;
   const whatsPJ=(l)=>`*${l.nome}* (PJ${l.cnpj?" · CNPJ "+l.cnpj:""})\nServiço: ${l.servico}\nValor: ${fmtBRL(l.total)}${l.meses>1?` (${l.meses} meses × ${fmtBRL(l.valorMensal)})`:""}\nVencimento: ${l.venc?fmtDataBR(l.venc):"—"} · ${l.forma}\nPix: ${l.pix||"—"}`;
   const whatsConf=(l)=>`*${l.nome}* (${l.cargo})\nSalário mensal: ${fmtBRL(l.salario)}\nPix: ${l.pix||"—"}`;
@@ -3574,7 +3580,7 @@ function Financeiro() {
               {l.combinado>0 ? (l.reposicao>0 ? <div><span className="font-bold text-amber-600 whitespace-nowrap">+{fmtBRL(l.reposicao)}</span><div className="text-[10px] text-slate-400">combinado {fmtBRL(l.combinado)}</div></div>
                 : <div><span className="text-emerald-600 text-xs font-semibold">atingiu</span><div className="text-[10px] text-slate-400">combinado {fmtBRL(l.combinado)}</div></div>) : <span className="text-slate-300">—</span>}</td>
             <td className="px-4 py-3 tabular-nums text-slate-600">{l.vt>0?<div><span className="text-slate-700 font-semibold">{fmtBRL(l.vt)}</span><div className="text-[10px] font-normal text-slate-400">−6% = {fmtBRL(l.vtDesconto)}</div></div>:"—"}</td>
-            <td className={cx("px-4 py-3 tabular-nums",l.descontos>0?"text-rose-600 font-semibold":"text-slate-400")} title={l.descontos>0?`${l.faltasQtd} falta(s)=-${fmtBRL(l.descFaltas)} · DSR ${l.dsrQtd} sem.=-${fmtBRL(l.descDSR)}${l.vtDesconto>0?` · VT 6%=-${fmtBRL(l.vtDesconto)}`:""}`:""}>
+            <td className={cx("px-4 py-3 tabular-nums",l.descontos>0?"text-rose-600 font-semibold":"text-slate-400")} title={l.descontos>0?`${l.faltasQtd} falta(s)=-${fmtBRL(l.descFaltas)} · DSR ${l.dsrQtd} sem.=-${fmtBRL(l.descDSR)}${l.vtDesconto>0?` · VT 6%=-${fmtBRL(l.vtDesconto)}`:""}${l.descVTFaltas>0?` · VT dos dias de falta=-${fmtBRL(l.descVTFaltas)}`:""}`:""}>
               {l.descontos>0?"-"+fmtBRL(l.descontos):"—"}
               {(l.faltasQtd>0||l.dsrQtd>0||l.vtDesconto>0) && <div className="text-[10px] font-normal text-rose-400">{l.faltasQtd>0?`${l.faltasQtd} falta`:""}{l.dsrQtd>0?` +${l.dsrQtd} DSR`:""}{l.vtDesconto>0?`${l.faltasQtd>0||l.dsrQtd>0?" +":""}VT`:""}</div>}
             </td>
@@ -3593,7 +3599,7 @@ function Financeiro() {
           <td/><td className="px-4 py-3 font-extrabold text-brand-700 tabular-nums">{fmtBRL(cltFolha)}</td><td colSpan="2"/></tr></tfoot>}
       </table></div></Card>
       <p className="text-xs text-slate-400 mt-3">{aba==="fixo"?"Freela Fixo: salário mensal definido pelo gerente + extras (50% dia útil, 100% folga) e adicional noturno 20%. ":"Extras: 50% em dia útil e 100% em folga trabalhada (Art. 59) · adicional noturno 20% entre 22h e 5h (Art. 73) · base da hora = salário ÷ 220. "}O valor das horas extras é editável. Gorjetas: lance o valor do mês de cada um. Reposição = salário combinado com a Diretoria − (salário + extras + adicional noturno + gorjetas), quando faltar; ela já entra no líquido (as gorjetas não, pois são repassadas à parte). Cadastre em “Colaboradores CLT & Freela Fixo”.</p>
-      {cltVT>0 && <div className="mt-2 p-3 rounded-xl bg-brand-50 text-brand-700 text-xs flex items-center gap-2"><Icon d={I.wallet} className="w-4 h-4"/> Vale Transporte: total de {fmtBRL(cltVT)} no período · desconto legal de 6% já aplicado no líquido · <b>pagamento no dia {vtDiaPagamento} de cada mês</b> (ajuste em Configurações).</div>}
+      {cltVT>0 && <div className="mt-2 p-3 rounded-xl bg-brand-50 text-brand-700 text-xs flex items-center gap-2"><Icon d={I.wallet} className="w-4 h-4"/> Vale Transporte: total de {fmtBRL(cltVT)} no período · desconto legal de 6% e o VT dos dias de falta já aplicados no líquido · <b>pagamento no dia {vtDiaPagamento} de cada mês</b> (ajuste em Configurações).</div>}
     </> : aba==="confianca" ? <>
       <div className="grid sm:grid-cols-3 gap-3 mb-4">
         <StatCard icon={I.wallet} label="Folha da diretoria/gerência" value={fmtBRL(confFolhaVisivel)} tone="brand"/>
