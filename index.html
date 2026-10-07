@@ -493,13 +493,28 @@ const escalaVaziaUnidade = ()=>{ const o={}; for(let d=0;d<7;d++) o[d]=[]; retur
 // Resolve a lista de UMA data: usa a exceção da data (override) se existir; senão, o padrão semanal (weekday).
 // IMPORTANTE: o padrão semanal só recorre para CLT/Freela Fixo. FREELANCER nunca recorre — ele existe
 // apenas na data específica em que foi colocado (fica só nos overrides por data). Isso evita replicar freela nas semanas.
+// Vigência na escala: a pessoa só aparece a partir da data de início (admissão CLT / início PJ) e até a data
+// de validade (fim do contrato). Cadastro vindo do convite fica "aguardando admissão" até o RH definir o início.
+// O mapa é preenchido pelo StoreProvider a cada mudança de cadastro: { "p-<id>" | "pj-<id>": {ini,fim,pendente} }
+const VIGENCIA={ map:{} };
+const chaveVig=(tipo,pid)=> (tipo||"clt")+"-"+String(pid);
+const vigenciaDe=(p,tipo)=> tipo==="pj"
+  ? { ini:p.inicio||"", fim:p.fim||"", pendente:!!(p._auto && p.origem==="convite" && !p.inicio) }
+  : { ini:p.admissao||"", fim:p.fimContrato||"", pendente:!!(p._auto && p.origem==="convite" && !p.admissao) };
+function vigenteNaData(a, ds){
+  const v=VIGENCIA.map[chaveVig(a.tipo,a.pid)]; if(!v) return true;
+  if(v.pendente) return false;
+  if(v.ini && ds<v.ini) return false;
+  if(v.fim && ds>v.fim) return false;
+  return true;
+}
 function diaEscala(escala, escalaOv, uid, dateStr, weekday){
   const ov = escalaOv && escalaOv[uid] && escalaOv[uid][dateStr];
-  if(ov) return ov;
+  if(ov) return ov.filter(a=>vigenteNaData(a,dateStr));
   const base = (escala && escala[uid] && escala[uid][weekday]) || [];
   // O PADRÃO SEMANAL define só quem trabalha em cada turno — NUNCA carrega "faltou"/"atrasou".
   // Falta/atraso são eventos de UMA data (ficam no override da data), então nunca replicam nas outras semanas.
-  return base.filter(a=>a.tipo!=="free").map(a=> a.marca ? {...a, marca:null} : a);
+  return base.filter(a=>a.tipo!=="free" && vigenteNaData(a,dateStr)).map(a=> a.marca ? {...a, marca:null} : a);
 }
 // ---- Faltas automáticas do CLT (escalado e não bateu ponto) ----
 // Datas AAAA-MM-DD entre ini e fim (inclusive)
@@ -657,6 +672,49 @@ const normTxt=(s)=> String(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toUppe
 function lerArquivoDataUrl(file){
   return new Promise(function(res,rej){ const rd=new FileReader(); rd.onload=function(){ res(rd.result); }; rd.onerror=function(){ rej(rd.error); }; rd.readAsDataURL(file); });
 }
+// ---- Fotos do celular: tipo vazio (Android), HEIC/HEIF (iPhone), fotos enormes e orientação ----
+const EXT_MIME={jpg:"image/jpeg",jpeg:"image/jpeg",jfif:"image/jpeg",png:"image/png",webp:"image/webp",gif:"image/gif",heic:"image/heic",heif:"image/heif",bmp:"image/bmp",pdf:"application/pdf"};
+function tipoDoArquivo(file){
+  const t=String((file&&file.type)||"").toLowerCase();
+  const ext=String((file&&file.name)||"").split(".").pop().toLowerCase();
+  if(t && t!=="application/octet-stream" && t!=="binary/octet-stream") return t;
+  return EXT_MIME[ext]||"";      // desconhecido → descobre pelo conteúdo
+}
+// Lê os primeiros bytes: "%PDF" = PDF
+async function ehPdfPeloConteudo(file){ try{ const b=new Uint8Array(await file.slice(0,5).arrayBuffer()); return b[0]===0x25&&b[1]===0x50&&b[2]===0x44&&b[3]===0x46; }catch(e){ return false; } }
+async function carregarHeic2any(){ await carregarScript("https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js"); return window.heic2any; }
+// Decodifica uma imagem (Blob) e devolve JPEG (dataURL) com no máximo `max` px no maior lado
+async function blobParaJpeg(blob, max, q){
+  let src=null;
+  if(window.createImageBitmap){ try{ src=await createImageBitmap(blob,{imageOrientation:"from-image"}); }catch(e){ try{ src=await createImageBitmap(blob); }catch(e2){ src=null; } } }
+  if(!src) src=await new Promise((res,rej)=>{ const url=URL.createObjectURL(blob); const img=new Image();
+    img.onload=()=>{ res(img); setTimeout(()=>URL.revokeObjectURL(url),2000); }; img.onerror=()=>{ URL.revokeObjectURL(url); rej(new Error("decode")); }; img.src=url; });
+  const w0=src.width||src.naturalWidth, h0=src.height||src.naturalHeight; if(!w0||!h0) throw new Error("decode");
+  const s=Math.min(1,max/Math.max(w0,h0)); const w=Math.max(1,Math.round(w0*s)), hh=Math.max(1,Math.round(h0*s));
+  const c=document.createElement("canvas"); c.width=w; c.height=hh; const ctx=c.getContext("2d"); ctx.fillStyle="#fff"; ctx.fillRect(0,0,w,hh); ctx.drawImage(src,0,0,w,hh);
+  if(src.close) try{ src.close(); }catch(e){}
+  const out=c.toDataURL("image/jpeg",q); c.width=c.height=0; return out;
+}
+// Foto/arquivo escolhido no celular → {nome, mime, dados}. Imagens viram JPEG reduzido; PDF vai como está.
+async function prepararArquivo(file,{max=2000,q=0.85,pdfMax=12*1024*1024}={}){
+  let tipo=tipoDoArquivo(file);
+  if(!tipo && await ehPdfPeloConteudo(file)) tipo="application/pdf";
+  if(tipo==="application/pdf"){ if(file.size>pdfMax) throw new Error("o PDF passa de "+Math.round(pdfMax/1048576)+" MB"); const du=await lerArquivoDataUrl(file); return {nome:(file.name||"documento")+(/\.pdf$/i.test(file.name||"")?"":".pdf"), mime:"application/pdf", dados:"data:application/pdf;base64,"+String(du).split(",")[1]}; }
+  if(tipo && !/^image\//.test(tipo)) throw new Error("formato não aceito — envie uma foto ou um PDF");
+  if(file.size>40*1024*1024) throw new Error("a foto passa de 40 MB");
+  const nomeJpg=String(file.name||"foto").replace(/\.(heic|heif|png|webp|bmp|gif|jfif|jpe?g)$/i,"")+".jpg";
+  try{ return {nome:nomeJpg, mime:"image/jpeg", dados:await blobParaJpeg(file,max,q)}; }
+  catch(e){
+    // Navegador não abre HEIC (Chrome/Android/Windows): converte com heic2any
+    const pareceHeic=/heic|heif/.test(tipo) || /\.(heic|heif)$/i.test(file.name||"") || !tipo;
+    if(!pareceHeic) throw new Error("não foi possível abrir a foto");
+    try{ const h2a=await carregarHeic2any(); let jpg=await h2a({blob:file,toType:"image/jpeg",quality:0.9}); if(Array.isArray(jpg)) jpg=jpg[0];
+      return {nome:nomeJpg, mime:"image/jpeg", dados:await blobParaJpeg(jpg,max,q)}; }
+    catch(e2){ throw new Error("não foi possível abrir a foto (formato HEIC). Tente tirar a foto pela câmera do link ou enviar em JPG"); }
+  }
+}
+// Só a imagem (selfie/foto de perfil) → dataURL JPEG pequeno
+async function fotoDeArquivo(file,max=640,q=0.62){ const r=await prepararArquivo(file,{max,q}); if(r.mime!=="image/jpeg") throw new Error("envie uma foto"); return r.dados; }
 function bytesParaDataUrl(bytes, mime){
   let bin=""; const CH=0x8000;
   for(let i=0;i<bytes.length;i+=CH){ bin+=String.fromCharCode.apply(null, bytes.subarray(i,i+CH)); }
@@ -1016,6 +1074,7 @@ function StoreProvider({children}) {
   const [arquivos]=useArquivosMeta(logado);                            // metadados dos arquivos (só no painel)
   const [acessosColab]=useAcessosColab(logado);                        // PINs do app do colaborador (hash)
   const pjsTodos=useMemo(()=>[...pjsBase, ...cadAuto.filter(c=>c.tipo==="pj")],[pjsBase,cadAuto]);
+  useMemo(()=>{ const m={}; clts.forEach(p=>{ m[chaveVig("clt",p.id)]=vigenciaDe(p,"clt"); }); freelas.forEach(p=>{ m[chaveVig("free",p.id)]=vigenciaDe(p,"free"); }); pjsTodos.forEach(p=>{ m[chaveVig("pj",p.id)]=vigenciaDe(p,"pj"); }); VIGENCIA.map=m; },[clts,freelas,pjsTodos]);
   const salvarPj=(pj)=> ehAuto(pj.id) ? cadOps.update(pj._docId||docIdDe(pj.id), pj) : setPjs(prev=> pj.id ? prev.map(x=>x.id===pj.id?{...x,...pj}:x) : [...prev,{...pj,id:(prev.reduce((m,x)=>Math.max(m,x.id),500))+1,status:pj.status||"ativo",criadoEm:Date.now()}]);
   const excluirPj=(id)=>{ if(ehAuto(id)) cadOps.remove(docIdDe(id)); else setPjs(prev=>prev.filter(x=>x.id!==id)); removerDaEscala(id,"pj"); };
   // Pagamentos dos prestadores PJ (parcelas/adiantamentos), chaveados pelo id do PJ.
@@ -1164,6 +1223,7 @@ function StoreProvider({children}) {
       cadAuto.filter(c=>c.tipo==="clt").forEach(c=>{
         // já semeado alguma vez? nunca semeia de novo (não sobrescreve o que o gerente ajustou)
         if(escalaSeed[String(c.id)]) return;
+        if(c.origem==="convite" && !c.admissao) return;   // espera o RH definir a data de admissão/início
         const jaTem=Object.values(escala||{}).some(dias=>Object.values(dias||{}).some(arr=>(arr||[]).some(a=>String(a.pid)===String(c.id))));
         const uid=c.unidade||unidades[0]?.id;
         if(uid && !jaTem) gerarEscalaFixa(c.id, c.escala||"6x1", uid, true, c.folgaDia);   // só dias faltantes
@@ -1171,6 +1231,7 @@ function StoreProvider({children}) {
       });
     }catch(e){}
   },[cadAuto]); // eslint-disable-line
+  const aguardandoInicio=useMemo(()=>[...cadAuto.filter(c=>c.tipo==="clt"&&c.origem==="convite"&&!c.admissao), ...cadAuto.filter(c=>c.tipo==="pj"&&c.origem==="convite"&&!c.inicio)],[cadAuto]);
 
   // Migração 1x: freelas que estavam no PADRÃO SEMANAL (replicando) → viram exceção só da SEMANA ATUAL,
   // preservando quem já estava escalado esta semana e parando a replicação nas próximas.
@@ -1223,7 +1284,7 @@ function StoreProvider({children}) {
     clientes,clienteAtivo,tenantAtual,criarCliente,trocarCliente,
     acesso,donos,setDonos,acessos,acessosOps,
     marca,setMarca, pjs:(casaRestrita!=null?pjsTodos.filter(x=>x.unidade==null||x.unidade==="todas"||_mesmaCasa(x.unidade)):pjsTodos), salvarPj,excluirPj, pagamentosPJ,addPagamentoPJ,removePagamentoPJ,
-    pastasExtra,criarPasta,removerPasta, cargosDesc,salvarCargoDesc,excluirCargoDesc,cargosLista,cargoInfo, assinaturaCfg,setAssinaturaCfg, arquivos, acessosColab, modeloContratoPJ,setModeloContratoPJ, empresaContratante,setEmpresaContratante, termoImagemCfg,setTermoImagemCfg };
+    pastasExtra,criarPasta,removerPasta, cargosDesc,salvarCargoDesc,excluirCargoDesc,cargosLista,cargoInfo, assinaturaCfg,setAssinaturaCfg, arquivos, acessosColab, aguardandoInicio, modeloContratoPJ,setModeloContratoPJ, empresaContratante,setEmpresaContratante, termoImagemCfg,setTermoImagemCfg };
   return <StoreCtx.Provider value={value}>{children}</StoreCtx.Provider>;
 }
 const pessoaNome = (pid,tipo,clts,freelas,pjs)=> (tipo==="clt"?clts:tipo==="pj"?(pjs||[]):freelas).find(p=>String(p.id)===String(pid))?.nome || "—";
@@ -1423,6 +1484,32 @@ function Dashboard({go}) {
   </div>;
 }
 
+// Selo de vigência: aguardando admissão · começa em dd/mm · contrato encerrado
+const BadgeVigencia=({p,tipo})=>{ const v=vigenciaDe(p,tipo); const hoje=hojeStr();
+  if(v.pendente) return <Badge tone="amber">Aguardando admissão</Badge>;
+  if(v.ini && v.ini>hoje) return <Badge tone="blue">Começa {fmtDataBR(v.ini)}</Badge>;
+  if(v.fim && v.fim<hoje) return <Badge tone="red">Contrato encerrado</Badge>;
+  return null; };
+// Aviso na escala: cadastros do convite esperando o RH definir a data de início
+function AvisoAguardandoInicio(){
+  const { aguardandoInicio, salvarClt, salvarPj, can } = useStore();
+  const toast=useContext(ToastCtx);
+  const [datas,setDatas]=useState({});
+  if(!aguardandoInicio || !aguardandoInicio.length) return null;
+  const confirmar=(p)=>{ const d=datas[p.id]; if(!d){ toast("Escolha a data de início"); return; }
+    if(p.tipo==="pj") salvarPj({...p, inicio:d}); else salvarClt({...p, admissao:d});
+    toast(p.nome+" entra na escala a partir de "+fmtDataBR(d)); };
+  return <Card className="p-4 mb-4 border-amber-200 bg-amber-50/60">
+    <div className="flex items-center gap-2 font-bold text-amber-800 text-sm mb-1"><Icon d={I.calendar} className="w-4 h-4"/>{aguardandoInicio.length} cadastro(s) aguardando data de início</div>
+    <p className="text-xs text-amber-700 mb-3">Quem se cadastrou pelo convite só entra na escala (e só bate ponto) depois que você define a data de admissão / início.</p>
+    <div className="space-y-2">{aguardandoInicio.map(p=><div key={p.id} className="flex flex-wrap items-center gap-2 bg-white rounded-xl border border-amber-100 px-3 py-2">
+      <Avatar name={p.nome} src={p.foto} size="w-8 h-8" tone={p.tipo==="pj"?"slate":"brand"}/>
+      <div className="flex-1 min-w-[140px]"><div className="text-sm font-semibold text-slate-800">{p.nome}</div><div className="text-xs text-slate-400">{p.tipo==="pj"?"PJ · "+(p.servico||"Prestador"):"CLT · "+(p.cargo||"")}{p.turno?" · "+p.turno:""}</div></div>
+      {can("colaboradores") ? <><input type="date" value={datas[p.id]||""} onChange={e=>setDatas({...datas,[p.id]:e.target.value})} aria-label={"Início de "+p.nome} className="px-2 py-1.5 rounded-lg border border-slate-200 text-sm"/>
+        <Btn size="sm" icon={I.check} onClick={()=>confirmar(p)}>Definir início</Btn></> : <Badge tone="amber">aguardando RH</Badge>}
+    </div>)}</div>
+  </Card>;
+}
 /* ============================ ESCALA VISUAL (POR UNIDADE) ============================ */
 function EscalaVisual() {
   const { escala, setEscala, escalaOv, setEscalaOv, clts, freelas, pjs, unidades, can } = useStore();
@@ -1487,6 +1574,7 @@ function EscalaVisual() {
       {editavel && <Btn icon={I.plus} onClick={()=>setAdd(HOJE_IDX)}>Incluir colaborador</Btn>}
     </PageHeader>
 
+    <AvisoAguardandoInicio/>
     {/* Abas das casas */}
     <div className="flex gap-2 overflow-x-auto pb-1 mb-4">
       {unidades.map(u=>
@@ -2224,7 +2312,7 @@ function PontoKiosk({ mode, onClose }) {
                   <Btn className="flex-1" icon={I.camera} onClick={capturar} variant={accent==="clt"?"primary":"free"}>Capturar selfie</Btn>
                   <label className="cursor-pointer">
                     <span className="inline-flex items-center gap-1 text-sm font-semibold rounded-xl px-4 py-2.5 border border-slate-200 text-slate-700 hover:bg-slate-50"><Icon d={I.upload} className="w-4 h-4"/>Foto</span>
-                    <input type="file" accept="image/*" capture="user" className="hidden" onChange={e=>{ const fl=e.target.files&&e.target.files[0]; if(fl){ const rd=new FileReader(); rd.onload=async()=>{stopCam();setFoto(await compressImg(rd.result));}; rd.readAsDataURL(fl); } }}/>
+                    <input type="file" accept="image/*" capture="user" className="hidden" onChange={async e=>{ const fl=e.target.files&&e.target.files[0]; e.target.value=""; if(!fl) return; try{ const ft=await fotoDeArquivo(fl); stopCam(); setFoto(ft); }catch(err){ alert("Foto: "+err.message); } }}/>
                   </label>
                 </>
                 : <><Btn variant="ghost" onClick={()=>{setFoto(null);startCam();}}>Refazer</Btn>
@@ -2277,12 +2365,12 @@ function ColabForm({ tipo, inicial, onSalvar, onClose, vinculo }) {
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
   // Foto do colaborador no CADASTRO (referência facial). Usa input de arquivo/câmera:
   // funciona em file://, no PC e abre a câmera no celular (capture="user").
-  const upFoto=(file)=>{ if(!file) return; const rd=new FileReader(); rd.onload=async()=>set("foto", await compressImg(rd.result)); rd.readAsDataURL(file); };
+  const upFoto=async(file)=>{ if(!file) return; try{ set("foto", await fotoDeArquivo(file)); }catch(e){ alert("Foto: "+e.message); } };
   const setCargoClt=(cg)=>setF(p=>{ const ci=cargoInfo(cg); return {...p,cargo:cg,setor:(ci&&ci.setor)||SETOR_POR_CARGO[cg]||p.setor, salario: (!Number(p.salario) && ci && Number(ci.salarioBase)) ? Number(ci.salarioBase) : p.salario}; });
   const setCargoFree=(nm)=>{ const c=cargosFreela.find(x=>x.nome===nm); setF(p=>({...p,cargo:nm,valor:c?c.valor:p.valor,setor:SETOR_POR_CARGO[nm]||p.setor})); };
-  const upDoc=(k,file)=>{ if(!file) return; const rd=new FileReader();
-    rd.onload=async()=>{ const dados=file.type&&file.type.indexOf("image")===0?await compressImg(rd.result):rd.result; setF(p=>({...p,docs:{...(p.docs||{}),[k]:{nome:file.name,dados}}})); };
-    rd.readAsDataURL(file); };
+  const upDoc=async(k,file)=>{ if(!file) return;
+    try{ const r=await prepararArquivo(file,{max:640,q:0.62}); setF(p=>({...p,docs:{...(p.docs||{}),[k]:{nome:r.nome,dados:r.dados}}})); }
+    catch(e){ alert(file.name+": "+e.message); } };
   const rmDoc=(k)=>setF(p=>{ const d={...(p.docs||{})}; delete d[k]; return {...p,docs:d}; });
   const [showDocs,setShowDocs]=useState(false);
   const nDocsUp=DOC_TIPOS.filter(([k])=>f.docs&&f.docs[k]).length;
@@ -2347,7 +2435,9 @@ function ColabForm({ tipo, inicial, onSalvar, onClose, vinculo }) {
         <Field label="Dia da folga (referência)"><Select value={f.folgaDia==null?"":f.folgaDia} onChange={e=>set("folgaDia",e.target.value===""?null:Number(e.target.value))}>
           {DIAS.map((d,i)=><option key={i} value={i}>{["Segunda","Terça","Quarta","Quinta","Sexta","Sábado","Domingo"][i]}</option>)}
         </Select></Field>
-        <Field label="Admissão"><Input type="date" value={f.admissao} onChange={e=>set("admissao",e.target.value)}/></Field>
+        <Field label="Admissão / início na escala"><Input type="date" value={f.admissao} onChange={e=>set("admissao",e.target.value)}/></Field>
+        <Field label="Válido até (fim do contrato, opcional)"><Input type="date" value={f.fimContrato||""} onChange={e=>set("fimContrato",e.target.value)}/></Field>
+        {f.origem==="convite" && !f.admissao && <div className="sm:col-span-2 p-3 rounded-xl bg-amber-50 text-amber-800 text-sm flex items-start gap-2"><Icon d={I.calendar} className="w-4 h-4 mt-0.5 shrink-0"/><span>Cadastro recebido pelo convite. <b>Defina a data de admissão</b>: a pessoa só entra na escala (e só consegue bater ponto) a partir dessa data.</span></div>}
         <Field label="Salário mensal (R$)"><Input type="number" value={f.salario||0} onChange={e=>set("salario",Number(e.target.value))} placeholder="Ex.: 2200"/></Field>
         <Field label="Salário combinado c/ Diretoria (R$)"><Input type="number" value={f.salarioCombinado||""} onChange={e=>set("salarioCombinado",Number(e.target.value)||0)} placeholder="Ex.: 3500 (opcional)"/>
           <span className="block text-[11px] text-slate-400 mt-1 normal-case font-normal tracking-normal">Se salário + extras + gorjetas do mês não chegarem a esse valor, a folha mostra a reposição.</span></Field>
@@ -2449,7 +2539,7 @@ function ColaboradoresCLT() {
         <tbody className="divide-y divide-slate-50">
           {list.map(c=>{ const _docs=c.docs||{}; const docsOk=Object.values(_docs).filter(Boolean).length; const docsTot=Object.keys(_docs).length;
             return <tr key={c.id} className="hover:bg-slate-50/70">
-              <td className="px-4 py-3"><button onClick={()=>{setPasta(c);setTab("dados");}} className="flex items-center gap-3 text-left"><Avatar name={c.nome} src={c.foto} tone={ehConf(c)?"slate":ehFixo(c)?"free":"brand"}/><span className="font-semibold text-slate-800">{c.nome}</span>{ehConf(c)&&<Badge tone="slate">Confiança</Badge>}{ehFixo(c)&&<Badge tone="free">Freela Fixo</Badge>}</button></td>
+              <td className="px-4 py-3"><button onClick={()=>{setPasta(c);setTab("dados");}} className="flex items-center gap-3 text-left"><Avatar name={c.nome} src={c.foto} tone={ehConf(c)?"slate":ehFixo(c)?"free":"brand"}/><span className="font-semibold text-slate-800">{c.nome}</span><BadgeVigencia p={c} tipo="clt"/>{ehConf(c)&&<Badge tone="slate">Confiança</Badge>}{ehFixo(c)&&<Badge tone="free">Freela Fixo</Badge>}</button></td>
               <td className="px-4 py-3 text-slate-600">{c.cargo}</td>
               <td className="px-4 py-3">{ehConf(c)?<Badge tone="slate">sem ponto</Badge>:<Badge tone="brand">{c.escala}</Badge>}</td>
               <td className="px-4 py-3 text-slate-600">{ehConf(c)&&(c.unidade==="todas"||c.unidade==null)?"Todas as casas":unidadeNome(c.unidade,unidades)}</td>
@@ -4441,8 +4531,9 @@ function PjForm({inicial,onSalvar,onClose}){
     <div className="grid sm:grid-cols-2 gap-3 mt-3">
       <Field label="Unidade"><Select value={f.unidade} onChange={e=>set("unidade",e.target.value==="todas"?"todas":Number(e.target.value))}><option value="todas">Todas as casas</option>{unidades.map(u=><option key={u.id} value={u.id}>{u.nome}</option>)}</Select></Field>
       <Field label="Status"><Select value={f.status||"ativo"} onChange={e=>set("status",e.target.value)}><option value="ativo">Ativo</option><option value="encerrado">Contrato encerrado</option></Select></Field>
-      <Field label="Início do contrato"><Input type="date" value={f.inicio} onChange={e=>set("inicio",e.target.value)}/></Field>
+      <Field label="Início do contrato / na escala"><Input type="date" value={f.inicio} onChange={e=>set("inicio",e.target.value)}/></Field>
       <Field label="Fim do contrato"><Input type="date" value={f.fim} onChange={e=>set("fim",e.target.value)}/></Field>
+      {f.origem==="convite" && !f.inicio && <div className="sm:col-span-2 p-3 rounded-xl bg-amber-50 text-amber-800 text-sm">Cadastro recebido pelo convite. <b>Defina o início do contrato</b>: o prestador só entra na escala a partir dessa data.</div>}
     </div>
     <Field label="Observações"><textarea value={f.obs} onChange={e=>set("obs",e.target.value)} rows={2} className="w-full mt-1 px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-brand-400 text-sm"/></Field>
     {falta.length>0 && <p className="text-xs text-rose-500 mt-3">Falta: {falta.join(", ")}</p>}
@@ -5134,15 +5225,16 @@ function AssinaturaPad({onChange}){
   const ref=useRef(null); const desenhando=useRef(false); const [vazio,setVazio]=useState(true);
   useEffect(()=>{ const c=ref.current; if(!c) return; const r=c.getBoundingClientRect(); const dpr=window.devicePixelRatio||1;
     c.width=r.width*dpr; c.height=r.height*dpr; const ctx=c.getContext("2d"); ctx.scale(dpr,dpr); ctx.lineWidth=2.4; ctx.lineCap="round"; ctx.lineJoin="round"; ctx.strokeStyle="#0f172a"; },[]);
-  const pos=(e)=>{ const r=ref.current.getBoundingClientRect(); const t=e.touches?e.touches[0]:e; return {x:t.clientX-r.left, y:t.clientY-r.top}; };
-  const ini=(e)=>{ e.preventDefault(); desenhando.current=true; const ctx=ref.current.getContext("2d"); const p=pos(e); ctx.beginPath(); ctx.moveTo(p.x,p.y); };
-  const mov=(e)=>{ if(!desenhando.current) return; e.preventDefault(); const ctx=ref.current.getContext("2d"); const p=pos(e); ctx.lineTo(p.x,p.y); ctx.stroke(); if(vazio) setVazio(false); };
+  // Pointer events: funcionam igual no dedo (Android/iPhone), caneta e mouse; touch-none impede a página de rolar.
+  const pos=(e)=>{ const r=ref.current.getBoundingClientRect(); return {x:e.clientX-r.left, y:e.clientY-r.top}; };
+  const ini=(e)=>{ desenhando.current=true; try{ ref.current.setPointerCapture(e.pointerId); }catch(_){} const ctx=ref.current.getContext("2d"); const p=pos(e); ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(p.x+0.1,p.y+0.1); ctx.stroke(); };
+  const mov=(e)=>{ if(!desenhando.current) return; const ctx=ref.current.getContext("2d"); const p=pos(e); ctx.lineTo(p.x,p.y); ctx.stroke(); if(vazio) setVazio(false); };
   const fim=()=>{ if(!desenhando.current) return; desenhando.current=false; onChange && onChange(vazio?null:ref.current.toDataURL("image/png")); };
   const limpar=()=>{ const c=ref.current; c.getContext("2d").clearRect(0,0,c.width,c.height); setVazio(true); onChange && onChange(null); };
   useEffect(()=>{ if(!vazio && !desenhando.current) onChange && onChange(ref.current.toDataURL("image/png")); },[vazio]); // eslint-disable-line
   return <div>
     <div className="relative rounded-2xl border-2 border-dashed border-slate-300 bg-white">
-      <canvas ref={ref} className="w-full h-40 touch-none rounded-2xl cursor-crosshair" onMouseDown={ini} onMouseMove={mov} onMouseUp={fim} onMouseLeave={fim} onTouchStart={ini} onTouchMove={mov} onTouchEnd={fim}/>
+      <canvas ref={ref} className="w-full h-40 touch-none rounded-2xl cursor-crosshair" onPointerDown={ini} onPointerMove={mov} onPointerUp={fim} onPointerCancel={fim} style={{touchAction:"none"}}/>
       {vazio && <div className="absolute inset-0 grid place-items-center pointer-events-none text-slate-300 text-sm">Assine aqui com o dedo</div>}
       <div className="absolute left-6 right-6 bottom-8 border-b border-slate-300 pointer-events-none"/>
     </div>
@@ -5519,15 +5611,18 @@ function ConviteCadastro({onClose}){
   const etapaVis = etapa==="inicio" ? (temVaga?"vaga":"docs") : etapa;
   const slots=CONVITE_DOCS[tipo]||CONVITE_DOCS.clt;
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
+  const [processando,setProcessando]=useState(0);
   const addArq=async(slot,files)=>{
-    const lst=[];
-    for(const file of Array.from(files||[])){
-      if(file.size>12*1024*1024){ setErro(file.name+" é maior que 12 MB."); continue; }
-      let dados=await lerArquivoDataUrl(file);
-      if(file.type.indexOf("image/")===0 && file.size>1.5*1024*1024) dados=await compressImg(dados,2000,0.85);
-      lst.push({nome:file.name, mime:/^image\//.test(file.type)&&dados.startsWith("data:image/jpeg")?"image/jpeg":(file.type||"application/octet-stream"), dados});
+    const lista=Array.from(files||[]); if(!lista.length) return;
+    setProcessando(n=>n+lista.length);
+    const lst=[], falhas=[];
+    for(const file of lista){
+      try{ lst.push(await prepararArquivo(file)); }
+      catch(e){ falhas.push((file.name||"arquivo")+": "+e.message); }
+      finally{ setProcessando(n=>Math.max(0,n-1)); }
     }
-    setArqs(p=>({...p,[slot]:[...(p[slot]||[]),...lst]}));
+    if(lst.length) setArqs(p=>({...p,[slot]:[...(p[slot]||[]),...lst]}));
+    if(falhas.length) setErro(prev=>[prev,"Não foi possível usar "+falhas.join(" · ")].filter(Boolean).join("\n"));
   };
   const rmArq=(slot,i)=>setArqs(p=>({...p,[slot]:(p[slot]||[]).filter((_,j)=>j!==i)}));
   const faltaObrig=slots.filter(s=>s.obrig && !(arqs[s.k]||[]).length);
@@ -5584,7 +5679,7 @@ function ConviteCadastro({onClose}){
         }catch(e){ comum.termoImagem={ assinadoEm:Date.now(), erroPdf:true }; }
       }
       const dados = tipo==="pj"
-        ? { ...comum, tipo:"pj", nome:nomePessoa, cnpj:f.cnpj||"", responsavel:f.responsavel||"", cpf:f.cpf||"", servico:conv.servico||f.atividade||"", valor:Number(conv.valor)||0, diaPagamento:5, formaPagamento:"Pix", unidade:conv.unidade==null?"todas":conv.unidade, inicio:hojeStr() }
+        ? { ...comum, tipo:"pj", nome:nomePessoa, cnpj:f.cnpj||"", responsavel:f.responsavel||"", cpf:f.cpf||"", servico:conv.servico||f.atividade||"", valor:Number(conv.valor)||0, diaPagamento:5, formaPagamento:"Pix", unidade:conv.unidade==null?"todas":conv.unidade, inicio:"" }
         : { ...comum, tipo:"clt", nome:nomePessoa, cpf:f.cpf||"", cargo:conv.cargo||CARGOS[0], setor:SETOR_POR_CARGO[conv.cargo]||"salao", escala:"6x1", folgaDia:6, unidade:conv.unidade, salario:Number(conv.salario)||0, vt:0, admissao:"", foto };
       await ref.set(dados);
       await nCol("convites").doc(token).set({ status:"preenchido", preenchidoEm:Date.now(), pessoaKey:donoKey, nome:nomePessoa },{merge:true}).catch(()=>{});
@@ -5659,12 +5754,12 @@ function ConviteCadastro({onClose}){
     </div>
     {erro && <p className="text-sm text-rose-500 mt-3">{erro}</p>}
     {faltaObrig.length>0 && <p className="text-xs text-slate-400 mt-3">Obrigatório: {faltaObrig.map(s=>s.l).join(", ")}</p>}
-    <div className="flex gap-2 mt-4">{temVaga && <Btn variant="ghost" onClick={()=>setEtapa("vaga")}>Voltar</Btn>}<Btn className="flex-1" size="lg" icon={I.arrow} disabled={faltaObrig.length>0} onClick={lerTudo}>Ler meus documentos e continuar</Btn></div>
+    <div className="flex gap-2 mt-4">{temVaga && <Btn variant="ghost" onClick={()=>setEtapa("vaga")}>Voltar</Btn>}<Btn className="flex-1" size="lg" icon={processando?null:I.arrow} disabled={faltaObrig.length>0||processando>0} onClick={lerTudo}>{processando?"Preparando foto(s)…":"Ler meus documentos e continuar"}</Btn></div>
   </>);
 
   if(etapaVis==="termo") return casca(<>{cabec}
     <EtapaTermoImagem cfg={termoImagemCfg} nome={tipo==="pj"?(f.responsavel||f.razaoSocial):f.nome} onVoltar={()=>setEtapa("form")} onAssinar={(ass)=>enviar(ass)}/>
-    {erro && <p className="text-sm text-rose-500 mt-3">{erro}</p>}
+    {erro && <p className="text-sm text-rose-500 mt-3 whitespace-pre-line">{erro}</p>}
   </>);
 
   // etapa === "form"
@@ -5689,7 +5784,8 @@ function ConviteCadastro({onClose}){
       {foto ? <img src={foto} className="w-14 h-14 rounded-xl object-cover"/> : <div className="w-14 h-14 rounded-xl bg-slate-100 grid place-items-center text-slate-400"><Icon d={I.camera}/></div>}
       <div className="flex-1"><div className="text-sm font-semibold text-slate-800">Selfie para o registro de ponto *</div><div className="text-xs text-slate-500">Usada como referência facial ao bater o ponto.</div></div>
       <label className="cursor-pointer"><span className="inline-flex items-center gap-1 text-xs font-semibold text-white grad-brand px-3 py-2 rounded-lg"><Icon d={I.camera} className="w-3.5 h-3.5"/>{foto?"Trocar":"Tirar selfie"}</span>
-        <input type="file" accept="image/*" capture="user" className="hidden" onChange={async e=>{ const file=e.target.files&&e.target.files[0]; if(file) setFoto(await compressImg(await lerArquivoDataUrl(file))); e.target.value=""; }}/></label>
+        <input type="file" accept="image/*" capture="user" className="hidden" onChange={async e=>{ const file=e.target.files&&e.target.files[0]; e.target.value=""; if(!file) return; setErro("");
+          try{ setFoto(await fotoDeArquivo(file)); }catch(err){ setErro("Selfie: "+err.message); } }}/></label>
     </div>}
     <label className="flex items-start gap-2 text-sm text-slate-600"><input type="checkbox" checked={aceite} onChange={e=>setAceite(e.target.checked)} className="mt-0.5 w-4 h-4 accent-green-700"/>
       <span>Autorizo o uso dos meus dados e documentos para fins de cadastro, admissão e cumprimento de obrigações legais (LGPD).</span></label>
