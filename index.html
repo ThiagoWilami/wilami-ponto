@@ -83,6 +83,9 @@
   .grad-hero{ background-image:radial-gradient(1200px 500px at 10% -10%, rgba(76,154,63,.35), transparent 60%), radial-gradient(1000px 500px at 110% 10%, rgba(231,177,54,.20), transparent 55%); }
   .grad-ink.grad-hero{ background-image:radial-gradient(1200px 500px at 10% -10%, rgba(76,154,63,.35), transparent 60%), radial-gradient(1000px 500px at 110% 10%, rgba(231,177,54,.20), transparent 55%), linear-gradient(180deg,#14291b 0%,#0b1a10 100%); }
   .drag-over{ outline:2px dashed #66a659; outline-offset:-6px; background:rgba(102,166,89,.08); }
+  @media print{ @page{ size:landscape; margin:8mm; } body *{ visibility:hidden !important; } #escala-print, #escala-print *{ visibility:visible !important; }
+    .fade-in{ animation:none !important; transform:none !important; } #escala-print{ position:absolute; left:0; top:0; width:100%; } #escala-print .print\:block{ display:block !important; } #escala-print .no-print{ display:none !important; } #escala-print .overflow-x-auto{ overflow:visible !important; }
+    #escala-print *{ -webkit-print-color-adjust:exact; print-color-adjust:exact; } }
   .fade-in{ animation:fade .35s ease both; }
   @keyframes fade{ from{opacity:0; transform:translateY(6px);} to{opacity:1; transform:none;} }
   .tick{ animation:pulse 2s ease-in-out infinite; }
@@ -1484,6 +1487,13 @@ function Dashboard({go}) {
   </div>;
 }
 
+// ---- Grade semanal (conceito Sky Escala): cor por pessoa, folga colore o cabeçalho do dia ----
+const CORES_ESCALA=["#3B82F6","#22C55E","#8B5CF6","#EF4444","#FB923C","#EAB308","#14B8A6","#EC4899","#0EA5E9","#64748B","#A16207","#1E293B"];
+const hashStr=(s)=>{ let x=0; s=String(s); for(let i=0;i<s.length;i++){ x=((x<<5)-x+s.charCodeAt(i))|0; } return Math.abs(x); };
+const corPessoaEscala=(p,tipo,pid)=> (p&&p.cor) || CORES_ESCALA[hashStr((tipo||"clt")+"-"+pid)%CORES_ESCALA.length];
+const textoSobreCor=(hex)=>{ const m=/^#?([0-9a-f]{6})$/i.exec(hex||""); if(!m) return "#fff"; const n=parseInt(m[1],16); const r=n>>16,g=(n>>8)&255,b=n&255; return (0.299*r+0.587*g+0.114*b)>165?"#1a1a1a":"#fff"; };
+const fundoFolga=(cores)=>{ if(!cores.length) return null; if(cores.length===1) return cores[0]; const st=cores.map((c,i)=>`${c} ${Math.round(i*100/cores.length)}% ${Math.round((i+1)*100/cores.length)}%`).join(","); return `linear-gradient(135deg,${st})`; };
+const GRUPOS_TURNO=[["manha","Manhã","☀️"],["tarde","Tarde","🌤️"],["noite","Noite","🌙"]];
 // Selo de vigência: aguardando admissão · começa em dd/mm · contrato encerrado
 const BadgeVigencia=({p,tipo})=>{ const v=vigenciaDe(p,tipo); const hoje=hojeStr();
   if(v.pendente) return <Badge tone="amber">Aguardando admissão</Badge>;
@@ -1552,7 +1562,11 @@ function EscalaVisual() {
   const setTurnoTo=(dia,id,turno)=>setDiaData(dia, arr=>arr.map(a=>a.id===id?{...a,turno,marca:turno==="folga"?null:a.marca}:a));
   const setHorario=(dia,id,h)=>setDiaData(dia, arr=>arr.map(a=>a.id===id?{...a,h}:a));
   const [editH,setEditH]=useState(null); // {di,id,hi,hf}
-  const addColab=(dia,pid,tipo)=>{ setDiaData(dia, arr=>[...arr,{id:(tipo==="clt"?"c":tipo==="pj"?"p":"f")+Date.now(),pid,tipo,turno:tipo==="free"?"noite":turnoPorDia(dia)}]); setAdd(null); toast("Colaborador inserido na escala do dia "+labelDiaFull(dia)); };
+  const [addTurno,setAddTurno]=useState(null);   // turno sugerido pelo "+FL" da grade
+  const addColab=(dia,pid,tipo,turnoForcado)=>{ const turno=turnoForcado||addTurno||(tipo==="free"?"noite":turnoPorDia(dia));
+    setDiaData(dia, arr=>[...arr,{id:(tipo==="clt"?"c":tipo==="pj"?"p":"f")+Date.now()+Math.floor(Math.random()*1000),pid,tipo,turno}]); setAdd(null); setAddTurno(null); toast("Colaborador inserido na escala do dia "+labelDiaFull(dia)); };
+  const [modo,setModo]=useState(()=>{ try{ return localStorage.getItem("wp_escala_modo")||"grade"; }catch(e){ return "grade"; } });
+  const trocaModo=(m)=>{ setModo(m); setMenu(null); try{ localStorage.setItem("wp_escala_modo",m); }catch(e){} };
 
   const tot=[0,1,2,3,4,5,6].map(di=>diaDe(di)).flat().filter(valido);
   // Contagem por PESSOAS distintas (não por dia-slot): 8 CLTs escalados 6 dias = 8, não 48.
@@ -1568,6 +1582,35 @@ function EscalaVisual() {
   const semanaLabel=`${datasSemana[0].getDate()} ${MESES_CURTO[datasSemana[0].getMonth()]} – ${datasSemana[6].getDate()} ${MESES_CURTO[datasSemana[6].getMonth()]}`;
   const semanaAtual = ymd(semanaBase)===ymd(segDaSemana(new Date()));
   const irParaData=(v)=>{ if(!v) return; const [y,m,dd]=v.split("-").map(Number); setSemanaBase(segDaSemana(new Date(y,m-1,dd))); };
+
+  // Menu de uma alocação (turno, horário, faltou/atrasou, remover) — usado no quadro e na grade
+  const menuDe=(di,a,pos,estilo)=>{ const t=TURNOS[a.turno]||TURNOS.manha; return <div className={cx(pos,"w-44 bg-white rounded-xl shadow-2xl border border-slate-100 p-1.5 text-xs")} style={estilo} onClick={e=>e.stopPropagation()}>
+                    <div className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase">Turno</div>
+                    {[["manha","Manhã"],["tarde","Tarde"],["noite","Noite"],["folga","Folga"]].map(([k,l])=><button key={k} onClick={()=>{setTurnoTo(di,a.id,k);setMenu(null);}} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50">{l}</button>)}
+                    {a.turno!=="folga" && <button onClick={()=>{ const cur=(a.h||t.h||"").split("–"); setEditH({di,id:a.id,hi:cur[0]||"08:00",hf:cur[1]||"16:00"}); setMenu(null); }} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-brand-50 text-brand-700 border-t border-slate-100 mt-1">Editar horário…</button>}
+                    <div className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase border-t border-slate-100 mt-1">Marcar</div>
+                    <button onClick={()=>{setMarca(di,a.id,"faltou");setMenu(null);}} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-rose-50 text-rose-600">Faltou</button>
+                    <button onClick={()=>{setMarca(di,a.id,"atrasou");setMenu(null);}} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-amber-50 text-amber-600">Atrasou</button>
+                    <button onClick={()=>{setMarca(di,a.id,null);setMenu(null);}} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 text-slate-500">Limpar marca</button>
+                    {can("excluir") && <button onClick={()=>{remover(di,a.id);setMenu(null);}} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-rose-50 text-rose-600 border-t border-slate-100 mt-1">Remover</button>}
+                  </div>; };
+
+  // ===== GRADE SEMANAL: setor → turno → pessoas × dias =====
+  const semanaListas=[0,1,2,3,4,5,6].map(di=>(diaDe(di)||[]).filter(valido));
+  const pessoasSemana={};
+  semanaListas.forEach(arr=>arr.forEach(a=>{ const k=a.tipo+"-"+a.pid; const o=pessoasSemana[k]||(pessoasSemana[k]={k,tipo:a.tipo,pid:a.pid,p:pessoaDe(a),cont:{}}); if(a.turno!=="folga") o.cont[a.turno]=(o.cont[a.turno]||0)+1; }));
+  const turnoBase=(o)=>{ const e=Object.entries(o.cont).sort((x,y)=>y[1]-x[1])[0]; return e?e[0]:"manha"; };
+  const alocsDe=(o,di)=>semanaListas[di].filter(a=>a.tipo===o.tipo&&String(a.pid)===String(o.pid));
+  const ordemTipo={clt:0,pj:1,free:2};
+  const setoresGrade=SETORES.filter(([k])=>setorF==="todos"||setorF===k).map(([sk,sl,sc])=>{
+    const doSetor=Object.values(pessoasSemana).filter(o=>setorDe(o.p)===sk);
+    const grupos=GRUPOS_TURNO.map(([tk,tl,ti])=>({tk,tl,ti,rows:doSetor.filter(o=>turnoBase(o)===tk).sort((x,y)=>(ordemTipo[x.tipo]-ordemTipo[y.tipo])||String(nome(x.pid,x.tipo)).localeCompare(nome(y.pid,y.tipo)))})).filter(g=>g.rows.length);
+    return {sk,sl,sc,grupos};
+  }).filter(s=>s.grupos.length);
+  const horaEntrada=(a)=> String(a.h||(TURNOS[a.turno]||{}).h||"").split("–")[0];
+  const abrirMenuGrade=(e,di,a)=>{ e.stopPropagation(); if(!editavel) return; const r=e.currentTarget.getBoundingClientRect(); const x=Math.min(r.left, window.innerWidth-190), y=(r.bottom+300>window.innerHeight)? Math.max(8,r.top-300) : r.bottom+4; setMenu(menu&&menu.id===a.id&&menu.di===di?null:{di,id:a.id,grade:true,x,y}); };
+  const alocMenu = menu&&menu.grade ? (semanaListas[menu.di]||[]).find(a=>a.id===menu.id) : null;
+  useEffect(()=>{ if(!menu||!menu.grade) return; const f=()=>setMenu(null); window.addEventListener("click",f); window.addEventListener("scroll",f,true); return ()=>{ window.removeEventListener("click",f); window.removeEventListener("scroll",f,true); }; },[menu]);
 
   return <div className="fade-in">
     <PageHeader title="Escala por unidade" sub="Uma aba por casa · filtro por setor · layout compacto · menu (⋯) para turno, faltou, atrasou, folga">
@@ -1586,11 +1629,11 @@ function EscalaVisual() {
 
     {!editavel && <div className="mb-4 p-3 rounded-xl bg-amber-50 text-amber-700 text-sm flex items-center gap-2"><Icon d={I.shield} className="w-4 h-4"/> Seu perfil ({/* */}somente leitura) não tem permissão para editar a escala.</div>}
 
-    <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
-      {[["CLT nesta casa",nClt,"brand",I.user],["Freelancers",nFree,"free",I.coffee],["Prestadores PJ",nPj,"pj",I.briefcase],["Folgas",nFolga,"slate",I.sun],["Coberturas",nCob,"green",I.check]].map(([l,v,t,d])=>
-        <Card key={l} className="p-4 flex items-center gap-3">
-          <div className={cx("w-10 h-10 rounded-xl grid place-items-center text-white", t==="brand"?"grad-brand":t==="free"?"bg-free-500":t==="pj"?"bg-sky-600":t==="green"?"bg-emerald-500":"bg-slate-400")}><Icon d={d} className="w-5 h-5"/></div>
-          <div><div className="text-2xl font-extrabold text-slate-900 leading-none">{v}</div><div className="text-xs text-slate-500 mt-0.5">{l}</div></div>
+    <div className="grid grid-cols-5 gap-2 sm:gap-3 mb-4">
+      {[["CLT",nClt,"brand",I.user],["Freelancers",nFree,"free",I.coffee],["PJ",nPj,"pj",I.briefcase],["Folgas",nFolga,"slate",I.sun],["Coberturas",nCob,"green",I.check]].map(([l,v,t,d])=>
+        <Card key={l} className="p-2 sm:p-4 flex flex-col sm:flex-row items-center sm:items-center gap-1 sm:gap-3 text-center sm:text-left">
+          <div className={cx("hidden sm:grid w-10 h-10 rounded-xl place-items-center text-white", t==="brand"?"grad-brand":t==="free"?"bg-free-500":t==="pj"?"bg-sky-600":t==="green"?"bg-emerald-500":"bg-slate-400")}><Icon d={d} className="w-5 h-5"/></div>
+          <div><div className="text-lg sm:text-2xl font-extrabold text-slate-900 leading-none">{v}</div><div className="text-[10px] sm:text-xs text-slate-500 mt-0.5">{l}</div></div>
         </Card>)}
     </div>
 
@@ -1615,7 +1658,68 @@ function EscalaVisual() {
       </label>
     </div>
 
-    <Card className="p-3 overflow-x-auto">
+    <div className="flex flex-wrap items-center gap-2 mb-3">
+      <div className="inline-flex p-1 bg-slate-100 rounded-xl">
+        {[["grade","Grade semanal",I.grid],["quadro","Quadro (arrastar)",I.calendar]].map(([k,l,d])=><button key={k} onClick={()=>trocaModo(k)} className={cx("px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition", modo===k?"bg-white shadow-soft text-brand-700":"text-slate-500 hover:text-slate-700")}><Icon d={d} className="w-3.5 h-3.5"/>{l}</button>)}
+      </div>
+      {modo==="grade" && <Btn size="sm" variant="ghost" icon={I.download} onClick={()=>window.print()}>Imprimir / PDF</Btn>}
+    </div>
+
+    {modo==="grade" && <div id="escala-print">
+      <div className="hidden print:block mb-2 text-lg font-bold">Escala {uAtual?.nome} — {semanaLabel}</div>
+      {setoresGrade.length===0 && <Card className="p-10 text-center text-sm text-slate-400">Ninguém escalado nesta semana{setorF!=="todos"?" neste setor":""}. {editavel && "Use “Incluir colaborador” ou o quadro."}</Card>}
+      {setoresGrade.map(s=><div key={s.sk} className="mb-6">
+        <div className="flex items-center gap-2 mb-2 pb-1.5 border-b-2" style={{borderColor:s.sc+"55"}}>
+          <span className="w-2.5 h-2.5 rounded-full" style={{background:s.sc}}/><h3 className="font-extrabold text-slate-800 uppercase tracking-wide text-sm">{s.sl}</h3>
+          <span className="text-xs text-slate-400">{s.grupos.reduce((n,g)=>n+g.rows.length,0)} pessoa(s)</span>
+        </div>
+        {s.grupos.map(g=>{
+          return <div key={g.tk} className="mb-3">
+            <div className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mb-1 flex items-center gap-1">{g.ti} {g.tl}</div>
+            <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
+              <table className="w-full min-w-[760px] border-collapse text-xs table-fixed">
+                <thead><tr>
+                  <th className="sticky left-0 z-10 bg-slate-50 w-[130px] sm:w-[170px] text-left px-2.5 py-2 font-semibold text-slate-500 border-b border-r border-slate-200">Colaborador</th>
+                  {[0,1,2,3,4,5,6].map(di=>{ const folgas=g.rows.filter(o=>alocsDe(o,di).some(a=>a.turno==="folga")).map(o=>corPessoaEscala(o.p,o.tipo,o.pid));
+                    const bg=fundoFolga(folgas); const trab=g.rows.filter(o=>alocsDe(o,di).some(a=>a.turno!=="folga")).length; const d=datasSemana[di];
+                    const txt=bg?(folgas.length===1?textoSobreCor(folgas[0]):"#fff"):null;
+                    return <th key={di} className={cx("relative px-1 py-1.5 border-b border-slate-200 font-semibold align-top", ehHoje(di)&&"ring-2 ring-inset ring-amber-400")} style={bg?{background:bg,color:txt}:{background:ehHoje(di)?"#fffbeb":"#f8fafc"}} title={folgas.length?"Folga: "+g.rows.filter(o=>alocsDe(o,di).some(a=>a.turno==="folga")).map(o=>nome(o.pid,o.tipo)).join(", "):""}>
+                      <div className={cx("text-base font-extrabold leading-tight", !bg&&"text-slate-800")}>{d.getDate()}/{String(d.getMonth()+1).padStart(2,"0")}</div>
+                      <div className={cx("text-[10px] uppercase", !bg&&"text-slate-400")}>{DIAS[di]}{ehHoje(di)?" · hoje":""}</div>
+                      <div className={cx("text-[10px] font-normal", !bg&&"text-slate-400")}>{trab} na escala</div>
+                      {editavel && <button onClick={()=>{ setAddTurno(g.tk); setAdd(di); }} title="Incluir freelancer neste turno" className="no-print mt-1 text-[9px] font-bold px-1.5 py-0.5 rounded-md bg-white/85 text-slate-600 hover:bg-white border border-slate-200">+FL</button>}
+                    </th>; })}
+                </tr></thead>
+                <tbody>
+                  {g.rows.map(o=>{ const cor=corPessoaEscala(o.p,o.tipo,o.pid); const tx=textoSobreCor(cor); const nm=nome(o.pid,o.tipo);
+                    return <tr key={o.k} className="group">
+                      <td className="sticky left-0 z-10 bg-white px-2 py-1.5 border-b border-r border-slate-100">
+                        <span className="inline-block max-w-full truncate px-2 py-0.5 rounded-md text-[11px] font-bold" style={{background:cor,color:tx}} title={nm}>{nomeSobrenome(nm)}</span>
+                        <div className="text-[10px] text-slate-400 truncate mt-0.5">{o.tipo==="free"?"Freela · ":o.tipo==="pj"?"PJ · ":""}{(o.p&&(o.p.cargo||o.p.servico))||""}</div>
+                      </td>
+                      {[0,1,2,3,4,5,6].map(di=>{ const as=alocsDe(o,di);
+                        return <td key={di} className={cx("px-1 py-1.5 border-b border-slate-100 text-center align-middle", ehHoje(di)&&"bg-amber-50/50")}>
+                          {as.length===0 ? (editavel ? <button onClick={()=>addColab(di,o.pid,o.tipo,g.tk)} title={"Escalar "+nm+" em "+labelDiaFull(di)} className="no-print w-full h-8 rounded-lg border border-dashed border-transparent text-slate-300 hover:border-slate-300 hover:text-slate-500 opacity-0 group-hover:opacity-100 focus:opacity-100 transition">+</button> : <span className="text-slate-200">—</span>)
+                          : as.map(a=> a.turno==="folga"
+                            ? <button key={a.id} onClick={e=>abrirMenuGrade(e,di,a)} className="inline-flex flex-col items-center px-2 py-0.5 rounded-md bg-rose-50 text-rose-500 font-bold leading-tight"><span className="text-[11px]">folga</span></button>
+                            : <button key={a.id} onClick={e=>abrirMenuGrade(e,di,a)} className="inline-flex flex-col items-center leading-tight m-0.5">
+                                <span className={cx("px-2 py-0.5 rounded-md text-[11px] font-bold", a.marca==="faltou"&&"line-through opacity-60")} style={{background:cor,color:tx}}>{String(nm).split(" ")[0]}</span>
+                                <span className="text-[10px] text-slate-500 tabular-nums">{a.turno!==g.tk?(TURNOS[a.turno]||{}).l+" ":""}{horaEntrada(a)}</span>
+                                {a.marca==="faltou" && <span className="text-[9px] font-bold text-rose-600">faltou</span>}
+                                {a.marca==="atrasou" && <span className="text-[9px] font-bold text-amber-600">atrasou</span>}
+                              </button>)}
+                        </td>; })}
+                    </tr>; })}
+                </tbody>
+              </table>
+            </div>
+          </div>; })}
+      </div>)}
+      <p className="no-print text-xs text-slate-400">Cada pessoa tem uma cor. Quando alguém está de <b>folga</b>, o cabeçalho do dia fica com a cor dessa pessoa. Clique no nome para trocar turno, horário, marcar falta/atraso ou remover; clique no espaço vazio para escalar; <b>+FL</b> inclui um freelancer no turno.</p>
+      {alocMenu && ReactDOM.createPortal(menuDe(menu.di, alocMenu, "fixed z-[70]", {left:menu.x, top:menu.y}), document.body)}
+    </div>}
+
+    {modo==="quadro" && <Card className="p-3 overflow-x-auto">
       <div className="px-1 pb-2 text-sm font-semibold text-slate-500 flex items-center gap-2"><Icon d={I.pin} className="w-4 h-4" style={{color:uAtual?.cor}}/> Escala de <b className="text-slate-800">{uAtual?.nome}</b> · <span className="text-slate-400">{semanaLabel}</span></div>
       <div className="grid grid-cols-7 gap-3 min-w-[980px]">
         {DIAS.map((dia,di)=>
@@ -1644,21 +1748,12 @@ function EscalaVisual() {
                       {a.marca==="atrasou" && <Badge tone="amber">Atrasou</Badge>}
                     </div>
                   </div>
-                  {aberto && <div className="absolute z-30 top-full left-0 mt-1 w-40 bg-white rounded-xl shadow-2xl border border-slate-100 p-1.5 text-xs">
-                    <div className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase">Turno</div>
-                    {[["manha","Manhã"],["tarde","Tarde"],["noite","Noite"],["folga","Folga"]].map(([k,l])=><button key={k} onClick={()=>{setTurnoTo(di,a.id,k);setMenu(null);}} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50">{l}</button>)}
-                    {a.turno!=="folga" && <button onClick={()=>{ const cur=(a.h||t.h||"").split("–"); setEditH({di,id:a.id,hi:cur[0]||"08:00",hf:cur[1]||"16:00"}); setMenu(null); }} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-brand-50 text-brand-700 border-t border-slate-100 mt-1">Editar horário…</button>}
-                    <div className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase border-t border-slate-100 mt-1">Marcar</div>
-                    <button onClick={()=>{setMarca(di,a.id,"faltou");setMenu(null);}} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-rose-50 text-rose-600">Faltou</button>
-                    <button onClick={()=>{setMarca(di,a.id,"atrasou");setMenu(null);}} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-amber-50 text-amber-600">Atrasou</button>
-                    <button onClick={()=>{setMarca(di,a.id,null);setMenu(null);}} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-slate-50 text-slate-500">Limpar marca</button>
-                    {can("excluir") && <button onClick={()=>{remover(di,a.id);setMenu(null);}} className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-rose-50 text-rose-600 border-t border-slate-100 mt-1">Remover</button>}
-                  </div>}
+                  {aberto && menuDe(di,a,"absolute z-30 top-full left-0 mt-1")}
                 </div>;})}
             </div>
           </div>)}
       </div>
-    </Card>
+    </Card>}
 
     <Modal open={!!editH} onClose={()=>setEditH(null)}>
       {editH && <div className="p-6">
@@ -1678,7 +1773,7 @@ function EscalaVisual() {
       </div>}
     </Modal>
 
-    <Modal open={add!==null} onClose={()=>setAdd(null)}>
+    <Modal open={add!==null} onClose={()=>{ setAdd(null); setAddTurno(null); }}>
       <div className="p-6">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-bold text-slate-900">Incluir colaborador em {uAtual?.nome} {add!==null&&`— ${labelDiaFull(add)}`}</h3>
