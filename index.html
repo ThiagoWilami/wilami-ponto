@@ -5502,6 +5502,11 @@ const CONVITE_DOCS = {
     { k:"reservista", l:"Certificado de reservista (homens)" },
     { k:"comprovante_bancario", l:"Comprovante bancário ou Pix" },
   ],
+  free: [
+    { k:"cnh_rg", l:"RG ou CNH (frente e verso)", obrig:true },
+    { k:"cpf", l:"CPF (se não constar no RG/CNH)" },
+    { k:"comprovante_bancario", l:"Comprovante bancário ou Pix" },
+  ],
   pj: [
     { k:"cartao_cnpj", l:"Cartão CNPJ", obrig:true },
     { k:"contrato_social", l:"Contrato social ou CCMEI" },
@@ -5546,7 +5551,7 @@ async function lerDocumentoIA(arquivo, esperado, convite){
 
 /* ---------- Painel: gerar e acompanhar convites ---------- */
 function ConvitesPage(){
-  const { unidades, clts, pjs, can, cargosLista, cargosDesc, cargoInfo, marca } = useStore();
+  const { unidades, clts, pjs, freelas, cargosFreela, can, cargosLista, cargosDesc, cargoInfo, marca } = useStore();
   const toast=useContext(ToastCtx);
   const convitesBrutos=useConvites(true);
   const cargosPJ=(cargosDesc||[]).filter(c=>c.tipo==="pj");
@@ -5558,18 +5563,18 @@ function ConvitesPage(){
   const [filtro,setFiltro]=useState("aberto");
   const criar=async()=>{
     const token=gerarTokenConvite();
-    const ci=cargoInfo(novo.tipo==="clt"?novo.cargo:novo.servico);
+    const ci=novo.tipo==="free"?null:cargoInfo(novo.tipo==="clt"?novo.cargo:novo.servico);
     const tns=turnosDe(ci); const tn=tns[Number(novo.turno)||0]||{};
     const vaga = ci ? { cargo:ci.nome, setorNome:(SETOR_MAP[ci.setor]||{}).l||"", turno:tns.length>1||tn.nome!=="Padrão"?(tn.nome||""):"", escala:tn.escala?ESCALAS[tn.escala]||tn.escala:"", horario:tn.horario||"", beneficios:ci.beneficios||"",
       requisitos:ci.requisitos||"", descritivo:ci.descritivo||"", unidadeNome:novo.unidade==="todas"?"Todas as casas":unidadeNome(novo.unidade,unidades),
       salario: novo.mostrarSalario ? (Number(novo.tipo==="clt"?novo.salario:novo.valor)||0) : 0, empresa:(marca&&marca.nome)||"WILAMI" } : null;
-    const doc={ vaga, tipo:novo.tipo, nome:(novo.nome||"").trim(), tel:soDigitos(novo.tel), unidade:novo.unidade, cargo:novo.tipo==="clt"?novo.cargo:"", servico:novo.tipo==="pj"?(novo.servico||""):"",
+    const doc={ vaga, tipo:novo.tipo, nome:(novo.nome||"").trim(), tel:soDigitos(novo.tel), unidade:novo.unidade, cargo:novo.tipo==="clt"?novo.cargo:novo.tipo==="free"?(novo.cargoFree||""):"", servico:novo.tipo==="pj"?(novo.servico||""):"",
       salario:Number(novo.salario)||0, valor:Number(novo.valor)||0, status:"aberto", criadoEm:Date.now(), expira:Date.now()+30*864e5,
       criadoPor:((window.__WPAUTH&&window.__WPAUTH.currentUser)||{}).email||"" };
     try{ await nCol("convites").doc(token).set(doc); setCriado({...doc,id:token}); setNovo(null); }
     catch(e){ toast("Não foi possível criar o convite: "+erroBanco(e)); }
   };
-  const msgWhats=(c)=>`Olá${c.nome?", "+c.nome.split(" ")[0]:""}! Para fazer seu cadastro${c.tipo==="pj"?" como prestador de serviço":""}, abra o link abaixo e envie fotos ou PDFs dos seus documentos — o sistema preenche os dados automaticamente:\n${linkConvite(c.id)}`;
+  const msgWhats=(c)=>`Olá${c.nome?", "+c.nome.split(" ")[0]:""}! Para fazer seu cadastro${c.tipo==="pj"?" como prestador de serviço":c.tipo==="free"?" como freelancer":""}, abra o link abaixo e envie fotos ou PDFs dos seus documentos — o sistema preenche os dados automaticamente:\n${linkConvite(c.id)}`;
   const abrirWhats=(c)=>{ const tel=c.tel?(c.tel.length<=11?"55"+c.tel:c.tel):""; window.open("https://wa.me/"+tel+"?text="+encodeURIComponent(msgWhats(c)),"_blank"); };
   const cancelar=(c)=>{ if(!confirm("Cancelar este convite? O link deixa de funcionar.")) return; nCol("convites").doc(c.id).set({status:"cancelado"},{merge:true}).then(()=>toast("Convite cancelado")); };
   const pessoaDo=(c)=>{ if(!c.pessoaKey) return null; const [t,...rest]=c.pessoaKey.split("-"); const id=rest.join("-"); return (t==="pj"?pjs:clts).find(p=>String(p.id)===id); };
@@ -5591,9 +5596,9 @@ function ConvitesPage(){
       {lista.length===0 && <Card className="p-8 text-center text-sm text-slate-400">Nenhum convite aqui.</Card>}
       {lista.map(c=>{ const exp=c.status==="aberto"&&c.expira<Date.now(); const [st,tone]=exp?["Expirado","slate"]:(STATUS_C[c.status]||[c.status,"slate"]); const p=pessoaDo(c);
         return <Card key={c.id} className="p-4 flex flex-wrap items-center gap-3">
-          <div className={cx("w-10 h-10 rounded-xl grid place-items-center text-white shrink-0", c.tipo==="pj"?"bg-sky-600":"grad-brand")}><Icon d={c.tipo==="pj"?I.briefcase:I.user} className="w-5 h-5"/></div>
+          <div className={cx("w-10 h-10 rounded-xl grid place-items-center text-white shrink-0", c.tipo==="pj"?"bg-sky-600":c.tipo==="free"?"bg-free-500":"grad-brand")}><Icon d={c.tipo==="pj"?I.briefcase:c.tipo==="free"?I.coffee:I.user} className="w-5 h-5"/></div>
           <div className="flex-1 min-w-[200px]">
-            <div className="font-bold text-slate-900">{(p&&p.nome)||c.nome||"Candidato sem nome"} <Badge tone={c.tipo==="pj"?"blue":"brand"}>{c.tipo==="pj"?"PJ":"CLT"}</Badge></div>
+            <div className="font-bold text-slate-900">{(p&&p.nome)||c.nome||"Candidato sem nome"} <Badge tone={c.tipo==="pj"?"blue":c.tipo==="free"?"free":"brand"}>{c.tipo==="pj"?"PJ":c.tipo==="free"?"Freela":"CLT"}</Badge></div>
             <div className="text-xs text-slate-500">{c.tipo==="pj"?(c.servico||"Prestação de serviço"):(c.cargo||"—")} · {unidadeNome(c.unidade,unidades)} · criado em {new Date(c.criadoEm||0).toLocaleDateString("pt-BR")}{c.preenchidoEm?" · recebido em "+new Date(c.preenchidoEm).toLocaleDateString("pt-BR"):""}</div>
           </div>
           <Badge tone={tone}>{st}</Badge>
@@ -5612,13 +5617,16 @@ function ConvitesPage(){
       {novo && <div className="p-6">
         <h3 className="text-lg font-bold text-slate-900 mb-4">Novo convite de cadastro</h3>
         <div className="flex gap-2 p-1 bg-slate-100 rounded-xl mb-4">
-          {[["clt","CLT"],["pj","Prestador PJ"]].map(([k,l])=><button key={k} onClick={()=>setNovo({...novo,tipo:k})} className={cx("flex-1 py-2 rounded-lg text-sm font-semibold", novo.tipo===k?"bg-white shadow-soft text-brand-700":"text-slate-500")}>{l}</button>)}
+          {[["clt","CLT"],["free","Freelancer"],["pj","Prestador PJ"]].map(([k,l])=><button key={k} onClick={()=>setNovo({...novo,tipo:k, cargoFree:novo.cargoFree||((cargosFreela||[])[0]||{}).nome||""})} className={cx("flex-1 py-2 rounded-lg text-sm font-semibold", novo.tipo===k?"bg-white shadow-soft text-brand-700":"text-slate-500")}>{l}</button>)}
         </div>
         <div className="grid gap-3">
           <Field label="Nome (opcional)"><Input value={novo.nome} onChange={e=>setNovo({...novo,nome:e.target.value})} placeholder="Para identificar o convite"/></Field>
           <Field label="WhatsApp do candidato (opcional)"><Input value={novo.tel} onChange={e=>setNovo({...novo,tel:e.target.value})} placeholder="(11) 90000-0000"/></Field>
           <Field label="Unidade"><Select value={novo.unidade} onChange={e=>setNovo({...novo,unidade:e.target.value==="todas"?"todas":Number(e.target.value)})}>{novo.tipo==="pj"&&<option value="todas">Todas as casas</option>}{unidades.map(u=><option key={u.id} value={u.id}>{u.nome}</option>)}</Select></Field>
-          {novo.tipo==="clt" ? <div className="grid grid-cols-2 gap-3">
+          {novo.tipo==="free" ? <div className="grid gap-3">
+            <Field label="Cargo do freelancer (valor por jornada)"><Select value={novo.cargoFree||""} onChange={e=>setNovo({...novo,cargoFree:e.target.value})}>{(cargosFreela||[]).map(c=><option key={c.id||c.nome} value={c.nome}>{c.nome} — {fmtBRL(Number(c.valor)||0)}/jornada</option>)}</Select></Field>
+            <p className="text-xs text-slate-500">O freelancer não entra na escala fixa: depois do cadastro, você o inclui nos dias em que vai trabalhar (<b>+FL</b> na escala).</p>
+          </div> : novo.tipo==="clt" ? <div className="grid grid-cols-2 gap-3">
             <Field label="Cargo"><Select value={novo.cargo} onChange={e=>{ const ci=cargoInfo(e.target.value); setNovo({...novo,cargo:e.target.value, turno:0, salario:ci&&ci.salarioBase?ci.salarioBase:novo.salario}); }}>{cargosLista.map(c=><option key={c}>{c}</option>)}</Select></Field>
             <Field label="Salário (R$, opcional)"><Input type="number" value={novo.salario} onChange={e=>setNovo({...novo,salario:e.target.value})}/></Field>
           </div> : <div className="grid grid-cols-2 gap-3">
@@ -5627,12 +5635,12 @@ function ConvitesPage(){
             <Field label="Valor mensal (R$, opcional)"><Input type="number" value={novo.valor} onChange={e=>setNovo({...novo,valor:e.target.value})}/></Field>
           </div>}
         </div>
-        {(()=>{ const tns=turnosDe(cargoInfo(novo.tipo==="clt"?novo.cargo:novo.servico)); return tns.length>1 && <div className="mt-3"><Field label="Turno / período da vaga"><Select value={Number(novo.turno)||0} onChange={e=>setNovo({...novo,turno:Number(e.target.value)})}>{tns.map((t,i)=><option key={i} value={i}>{rotuloTurno(t)}</option>)}</Select></Field></div>; })()}
-        {(()=>{ const ci=cargoInfo(novo.tipo==="clt"?novo.cargo:novo.servico); const n=ci?DESCRITIVO_LINHAS(ci.descritivo).length:0;
+        {novo.tipo!=="free" && (()=>{ const tns=turnosDe(cargoInfo(novo.tipo==="clt"?novo.cargo:novo.servico)); return tns.length>1 && <div className="mt-3"><Field label="Turno / período da vaga"><Select value={Number(novo.turno)||0} onChange={e=>setNovo({...novo,turno:Number(e.target.value)})}>{tns.map((t,i)=><option key={i} value={i}>{rotuloTurno(t)}</option>)}</Select></Field></div>; })()}
+        {novo.tipo!=="free" && (()=>{ const ci=cargoInfo(novo.tipo==="clt"?novo.cargo:novo.servico); const n=ci?DESCRITIVO_LINHAS(ci.descritivo).length:0;
           return <div className={cx("mt-3 p-3 rounded-xl text-sm flex items-start gap-2", n?"bg-brand-50 text-brand-800":"bg-amber-50 text-amber-800")}>
             <Icon d={n?I.check:I.doc} className="w-4 h-4 mt-0.5 shrink-0"/>
             <span>{n ? <>O candidato vai ver o <b>descritivo de função</b> ({n} atividades) e precisa marcar que está de acordo antes de continuar.</> : <>Este cargo ainda não tem descritivo de função. Crie em <b>Cargos & funções</b> para o candidato ver e aceitar as atividades.</>}</span></div>; })()}
-        <label className="flex items-center gap-2 text-sm text-slate-600 mt-3"><input type="checkbox" checked={!!novo.mostrarSalario} onChange={e=>setNovo({...novo,mostrarSalario:e.target.checked})} className="w-4 h-4 accent-green-700"/> Mostrar {novo.tipo==="pj"?"o valor":"o salário"} ao candidato na descrição da vaga</label>
+        {novo.tipo!=="free" && <label className="flex items-center gap-2 text-sm text-slate-600 mt-3"><input type="checkbox" checked={!!novo.mostrarSalario} onChange={e=>setNovo({...novo,mostrarSalario:e.target.checked})} className="w-4 h-4 accent-green-700"/> Mostrar {novo.tipo==="pj"?"o valor":"o salário"} ao candidato na descrição da vaga</label>}
         <p className="text-xs text-slate-400 mt-2">O link vale por 30 dias e pode ser usado uma única vez.</p>
         <div className="flex gap-2 mt-4"><Btn variant="ghost" onClick={()=>setNovo(null)}>Cancelar</Btn><Btn className="flex-1" icon={I.link} onClick={criar}>Gerar link</Btn></div>
       </div>}
@@ -5691,7 +5699,7 @@ function FichaCadastro({convite, pessoa, onClose}){
 
 /* ---------- Página pública: o candidato envia documentos e confere os dados ---------- */
 function ConviteCadastro({onClose}){
-  const { termoImagemCfg, unidades } = useStore();
+  const { termoImagemCfg, unidades, cargosFreela } = useStore();
   const token=(location.hash.replace("#","").split("/")[1]||"").trim();
   const [conv,setConv]=useState(undefined);  // undefined = carregando · null = inválido
   const [etapa,setEtapa]=useState("inicio"); // inicio | vaga | docs | lendo | form | termo | enviando | ok
@@ -5746,7 +5754,7 @@ function ConviteCadastro({onClose}){
   const obrigForm = tipo==="pj" ? [["razaoSocial","Razão social"],["cnpj","CNPJ"],["responsavel","Responsável"],["telefone","Telefone"],["email","E-mail"]]
     : [["nome","Nome completo"],["cpf","CPF"],["nascimento","Nascimento"],["telefone","Telefone"]];
   const faltaForm=obrigForm.filter(([k])=>!String(f[k]||"").trim()).map(([,l])=>l);
-  if(tipo==="clt" && !foto) faltaForm.push("selfie");
+  if(tipo!=="pj" && !foto) faltaForm.push("selfie");
   if(!aceite) faltaForm.push("aceite LGPD");
   const enviar=async(assinaturaTermo)=>{
     setEtapa("enviando"); setErro("");
@@ -5781,6 +5789,9 @@ function ConviteCadastro({onClose}){
       }
       const dados = tipo==="pj"
         ? { ...comum, tipo:"pj", nome:nomePessoa, cnpj:f.cnpj||"", responsavel:f.responsavel||"", cpf:f.cpf||"", servico:conv.servico||f.atividade||"", valor:Number(conv.valor)||0, diaPagamento:5, formaPagamento:"Pix", unidade:conv.unidade==null?"todas":conv.unidade, inicio:"" }
+        : tipo==="free"
+        ? { ...comum, tipo:"free", nome:nomePessoa, cpf:f.cpf||"", cargo:conv.cargo||"", setor:SETOR_POR_CARGO[conv.cargo]||"salao", unidade:conv.unidade,
+            valor:Number(((cargosFreela||[]).find(c=>c.nome===conv.cargo)||{}).valor)||0, foto }
         : { ...comum, tipo:"clt", nome:nomePessoa, cpf:f.cpf||"", cargo:conv.cargo||CARGOS[0], setor:SETOR_POR_CARGO[conv.cargo]||"salao", escala:"6x1", folgaDia:6, unidade:conv.unidade, salario:Number(conv.salario)||0, vt:0, admissao:"", foto };
       await ref.set(dados);
       await nCol("convites").doc(token).set({ status:"preenchido", preenchidoEm:Date.now(), pessoaKey:donoKey, nome:nomePessoa },{merge:true}).catch(()=>{});
@@ -5807,7 +5818,7 @@ function ConviteCadastro({onClose}){
     {etapa==="lendo" && <p className="text-slate-500 text-sm mt-1">{prog.feito} de {prog.total} arquivo(s) · isso pode levar alguns segundos</p>}</div>);
 
   const cabec=<div className="mb-5">
-    <div className="text-xs font-bold uppercase tracking-wide text-free-600">Cadastro {tipo==="pj"?"de prestador PJ":"de colaborador CLT"}</div>
+    <div className="text-xs font-bold uppercase tracking-wide text-free-600">Cadastro {tipo==="pj"?"de prestador PJ":tipo==="free"?"de freelancer":"de colaborador CLT"}</div>
     <h2 className="text-xl font-extrabold text-slate-900 mt-1">{etapaVis==="vaga"?"Conheça a vaga":etapaVis==="docs"?"Envie seus documentos":etapaVis==="termo"?"Termo de uso de imagem":"Confira seus dados"}</h2>
     {(()=>{ const passos=temVaga?["vaga","docs","form","termo"]:["docs","form","termo"]; const at=passos.indexOf(etapaVis);
       return <div className="flex gap-2 mt-3">{passos.map((t,i)=><div key={t} className={cx("flex-1 h-1.5 rounded-full", at>=i?"grad-brand":"bg-slate-200")}/>)}</div>; })()}
@@ -5881,7 +5892,7 @@ function ConviteCadastro({onClose}){
     <div className="text-xs font-bold text-slate-400 uppercase mb-2">Contato e pagamento</div>
     <div className="grid sm:grid-cols-2 gap-3 mb-4">{Campo({k:"telefone",l:"Telefone / WhatsApp *"})}{Campo({k:"email",l:"E-mail"+(tipo==="pj"?" *":""),tipoInput:"email"})}
       <Field label="Tipo da chave Pix"><Select value={f.tipoPix||"CPF"} onChange={e=>set("tipoPix",e.target.value)}>{PIX_TIPOS.map(t=><option key={t}>{t}</option>)}</Select></Field>{Campo({k:"pix",l:"Chave Pix"})}{Campo({k:"banco",l:"Banco"})}<div className="grid grid-cols-2 gap-3">{Campo({k:"agencia",l:"Agência"})}{Campo({k:"conta",l:"Conta"})}</div></div>
-    {tipo==="clt" && <div className="mb-4 p-3 rounded-2xl border border-slate-200 flex items-center gap-3">
+    {tipo!=="pj" && <div className="mb-4 p-3 rounded-2xl border border-slate-200 flex items-center gap-3">
       {foto ? <img src={foto} className="w-14 h-14 rounded-xl object-cover"/> : <div className="w-14 h-14 rounded-xl bg-slate-100 grid place-items-center text-slate-400"><Icon d={I.camera}/></div>}
       <div className="flex-1"><div className="text-sm font-semibold text-slate-800">Selfie para o registro de ponto *</div><div className="text-xs text-slate-500">Usada como referência facial ao bater o ponto.</div></div>
       <label className="cursor-pointer"><span className="inline-flex items-center gap-1 text-xs font-semibold text-white grad-brand px-3 py-2 rounded-lg"><Icon d={I.camera} className="w-3.5 h-3.5"/>{foto?"Trocar":"Tirar selfie"}</span>
