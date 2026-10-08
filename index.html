@@ -624,7 +624,7 @@ const escalaInicial = () => {
 // Esses documentos não têm o campo "ts" (é guardado como "_ts"), então NÃO aparecem na lista de
 // ajustes de ponto, que é ordenada por "ts".
 const COL_HOSPEDEIRA="ajustes";
-const COL_VIRTUAL={ arquivos:["arq_","arquivo"], arquivos_partes:["arqp_","arquivo_parte"], acessosColab:["pin_","pin"], convites:["conv_","convite"], termos:["ter_","termo_pedido"], entregas:["ent_","entrega"] };
+const COL_VIRTUAL={ arquivos:["arq_","arquivo"], arquivos_partes:["arqp_","arquivo_parte"], acessosColab:["pin_","pin"], convites:["conv_","convite"], termos:["ter_","termo_pedido"], entregas:["ent_","entrega"], assinaturas:["ass_","assinatura_env"] };
 const _vEntrada=(nome,data)=>{ const o={...data, _t:COL_VIRTUAL[nome][1]}; if("ts" in o){ o._ts=o.ts; delete o.ts; } return o; };
 const _vSaida=(data)=>{ const o={...(data||{})}; if("_ts" in o){ o.ts=o._ts; delete o._ts; } delete o._t; return o; };
 function nCol(nome){
@@ -4276,6 +4276,7 @@ function PastasPessoa({tipo, pessoa}){
   const [enviando,setEnviando]=useState(0);
   const [nova,setNova]=useState(null);       // nome da nova pasta (null = fechado)
   const [assinar,setAssinar]=useState(null); // arquivo a enviar p/ assinatura
+  const [envAberto,setEnvAberto]=useState(null); // envelope de assinatura Wilami aberto
   const [ocupado,setOcupado]=useState("");   // id do arquivo em operação
   const [drag,setDrag]=useState(false);
   const editavel=can("documentos"), podeExcluir=can("excluir");
@@ -4358,7 +4359,8 @@ function PastasPessoa({tipo, pessoa}){
             {editavel && <button title={a.visivelColab?"Ocultar do app do colaborador":"Liberar no app do colaborador"} onClick={()=>acao(a,()=>arqAtualizar(a.id,{visivelColab:!a.visivelColab}),a.visivelColab?"Ocultado do app":"Liberado no app do colaborador")}
               className={cx("w-8 h-8 rounded-lg grid place-items-center hover:bg-slate-100", a.visivelColab?"text-emerald-600":"text-slate-400")}><Icon d={a.visivelColab?I.eye:I.eyeOff} className="w-4 h-4"/></button>}
             {editavel && ehPdf(a) && !ass && a.categoria!=="contrato_assinado" && <Btn size="sm" variant="soft" icon={I.sign} onClick={()=>setAssinar(a)}>Assinar</Btn>}
-            {editavel && pend && <button title="Atualizar status da assinatura" onClick={()=>acao(a,()=>sincronizarAssinatura(a),"Status da assinatura atualizado")} className="w-8 h-8 rounded-lg grid place-items-center text-brand-600 hover:bg-brand-50"><Icon d={I.refresh} className="w-4 h-4"/></button>}
+            {editavel && ass && ass.provedor==="wilami" && ass.envId && <Btn size="sm" variant={ass.status==="completed"?"ghost":"soft"} icon={I.sign} onClick={()=>setEnvAberto(ass.envId)}>{ass.status==="completed"?"Detalhes":"Acompanhar"}</Btn>}
+            {editavel && pend && ass.provedor!=="wilami" && <button title="Atualizar status da assinatura" onClick={()=>acao(a,()=>sincronizarAssinatura(a),"Status da assinatura atualizado")} className="w-8 h-8 rounded-lg grid place-items-center text-brand-600 hover:bg-brand-50"><Icon d={I.refresh} className="w-4 h-4"/></button>}
             {podeExcluir && <button title="Excluir" onClick={()=>excluir(a)} className="w-8 h-8 rounded-lg grid place-items-center text-slate-400 hover:text-rose-500 hover:bg-rose-50"><Icon d={I.trash} className="w-4 h-4"/></button>}
           </div>
           {ass && ass.signatarios && ass.signatarios.length>0 && <div className="w-full pl-11 flex flex-wrap gap-1.5">
@@ -4367,19 +4369,21 @@ function PastasPessoa({tipo, pessoa}){
           </div>}
         </div>; })}
     </div>
-    {assinar && <AssinaturaModal arq={assinar} pessoa={pessoa} tipo={tipo} onClose={()=>setAssinar(null)}/>}
+    {assinar && <AssinaturaModal arq={assinar} pessoa={pessoa} tipo={tipo} onClose={()=>setAssinar(null)} onWilami={(id)=>{ setAssinar(null); setEnvAberto(id); }}/>}
+    {envAberto && <EnvelopeWilamiModal envId={envAberto} onClose={()=>setEnvAberto(null)}/>}
   </div>;
 }
 
 /* ============================ ASSINATURA ELETRÔNICA (DocuSign) ============================ */
-function AssinaturaModal({arq, pessoa, tipo, onClose}){
+function AssinaturaModal({arq, pessoa, tipo, onClose, onWilami}){
   const { assinaturaCfg } = useStore();
   const toast=useContext(ToastCtx);
   const nomePessoa = tipo==="pj" ? (pessoa.responsavel||pessoa.nome) : pessoa.nome;
   // Ordem: signatários da empresa na ordem configurada (ex.: 1 Massimo, 2 Thiago/testemunha) e o colaborador/PJ por último.
   const [sigs,setSigs]=useState(()=>{ const emp=((assinaturaCfg&&assinaturaCfg.signatarios)||[]).map((s,i)=>({...s, ordem:Number(s.ordem)||i+1, on:true}));
     const ult=emp.reduce((m,s)=>Math.max(m,s.ordem),0)+1;
-    return [...emp, { nome:nomePessoa||"", email:pessoa.email||"", papel:tipo==="pj"?"Contratada ("+(pessoa.nome||"PJ")+")":"Colaborador", ordem:ult, on:true }].sort((a,b)=>a.ordem-b.ordem); });
+    return [...emp, { nome:nomePessoa||"", email:pessoa.email||"", tel:pessoa.tel||"", cpf:pessoa.cpf||"", papel:tipo==="pj"?"Contratada ("+(pessoa.nome||"PJ")+")":"Colaborador", ordem:ult, on:true }].sort((a,b)=>a.ordem-b.ordem); });
+  const [modo,setModo]=useState("wilami");   // wilami (grátis, no próprio sistema) | docusign
   const [assunto,setAssunto]=useState("Assinatura: "+String(arq.nome||"").replace(/\.pdf$/i,""));
   const [mensagem,setMensagem]=useState("Olá! Segue o documento para assinatura eletrônica. Você NÃO precisa ter conta no DocuSign: basta clicar em \"Revisar documento\" neste e-mail e assinar. Se o DocuSign pedir cadastro, crie sua conta gratuita pelo próprio link deste e-mail. Qualquer dúvida, estamos à disposição.");
   const [pagina,setPagina]=useState(true);
@@ -4388,7 +4392,14 @@ function AssinaturaModal({arq, pessoa, tipo, onClose}){
   const setSig=(i,k,v)=>setSigs(arr=>arr.map((s,j)=>j===i?{...s,[k]:v}:s));
   const ativos=sigs.filter(s=>s.on);
   const emailOk=(e)=>/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e||"").trim());
-  const invalidos=ativos.filter(s=>!s.nome.trim()||!emailOk(s.email));
+  const invalidos=ativos.filter(s=> modo==="wilami" ? (!s.nome.trim() || (!soDigitos(s.tel) && !emailOk(s.email))) : (!s.nome.trim()||!emailOk(s.email)));
+  const enviarWilami=async()=>{
+    if(!ativos.length||invalidos.length) return;
+    setStatus("enviando"); setErro(null);
+    try{ const env=await criarEnvelopeWilami(arq, ativos.map(s=>({nome:s.nome.trim(), email:String(s.email||"").trim().toLowerCase(), tel:s.tel||"", cpf:s.cpf||"", papel:s.papel||"", ordem:Number(s.ordem)||1})));
+      toast("Pronto! Agora envie o link para o 1º a assinar"); onWilami&&onWilami(env.id); }
+    catch(e){ setErro(e); setStatus("erro"); }
+  };
   const enviar=async()=>{
     if(!ativos.length||invalidos.length) return;
     setStatus("enviando"); setErro(null);
@@ -4410,10 +4421,14 @@ function AssinaturaModal({arq, pessoa, tipo, onClose}){
     <div className="p-6">
       <div className="flex items-start gap-3 mb-4">
         <div className="w-11 h-11 rounded-xl grad-brand grid place-items-center text-white shrink-0"><Icon d={I.sign}/></div>
-        <div className="flex-1 min-w-0"><h3 className="text-lg font-bold text-slate-900">Solicitar assinatura (DocuSign)</h3>
+        <div className="flex-1 min-w-0"><h3 className="text-lg font-bold text-slate-900">Solicitar assinatura</h3>
           <p className="text-sm text-slate-500 break-all">{arq.nome}</p></div>
         <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><Icon d={I.x}/></button>
       </div>
+      <div className="flex p-1 bg-slate-100 rounded-xl mb-4">
+        {[["wilami","Assinatura Wilami (grátis)"],["docusign","DocuSign"]].map(([k,l])=><button key={k} onClick={()=>setModo(k)} className={cx("flex-1 py-2 rounded-lg text-sm font-semibold", modo===k?"bg-white shadow-soft text-brand-700":"text-slate-500")}>{l}</button>)}
+      </div>
+      {modo==="wilami" && <p className="text-xs text-slate-500 mb-3 -mt-1">Cada um recebe um link (WhatsApp ou e-mail), lê o documento, confirma o CPF, tira uma selfie e assina com o dedo. No fim, a via assinada com o <b>manifesto de assinaturas</b> (data/hora, IP, aparelho, localização e hash do documento) é salva nesta pasta.</p>}
       <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Signatários — assinam na ordem indicada (1º, 2º, 3º…)</div>
       <div className="space-y-2">
         {sigs.map((s,i)=><div key={i} className={cx("grid sm:grid-cols-[auto_auto_1fr_1fr_auto] gap-2 items-center p-2.5 rounded-xl border", s.on?"border-slate-200":"border-slate-100 opacity-60")}>
@@ -4422,16 +4437,17 @@ function AssinaturaModal({arq, pessoa, tipo, onClose}){
           <Input value={s.nome} onChange={e=>setSig(i,"nome",e.target.value)} placeholder="Nome completo"/>
           <Input value={s.email} onChange={e=>setSig(i,"email",e.target.value)} placeholder="e-mail" className={s.on&&s.email&&!emailOk(s.email)?"!border-rose-300":""}/>
           <span className="text-xs text-slate-400 sm:w-36 truncate" title={s.papel}>{s.papel||"—"}</span>
+          {modo==="wilami" && <div className="sm:col-span-5 grid grid-cols-2 gap-2 sm:pl-[118px]"><Input value={s.tel||""} onChange={e=>setSig(i,"tel",e.target.value)} placeholder="WhatsApp (11) 9…" aria-label={"WhatsApp de "+(s.nome||"signatário")}/><Input value={s.cpf||""} onChange={e=>setSig(i,"cpf",e.target.value)} placeholder="CPF (confere na assinatura)" aria-label={"CPF de "+(s.nome||"signatário")}/></div>}
         </div>)}
       </div>
       <button onClick={()=>setSigs(a=>[...a,{nome:"",email:"",papel:"Testemunha",ordem:a.reduce((m,s)=>Math.max(m,Number(s.ordem)||1),0)+1,on:true}])} className="mt-2 text-sm font-semibold text-brand-700 hover:underline flex items-center gap-1"><Icon d={I.plus} className="w-4 h-4"/>Adicionar signatário</button>
-      {invalidos.length>0 && <p className="text-xs text-rose-500 mt-2">Preencha nome e e-mail válido de todos os signatários marcados.</p>}
-      <div className="grid gap-3 mt-4">
+      {invalidos.length>0 && <p className="text-xs text-rose-500 mt-2">{modo==="wilami"?"Preencha o nome e o WhatsApp ou e-mail de todos os signatários marcados.":"Preencha nome e e-mail válido de todos os signatários marcados."}</p>}
+      {modo==="docusign" && <div className="grid gap-3 mt-4">
         <Field label="Assunto do e-mail"><Input value={assunto} onChange={e=>setAssunto(e.target.value)}/></Field>
         <Field label="Mensagem"><textarea value={mensagem} onChange={e=>setMensagem(e.target.value)} rows={2} className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-brand-400 text-sm"/></Field>
         <label className="flex items-start gap-2 text-sm text-slate-600"><input type="checkbox" checked={pagina} onChange={e=>setPagina(e.target.checked)} className="mt-0.5 w-4 h-4 accent-green-700"/>
           <span>Adicionar <b>página de assinaturas</b> ao final do PDF (recomendado — o DocuSign posiciona a assinatura de cada um automaticamente)</span></label>
-      </div>
+      </div>}
       {status==="erro" && erro && <div className="mt-4 p-3.5 rounded-xl bg-rose-50 text-rose-700 text-sm">
         <div className="font-semibold">{erro.message}</div>
         {erro.info && erro.info.consentUrl && <div className="mt-1">É preciso autorizar o app uma única vez: <a className="underline font-semibold" href={erro.info.consentUrl} target="_blank" rel="noreferrer">conceder permissão no DocuSign</a> e depois tentar de novo.</div>}
@@ -4439,7 +4455,7 @@ function AssinaturaModal({arq, pessoa, tipo, onClose}){
       </div>}
       <div className="flex flex-wrap gap-2 mt-5">
         <Btn variant="ghost" onClick={marcarManual} icon={I.check}>Já foi assinado (marcar manualmente)</Btn>
-        <Btn className="flex-1" icon={status==="enviando"?null:I.sign} disabled={status==="enviando"||!ativos.length||invalidos.length>0} onClick={enviar}>{status==="enviando"?"Enviando…":"Enviar para assinatura"}</Btn>
+        <Btn className="flex-1" icon={status==="enviando"?null:I.sign} disabled={status==="enviando"||!ativos.length||invalidos.length>0} onClick={modo==="wilami"?enviarWilami:enviar}>{status==="enviando"?"Enviando…":modo==="wilami"?"Criar links de assinatura":"Enviar para assinatura"}</Btn>
       </div>
     </div>
   </Modal>;
@@ -4983,10 +4999,10 @@ function ConfigAssinatura(){
   const { assinaturaCfg, setAssinaturaCfg } = useStore();
   const toast=useContext(ToastCtx);
   const sigs=(assinaturaCfg&&assinaturaCfg.signatarios)||[];
-  const [n,setN]=useState({nome:"",email:"",papel:"Representante da empresa",ordem:""});
+  const [n,setN]=useState({nome:"",email:"",papel:"Representante da empresa",ordem:"",tel:"",cpf:""});
   const [teste,setTeste]=useState(null); const [testando,setTestando]=useState(false);
   const testar=async()=>{ setTestando(true); setTeste(null); try{ setTeste({ok:true,...(await docusignApi("status"))}); }catch(e){ setTeste({ok:false,erro:e.message,info:e.info,status:e.status}); } setTestando(false); };
-  const add=()=>{ if(!n.nome.trim()||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(n.email)) { toast("Informe nome e e-mail válidos"); return; } setAssinaturaCfg({...(assinaturaCfg||{}),signatarios:[...sigs,{nome:n.nome.trim(),email:n.email.trim().toLowerCase(),papel:n.papel.trim(),ordem:Number(n.ordem)||sigs.length+1}].sort((a,b)=>(a.ordem||9)-(b.ordem||9))}); setN({nome:"",email:"",papel:"Representante da empresa",ordem:""}); toast("Signatário adicionado"); };
+  const add=()=>{ if(!n.nome.trim()||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(n.email)) { toast("Informe nome e e-mail válidos"); return; } setAssinaturaCfg({...(assinaturaCfg||{}),signatarios:[...sigs,{nome:n.nome.trim(),email:n.email.trim().toLowerCase(),papel:n.papel.trim(),ordem:Number(n.ordem)||sigs.length+1,tel:soDigitos(n.tel),cpf:soDigitos(n.cpf)}].sort((a,b)=>(a.ordem||9)-(b.ordem||9))}); setN({nome:"",email:"",papel:"Representante da empresa",ordem:"",tel:"",cpf:""}); toast("Signatário adicionado"); };
   return <Card className="p-5 lg:col-span-2">
     <h3 className="font-bold text-slate-900 mb-1 flex items-center gap-2"><Icon d={I.sign} className="w-4 h-4 text-brand-600"/>Assinatura eletrônica (DocuSign)</h3>
     <p className="text-sm text-slate-500 mb-4">Contratos enviados pelas pastas vão para o colaborador/prestador <b>e</b> para os signatários da empresa abaixo — todos assinam o mesmo documento.</p>
@@ -4996,11 +5012,14 @@ function ConfigAssinatura(){
         <div className="space-y-2 mb-3">
           {sigs.length===0 && <p className="text-sm text-slate-400 py-2">Nenhum — adicione quem assina pela empresa (sócios, diretor, testemunhas).</p>}
           {sigs.map((s,i)=><div key={i} className="flex items-center gap-2 p-2.5 rounded-xl border border-slate-200">
-            <Avatar name={s.nome} size="w-8 h-8"/><div className="flex-1 min-w-0"><div className="text-sm font-semibold text-slate-800 truncate">{s.nome}</div><div className="text-xs text-slate-400 truncate">{s.ordem||i+1}º a assinar · {s.email} · {s.papel}</div></div>
+            <Avatar name={s.nome} size="w-8 h-8"/><div className="flex-1 min-w-0"><div className="text-sm font-semibold text-slate-800 truncate">{s.nome}</div><div className="text-xs text-slate-400 truncate">{s.ordem||i+1}º a assinar · {s.email}{s.tel?" · WhatsApp "+s.tel:""} · {s.papel}</div>
+              <div className="flex gap-1 mt-1"><input defaultValue={s.tel||""} placeholder="WhatsApp" aria-label={"WhatsApp de "+s.nome} onBlur={e=>setAssinaturaCfg({...(assinaturaCfg||{}),signatarios:sigs.map((x,j)=>j===i?{...x,tel:soDigitos(e.target.value)}:x)})} className="w-32 px-2 py-1 rounded-lg border border-slate-200 text-xs"/>
+                <input defaultValue={s.cpf||""} placeholder="CPF" aria-label={"CPF de "+s.nome} onBlur={e=>setAssinaturaCfg({...(assinaturaCfg||{}),signatarios:sigs.map((x,j)=>j===i?{...x,cpf:soDigitos(e.target.value)}:x)})} className="w-32 px-2 py-1 rounded-lg border border-slate-200 text-xs"/></div></div>
             <button onClick={()=>setAssinaturaCfg({...(assinaturaCfg||{}),signatarios:sigs.filter((_,j)=>j!==i)})} className="w-8 h-8 rounded-lg grid place-items-center text-slate-400 hover:text-rose-500 hover:bg-rose-50"><Icon d={I.trash} className="w-4 h-4"/></button>
           </div>)}
         </div>
         <div className="grid sm:grid-cols-[1fr_1fr_1fr_80px] gap-2"><Input placeholder="Nome" value={n.nome} onChange={e=>setN({...n,nome:e.target.value})}/><Input placeholder="E-mail" value={n.email} onChange={e=>setN({...n,email:e.target.value})}/><Input placeholder="Papel" value={n.papel} onChange={e=>setN({...n,papel:e.target.value})}/><Input type="number" min="1" placeholder="Ordem" value={n.ordem} onChange={e=>setN({...n,ordem:e.target.value})} aria-label="Ordem de assinatura"/></div>
+        <div className="grid grid-cols-2 gap-2 mt-2"><Input placeholder="WhatsApp (para a Assinatura Wilami)" value={n.tel} onChange={e=>setN({...n,tel:e.target.value})}/><Input placeholder="CPF (conferido na assinatura)" value={n.cpf} onChange={e=>setN({...n,cpf:e.target.value})}/></div>
         <p className="text-[11px] text-slate-400 mt-1">Ordem: 1 assina primeiro. O colaborador/PJ entra automaticamente depois dos signatários da empresa.</p>
         <Btn size="sm" variant="soft" icon={I.plus} className="mt-2" onClick={add}>Adicionar signatário</Btn>
       </div>
@@ -5179,7 +5198,7 @@ const CLAUSULAS_PJ_PADRAO = [
   { id:"vinculo", titulo:"DA INEXISTÊNCIA DE VÍNCULO EMPREGATÍCIO", texto:"{{N}}.1. O presente contrato possui natureza exclusivamente civil e comercial.\n{{N}}.2. Não existe relação de emprego entre as partes.\n{{N}}.3. A CONTRATADA exercerá suas atividades com autonomia organizacional, financeira e técnica.\n{{N}}.4. A CONTRATADA é integralmente responsável pelos recolhimentos fiscais, previdenciários e tributários decorrentes de sua atividade empresarial." },
   { id:"rescisao", titulo:"DA RESCISÃO IMEDIATA", texto:"{{N}}.1. O presente contrato poderá ser rescindido imediatamente nas seguintes hipóteses:\na) Descumprimento de qualquer cláusula contratual;\nb) Violação do dever de confidencialidade;\nc) Fraude ou desvio de mercadorias;\nd) Condutas que causem prejuízo material ou moral à CONTRATANTE;\ne) Prática de ato ilícito relacionado à execução dos serviços." },
   { id:"dados", titulo:"DA PROTEÇÃO DE DADOS", texto:"{{N}}.1. As partes comprometem-se a observar a legislação vigente sobre proteção de dados pessoais.\n{{N}}.2. Os dados acessados pela CONTRATADA deverão ser utilizados exclusivamente para execução das atividades contratadas." },
-  { id:"gerais", titulo:"DAS DISPOSIÇÕES GERAIS", texto:"{{N}}.1. O presente contrato substitui quaisquer entendimentos anteriores relacionados ao seu objeto.\n{{N}}.2. Alterações somente terão validade mediante instrumento escrito assinado por ambas as partes.\n{{N}}.3. A eventual tolerância de uma parte em relação à outra não representará renúncia de direitos." },
+  { id:"gerais", titulo:"DAS DISPOSIÇÕES GERAIS", texto:"{{N}}.1. O presente contrato substitui quaisquer entendimentos anteriores relacionados ao seu objeto.\n{{N}}.2. Alterações somente terão validade mediante instrumento escrito assinado por ambas as partes.\n{{N}}.3. A eventual tolerância de uma parte em relação à outra não representará renúncia de direitos.\n{{N}}.4. As partes reconhecem e aceitam a assinatura eletrônica deste instrumento como válida e eficaz, nos termos do art. 10, § 2º, da Medida Provisória nº 2.200-2/2001 e da Lei nº 14.063/2020." },
   { id:"foro", titulo:"DO FORO", texto:"{{N}}.1. Fica eleito o Foro da Comarca de {{FORO}}, com renúncia a qualquer outro, por mais privilegiado que seja, para dirimir eventuais controvérsias oriundas deste contrato." },
 ];
 // Empresa contratante padrão (cartão CNPJ). Campos salvos no painel têm prioridade; os vazios usam estes valores.
@@ -5369,7 +5388,7 @@ function GerarContratoModal({pj,onClose}){
       await arqSalvar({ nome:"Contrato de prestação de serviços - "+cargo.nome+" - "+pj.nome+".pdf", donoKey:tipoKey, donoTipo:"pj", donoId:String(pj.id), donoNome:pj.nome, cpf:soDigitos(pj.cpf||pj.cnpj),
         pasta:"Contrato de prestação de serviço", categoria:"contrato", visivelColab:true, origem:"modelo" }, du);
       if(cargo.nome && pj.servico!==cargo.nome) salvarPj({...pj, servico:cargo.nome});
-      toast("Contrato gerado e salvo na pasta — clique em Assinar para enviar pelo DocuSign"); onClose();
+      toast("Contrato gerado e salvo na pasta — clique em Assinar para colher as assinaturas"); onClose();
     }catch(e){ toast("Não foi possível gerar o contrato: "+erroBanco(e)); }
     setGerando(false);
   };
@@ -5865,6 +5884,207 @@ function EntregasPage(){
         <EtapaTermoEntrega ent={assinarAqui} enviando={enviando} onAssinar={assinarNoAparelho} onVoltar={()=>setAssinarAqui(null)}/></div>}
     </Modal>
   </div>;
+}
+
+/* ============================ ASSINATURA ELETRÔNICA WILAMI (sem custo) ============================ */
+// Envelope em ajustes/ass_<id>: documento original + assinantes em ordem. Cada assinante recebe um link próprio,
+// confirma CPF, tira selfie, dá o aceite e assina com o dedo. Registro: data/hora, IP, aparelho e localização.
+// Quando o último assina, gera a via final (original + "Manifesto de assinaturas" com as provas e o hash SHA-256).
+const BASE_LEGAL_ASSINATURA="Assinatura eletrônica realizada com o aceite das partes, nos termos do art. 10, § 2º, da Medida Provisória nº 2.200-2/2001 e da Lei nº 14.063/2020.";
+const linkAssinar=(envId,tok)=> comTenantUrl(location.origin+location.pathname, "assinar/"+envId+"."+tok);
+async function sha256Hex(bytes){ const h=await crypto.subtle.digest("SHA-256", bytes); return Array.from(new Uint8Array(h)).map(b=>b.toString(16).padStart(2,"0")).join(""); }
+const cpfValido=(c)=>{ const d=soDigitos(c); if(d.length!==11||/^(\d)\1+$/.test(d)) return false; const calc=(n)=>{ let s=0; for(let i=0;i<n;i++) s+=Number(d[i])*(n+1-i); const r=(s*10)%11; return r===10?0:r; }; return calc(9)===Number(d[9]) && calc(10)===Number(d[10]); };
+const mascaraCpf=(c)=>{ const d=soDigitos(c); return d.length===11?("***."+d.slice(3,6)+"."+d.slice(6,9)+"-**"):"—"; };
+const proximoAssinante=(env)=> (env.signatarios||[]).filter(s=>s.status!=="assinado").sort((a,b)=>(a.ordem||1)-(b.ordem||1))[0]||null;
+const msgAssinatura=(env,s)=>`Olá, ${String(s.nome||"").split(" ")[0]}! Você tem um documento para assinar: "${String(env.documento||"").replace(/\.pdf$/i,"")}".\nAbra o link, confira o documento e assine com o dedo (leva 2 minutos):\n${linkAssinar(env.id,s.token)}`;
+const whatsAssinante=(env,s)=>{ const tel=soDigitos(s.tel); const t=tel?(tel.length<=11?"55"+tel:tel):""; return "https://wa.me/"+t+"?text="+encodeURIComponent(msgAssinatura(env,s)); };
+const emailAssinante=(env,s)=> "mailto:"+encodeURIComponent(s.email||"")+"?subject="+encodeURIComponent("Documento para assinatura: "+String(env.documento||"").replace(/\.pdf$/i,""))+"&body="+encodeURIComponent(msgAssinatura(env,s));
+async function criarEnvelopeWilami(arq, lista){
+  const du=await arqConteudo(arq); const bytes=b64ToBytes(du); const hash=await sha256Hex(bytes);
+  const id=gerarTokenConvite();
+  const signatarios=[...lista].sort((a,b)=>(a.ordem||1)-(b.ordem||1)).map(s=>({ nome:s.nome, email:s.email||"", tel:soDigitos(s.tel||""), cpf:soDigitos(s.cpf||""), papel:s.papel||"", ordem:Number(s.ordem)||1, token:gerarTokenConvite(), status:"pendente" }));
+  const env={ documento:arq.nome, arquivo:{id:arq.id, partes:arq.partes, mime:arq.mime||"application/pdf", nome:arq.nome}, hash, donoKey:arq.donoKey, donoTipo:arq.donoTipo, donoId:arq.donoId, donoNome:arq.donoNome, cpfDono:arq.cpf||"", pasta:arq.pasta,
+    signatarios, status:"em_andamento", criadoEm:Date.now(), criadoPor:((window.__WPAUTH&&window.__WPAUTH.currentUser)||{}).email||"" };
+  await nCol("assinaturas").doc(id).set(env);
+  await arqAtualizar(arq.id,{ assinatura:{ provedor:"wilami", envId:id, status:"sent", enviadoEm:Date.now(), signatarios:signatarios.map(s=>({nome:s.nome,email:s.email,papel:s.papel,ordem:s.ordem,status:"sent"})) } });
+  return {...env,id};
+}
+// Via final: documento original + página(s) "Manifesto de assinaturas"
+async function pdfViaFinalWilami(env, bytesOriginais){
+  const PDFLib=await carregarPdfLib();
+  const doc=await PDFLib.PDFDocument.load(bytesOriginais,{ignoreEncryption:true});
+  const font=await doc.embedFont(PDFLib.StandardFonts.Helvetica), bold=await doc.embedFont(PDFLib.StandardFonts.HelveticaBold);
+  const limpo=(t)=>String(t||"").replace(/[^\x20-\x7E -ÿ–—‘’“”•…]/g,"").replace(/[“”]/g,'"');
+  const X=48, W=499; let pg, y;
+  const nova=()=>{ pg=doc.addPage([595,842]); y=792; };
+  const esc=(txt,{f=font,size=9,gap=2.5,x=X,w=W,cor=[0.15,0.18,0.22]}={})=>{ const ws=limpo(txt).split(/\s+/).filter(Boolean); let a=""; const ls=[];
+    ws.forEach(t=>{ const s=a?a+" "+t:t; if(f.widthOfTextAtSize(s,size)>w&&a){ ls.push(a); a=t; } else a=s; }); if(a) ls.push(a);
+    ls.forEach(l=>{ if(y<50) nova(); pg.drawText(l,{x,y,size,font:f,color:PDFLib.rgb(...cor)}); y-=size+gap; }); };
+  nova();
+  esc("MANIFESTO DE ASSINATURAS ELETRÔNICAS",{f:bold,size:14,cor:[0.12,0.3,0.12],gap:6});
+  esc("Documento: "+env.documento,{size:9.5});
+  esc("Envelope: "+env.id+" · criado em "+new Date(env.criadoEm).toLocaleString("pt-BR"),{size:8.5,cor:[0.4,0.45,0.5]});
+  esc("Hash SHA-256 do documento original: "+env.hash,{size:8,cor:[0.4,0.45,0.5]});
+  y-=8;
+  const ordenados=[...env.signatarios].sort((a,b)=>(a.ordem||1)-(b.ordem||1));
+  for(const s of ordenados){
+    if(y<190) nova();
+    pg.drawLine({start:{x:X,y:y+4},end:{x:X+W,y:y+4},thickness:0.5,color:PDFLib.rgb(0.8,0.82,0.85)}); y-=10;
+    const topo=y;
+    // selfie e assinatura à direita
+    try{ if(s.selfie){ const im=await doc.embedJpg(b64ToBytes(s.selfie)); const h=78, w=im.width*(h/im.height); pg.drawImage(im,{x:X+W-w,y:topo-h+6,width:w,height:h}); } }catch(e){}
+    try{ if(s.assinatura){ const im=await doc.embedPng(b64ToBytes(s.assinatura)); const h=40, w=Math.min(170, im.width*(h/im.height)); pg.drawImage(im,{x:X+W-110-w,y:topo-h+2,width:w,height:h}); } }catch(e){}
+    const wTxt=W-290;
+    esc(s.ordem+"º · "+s.nome+(s.papel?" — "+s.papel:""),{f:bold,size:10,w:wTxt});
+    esc("CPF informado: "+mascaraCpf(s.cpfInformado||s.cpf),{w:wTxt});
+    if(s.email) esc("E-mail: "+s.email,{w:wTxt}); if(s.tel) esc("WhatsApp: "+s.tel,{w:wTxt});
+    esc("Assinado em: "+new Date(s.assinadoEm).toLocaleString("pt-BR")+" (UTC "+new Date(s.assinadoEm).toISOString()+")",{w:wTxt});
+    esc("IP: "+(s.ip||"não disponível"),{w:wTxt});
+    esc("Localização: "+(s.geo?(s.geo.lat.toFixed(5)+", "+s.geo.lng.toFixed(5)+" (±"+Math.round(s.geo.precisao||0)+" m)"):"não autorizada pelo aparelho"),{w:wTxt});
+    esc("Aparelho: "+String(s.ua||"").slice(0,140),{size:7.5,w:wTxt,cor:[0.4,0.45,0.5]});
+    esc("Aceite: \"Li o documento e concordo em assiná-lo eletronicamente\" · selfie e assinatura desenhada coletadas no ato.",{size:7.5,w:wTxt,cor:[0.4,0.45,0.5]});
+    y=Math.min(y, topo-84); y-=6;
+  }
+  y-=6; if(y<70) nova();
+  esc(BASE_LEGAL_ASSINATURA,{size:8.5});
+  esc("Para conferir a integridade, o hash SHA-256 do documento original (páginas anteriores a este manifesto) deve ser igual ao informado acima.",{size:8,cor:[0.4,0.45,0.5]});
+  return doc.save();
+}
+async function concluirEnvelopeWilami(env){
+  const du=await arqConteudo(env.arquivo); const bytes=b64ToBytes(du);
+  const finais=await pdfViaFinalWilami(env, bytes);
+  const base=String(env.documento||"documento").replace(/\.pdf$/i,"");
+  const finalId=await arqSalvar({ nome:base+" (assinado).pdf", donoKey:env.donoKey, donoTipo:env.donoTipo, donoId:env.donoId, donoNome:env.donoNome, cpf:env.cpfDono||"",
+    pasta:env.pasta, categoria:"contrato_assinado", visivelColab:true, origemId:env.arquivo.id, envId:env.id }, bytesParaDataUrl(finais,"application/pdf"));
+  await nCol("assinaturas").doc(env.id).set({status:"concluido", concluidoEm:Date.now(), finalArquivoId:finalId},{merge:true});
+  return finalId;
+}
+/* ---------- Página pública: #assinar/<envelope>.<token> ---------- */
+// Recria a página quando o link muda na mesma aba (outro assinante)
+function AssinarDocumento(props){
+  const [h,setH]=useState(location.hash);
+  useEffect(()=>{ const on=()=>setH(location.hash); window.addEventListener("hashchange",on); return ()=>window.removeEventListener("hashchange",on); },[]);
+  return <AssinarDocumentoPagina key={h} {...props}/>;
+}
+function AssinarDocumentoPagina({onClose}){
+  const par=(location.hash.replace("#","").split("/")[1]||"").trim(); const [envId,tok]=par.split(".");
+  const [env,setEnv]=useState(undefined);
+  const [etapa,setEtapa]=useState("doc");   // doc | id | assinar | enviando | ok
+  const [paginas,setPaginas]=useState(null); const [erroDoc,setErroDoc]=useState("");
+  const [cpf,setCpf]=useState(""); const [selfie,setSelfie]=useState(""); const [aceite,setAceite]=useState(false); const [ass,setAss]=useState(null);
+  const [geo,setGeo]=useState(null); const [rede,setRede]=useState(null); const [erro,setErro]=useState(""); const [finalOk,setFinalOk]=useState(false);
+  const carregar=()=> nCol("assinaturas").doc(envId).get().then(s=>{ const d=s.exists?{...s.data(),id:envId}:null; setEnv(d); return d; }).catch(()=>{ setEnv(null); return null; });
+  useEffect(()=>{ if(!window.__WPDB||!envId||!tok){ setEnv(null); return; } carregar(); },[]); // eslint-disable-line
+  const eu=env&&(env.signatarios||[]).find(s=>s.token===tok);
+  const antes=env&&eu?(env.signatarios||[]).filter(s=>(s.ordem||1)<(eu.ordem||1)&&s.status!=="assinado"):[];
+  // Documento em imagens (funciona em qualquer celular)
+  useEffect(()=>{ if(!env||!eu||eu.status==="assinado"||antes.length||paginas) return; let vivo=true;
+    (async()=>{ try{ const du=await arqConteudo(env.arquivo); const pdfjs=await carregarPdfJs(); const pdf=await pdfjs.getDocument({data:b64ToBytes(du)}).promise; const out=[];
+        for(let i=1;i<=Math.min(pdf.numPages,30);i++){ const pg=await pdf.getPage(i); const vp=pg.getViewport({scale:1.6}); const c=document.createElement("canvas"); c.width=vp.width; c.height=vp.height; await pg.render({canvasContext:c.getContext("2d"),viewport:vp}).promise; out.push(c.toDataURL("image/jpeg",0.82)); }
+        if(vivo) setPaginas(out); }catch(e){ console.warn("assinar: falha ao exibir PDF",e); if(vivo) setErroDoc("Não foi possível exibir o documento aqui. Abra o arquivo pelo botão abaixo para ler antes de assinar."); } })();
+    return ()=>{ vivo=false; }; },[env]); // eslint-disable-line
+  const [abriuDoc,setAbriuDoc]=useState(false);
+  const abrirOriginal=async()=>{ try{ const du=await arqConteudo(env.arquivo); const url=URL.createObjectURL(new Blob([b64ToBytes(du)],{type:"application/pdf"})); window.open(url,"_blank"); setAbriuDoc(true); }catch(e){ setErroDoc("Não foi possível abrir o documento. Verifique sua internet e recarregue a página."); } };
+  const pegarProvas=()=>{ fetch("/api/ip").then(r=>r.ok?r.json():null).then(j=>setRede(j||{})).catch(()=>setRede({}));
+    if(navigator.geolocation) navigator.geolocation.getCurrentPosition(p=>setGeo({lat:p.coords.latitude,lng:p.coords.longitude,precisao:p.coords.accuracy}),()=>setGeo(null),{enableHighAccuracy:true,timeout:8000}); };
+  const cpfConfere = cpfValido(cpf) && (!eu||!eu.cpf || soDigitos(eu.cpf)===soDigitos(cpf));
+  const assinar=async()=>{ setEtapa("enviando"); setErro("");
+    try{
+      const atual=await carregar(); const meu=(atual.signatarios||[]).find(s=>s.token===tok);
+      if(!meu || meu.status==="assinado"){ setEtapa("ok"); return; }
+      const reg={ status:"assinado", assinadoEm:Date.now(), cpfInformado:soDigitos(cpf), selfie, assinatura:ass, ip:(rede&&rede.ip)||"", ua:(rede&&rede.ua)||navigator.userAgent, geo:geo||null };
+      const lista=(atual.signatarios||[]).map(s=>s.token===tok?{...s,...reg}:s);
+      await nCol("assinaturas").doc(envId).set({signatarios:lista},{merge:true});
+      const todos=lista.every(s=>s.status==="assinado");
+      await arqAtualizar(atual.arquivo.id,{assinatura:{ provedor:"wilami", envId, status:todos?"completed":"sent", signatarios:lista.map(s=>({nome:s.nome,email:s.email,papel:s.papel,ordem:s.ordem,status:s.status==="assinado"?"completed":"sent"})) }}).catch(()=>{});
+      const novo={...atual,signatarios:lista}; setEnv(novo);
+      if(todos){ const fid=await concluirEnvelopeWilami(novo); await arqAtualizar(atual.arquivo.id,{assinatura:{provedor:"wilami",envId,status:"completed",assinadoArquivoId:fid,concluidoEm:Date.now()}}).catch(()=>{}); setFinalOk(true); }
+      setEtapa("ok");
+    }catch(e){ setErro("Não foi possível concluir agora. Verifique sua internet e tente de novo."); setEtapa("assinar"); }
+  };
+  const casca=(c)=> <div className="min-h-screen grad-ink grad-hero flex items-start justify-center p-3 sm:p-4 py-6"><div className="w-full max-w-2xl"><div className="flex justify-center mb-4"><Logo light/></div><Card className="p-4 sm:p-6">{c}</Card></div></div>;
+  if(env===undefined) return casca(<div className="py-10 text-center"><div className="w-8 h-8 mx-auto rounded-full border-2 border-slate-200 border-t-brand-600 animate-spin"/></div>);
+  if(!env||!eu||env.status==="cancelado") return casca(<div className="py-6 text-center"><h2 className="text-xl font-bold text-slate-900">Link indisponível</h2><p className="text-slate-500 text-sm mt-1">Este link não é válido ou o documento foi cancelado. Fale com a empresa.</p></div>);
+  const prox=proximoAssinante(env);
+  if(etapa==="ok"||eu.status==="assinado") return casca(<div className="py-6 text-center">
+    <div className="w-20 h-20 mx-auto rounded-full bg-emerald-500 grid place-items-center text-white mb-4 shadow-glow"><Icon d={I.check} className="w-10 h-10" stroke={3}/></div>
+    <h2 className="text-2xl font-extrabold text-slate-900">Documento assinado!</h2>
+    <p className="text-slate-500 mt-1">{env.status==="concluido"||finalOk?"Todos assinaram. A via final com o manifesto de assinaturas foi gerada.":"Obrigado. Sua assinatura foi registrada."}</p>
+    {prox && <div className="mt-5 p-4 rounded-2xl bg-slate-50 text-left">
+      <div className="text-sm text-slate-600 mb-2">Próximo a assinar: <b>{prox.nome}</b>{prox.papel?" ("+prox.papel+")":""}. Avise agora:</div>
+      <div className="flex flex-wrap gap-2">{prox.tel && <a href={whatsAssinante(env,prox)} target="_blank" rel="noopener" className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 text-white text-sm font-semibold"><Icon d={I.arrow} className="w-4 h-4"/>Enviar pelo WhatsApp</a>}
+        {prox.email && <a href={emailAssinante(env,prox)} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl border border-slate-200 text-slate-700 text-sm font-semibold">Enviar por e-mail</a>}</div>
+    </div>}
+  </div>);
+  if(antes.length) return casca(<div className="py-6 text-center"><h2 className="text-xl font-bold text-slate-900">Aguardando assinatura anterior</h2>
+    <p className="text-slate-500 text-sm mt-1">Este documento é assinado em ordem. Antes de você, falta: <b>{antes.map(s=>s.nome).join(", ")}</b>. Você será avisado quando for a sua vez.</p></div>);
+  const passos=[["doc","Documento"],["id","Identificação"],["assinar","Assinatura"]]; const at=passos.findIndex(p=>p[0]===(etapa==="enviando"?"assinar":etapa));
+  return casca(<>
+    <div className="text-xs font-bold uppercase tracking-wide text-free-600">Assinatura eletrônica</div>
+    <h2 className="text-xl font-extrabold text-slate-900 mt-1">Olá, {String(eu.nome||"").split(" ")[0]}!</h2>
+    <p className="text-sm text-slate-500">{env.documento}{eu.papel?" · você assina como "+eu.papel:""}</p>
+    <div className="flex gap-2 my-4">{passos.map(([k,l],i)=><div key={k} className="flex-1"><div className={cx("h-1.5 rounded-full", at>=i?"grad-brand":"bg-slate-200")}/><div className={cx("text-[11px] mt-1", at>=i?"text-brand-700 font-semibold":"text-slate-400")}>{l}</div></div>)}</div>
+    {etapa==="doc" && <>
+      <div className="rounded-2xl border border-slate-200 bg-slate-100 max-h-[60vh] overflow-y-auto p-2 space-y-2" aria-label="Documento">
+        {erroDoc ? <div className="p-4 text-center"><p className="text-sm text-rose-600">{erroDoc}</p><Btn variant="soft" className="mt-3" onClick={abrirOriginal}>Abrir documento</Btn></div> : !paginas ? <div className="py-16 text-center text-sm text-slate-400"><div className="w-8 h-8 mx-auto mb-2 rounded-full border-2 border-slate-200 border-t-brand-600 animate-spin"/>Carregando o documento…</div>
+          : paginas.map((src,i)=><img key={i} src={src} alt={"Página "+(i+1)} className="w-full bg-white shadow-sm rounded"/>)}
+      </div>
+      <Btn className="w-full mt-4" size="lg" icon={I.arrow} disabled={!paginas&&!abriuDoc} onClick={()=>{ pegarProvas(); setEtapa("id"); }}>Li o documento — continuar</Btn>
+    </>}
+    {etapa==="id" && <>
+      <Field label="Seu CPF"><Input inputMode="numeric" value={cpf} onChange={e=>setCpf(e.target.value)} placeholder="000.000.000-00" aria-label="CPF"/></Field>
+      {cpf && !cpfValido(cpf) && <p className="text-xs text-rose-500 mt-1">CPF inválido.</p>}
+      {cpfValido(cpf) && !cpfConfere && <p className="text-xs text-rose-500 mt-1">Este CPF não confere com o cadastro deste assinante.</p>}
+      <div className="mt-4 p-3 rounded-2xl border border-slate-200 flex items-center gap-3">
+        {selfie ? <img src={selfie} className="w-16 h-16 rounded-xl object-cover" alt="Selfie"/> : <div className="w-16 h-16 rounded-xl bg-slate-100 grid place-items-center text-slate-400"><Icon d={I.camera}/></div>}
+        <div className="flex-1"><div className="text-sm font-semibold text-slate-800">Selfie de confirmação</div><div className="text-xs text-slate-500">Tire uma foto do seu rosto agora. Ela fica registrada como prova da assinatura.</div></div>
+        <label className="cursor-pointer"><span className="inline-flex items-center gap-1 text-xs font-semibold text-white grad-brand px-3 py-2 rounded-lg"><Icon d={I.camera} className="w-3.5 h-3.5"/>{selfie?"Refazer":"Tirar selfie"}</span>
+          <input type="file" accept="image/*" capture="user" className="hidden" onChange={async e=>{ const f=e.target.files&&e.target.files[0]; e.target.value=""; if(!f) return; try{ setSelfie(await fotoDeArquivo(f,360,0.6)); }catch(err){ setErro("Selfie: "+err.message); } }}/></label>
+      </div>
+      {erro && <p className="text-sm text-rose-500 mt-2">{erro}</p>}
+      <p className="text-[11px] text-slate-400 mt-3">Também registramos data e hora, IP, aparelho e — se você permitir — a localização, como prova da assinatura.</p>
+      <div className="flex gap-2 mt-4"><Btn variant="ghost" onClick={()=>setEtapa("doc")}>Voltar</Btn><Btn className="flex-1" size="lg" icon={I.arrow} disabled={!cpfConfere||!selfie} onClick={()=>setEtapa("assinar")}>Continuar</Btn></div>
+    </>}
+    {(etapa==="assinar"||etapa==="enviando") && <>
+      <label className={cx("flex items-start gap-3 p-4 rounded-2xl border-2 cursor-pointer transition", aceite?"border-brand-400 bg-brand-50/50":"border-slate-200")}>
+        <input type="checkbox" checked={aceite} onChange={e=>setAceite(e.target.checked)} className="mt-0.5 w-5 h-5 accent-green-700 shrink-0"/>
+        <span className="text-sm text-slate-700"><b>Li o documento e concordo em assiná-lo eletronicamente.</b> Reconheço esta assinatura como válida e eficaz (MP 2.200-2/2001, art. 10, § 2º, e Lei 14.063/2020).</span>
+      </label>
+      <div className="mt-4"><div className="text-xs font-bold text-slate-400 uppercase mb-1.5">Sua assinatura — {eu.nome}</div><AssinaturaPad onChange={setAss}/></div>
+      {erro && <p className="text-sm text-rose-500 mt-2">{erro}</p>}
+      <div className="flex gap-2 mt-4"><Btn variant="ghost" onClick={()=>setEtapa("id")}>Voltar</Btn>
+        <Btn className="flex-1" size="lg" icon={etapa==="enviando"?null:I.sign} disabled={!aceite||!ass||etapa==="enviando"} onClick={assinar}>{etapa==="enviando"?"Assinando…":"Assinar documento"}</Btn></div>
+    </>}
+  </>);
+}
+/* ---------- Painel: acompanhar envelope e avisar o próximo ---------- */
+function EnvelopeWilamiModal({envId,onClose}){
+  const toast=useContext(ToastCtx);
+  const [env,setEnv]=useState(null);
+  useEffect(()=>{ try{ return nCol("assinaturas").doc(envId).onSnapshot(s=>setEnv(s.exists?{...s.data(),id:envId}:null),()=>{}); }catch(e){} },[envId]);
+  const prox=env&&proximoAssinante(env);
+  const cancelar=async()=>{ if(!confirm("Cancelar esta solicitação de assinatura? Os links deixam de funcionar.")) return;
+    await nCol("assinaturas").doc(envId).set({status:"cancelado"},{merge:true}); await arqAtualizar(env.arquivo.id,{assinatura:null}).catch(()=>{}); toast("Solicitação cancelada"); onClose(); };
+  return <Modal open onClose={onClose} wide>
+    <div className="p-6">
+      <div className="flex items-start justify-between mb-3"><div><h3 className="text-lg font-bold text-slate-900">Assinatura Wilami</h3><p className="text-sm text-slate-500 break-all">{env?env.documento:"…"}</p></div><button onClick={onClose} className="text-slate-400 hover:text-slate-600"><Icon d={I.x}/></button></div>
+      {!env ? <div className="py-8 text-center text-sm text-slate-400">Carregando…</div> : <>
+        <div className="space-y-2">{[...env.signatarios].sort((a,b)=>(a.ordem||1)-(b.ordem||1)).map(s=>{ const vez=prox&&prox.token===s.token;
+          return <div key={s.token} className={cx("p-3 rounded-xl border flex flex-wrap items-center gap-2", s.status==="assinado"?"border-emerald-200 bg-emerald-50/40":vez?"border-amber-300 bg-amber-50/40":"border-slate-200")}>
+            <span className="w-7 h-7 rounded-full bg-white border border-slate-200 grid place-items-center text-xs font-bold text-slate-600">{s.ordem}º</span>
+            <div className="flex-1 min-w-[150px]"><div className="text-sm font-semibold text-slate-800">{s.nome}</div><div className="text-xs text-slate-400">{s.papel}{s.email?" · "+s.email:""}{s.tel?" · "+s.tel:""}</div></div>
+            {s.status==="assinado" ? <Badge tone="green"><Icon d={I.check} className="w-3 h-3"/>Assinou {new Date(s.assinadoEm).toLocaleString("pt-BR")}</Badge>
+              : <>{vez ? <Badge tone="amber">Vez dele(a)</Badge> : <Badge>Aguardando</Badge>}
+                {s.tel && <a href={whatsAssinante(env,s)} target="_blank" rel="noopener" className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold">WhatsApp</a>}
+                {s.email && <a href={emailAssinante(env,s)} className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-200 text-slate-700 text-xs font-semibold">E-mail</a>}
+                <button onClick={()=>{ copyText(msgAssinatura(env,s)); toast("Mensagem com o link copiada"); }} className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-200 text-slate-700 text-xs font-semibold">Copiar link</button></>}
+          </div>; })}</div>
+        <p className="text-xs text-slate-400 mt-3">A assinatura segue a ordem. Cada um recebe o link na sua vez; quem assina pode avisar o próximo direto pela tela final. Hash SHA-256 do documento: <code className="break-all">{env.hash}</code></p>
+        {env.status==="concluido" ? <div className="mt-3 p-3 rounded-xl bg-emerald-50 text-emerald-700 text-sm">Todos assinaram. A via final (com o manifesto de assinaturas) está na pasta.</div>
+          : <Btn variant="ghost" size="sm" className="mt-3 text-rose-600" icon={I.x} onClick={cancelar}>Cancelar solicitação</Btn>}
+      </>}
+    </div>
+  </Modal>;
 }
 
 /* ============================ CONVITES DE CADASTRO (link + leitura automática dos documentos) ============================ */
@@ -6679,7 +6899,7 @@ function Shell({ onLogout }) {
 // Roteamento por hash para os LINKS de cadastro/ponto (CLT e Freelancer).
 // Ex.: abrir  ...wilami-ponto-app.html#ponto-clt  já abre o quiosque CLT (público).
 function usePontoHash() {
-  const read=()=>{ const h=(window.location.hash||"").replace("#",""); return h==="ponto-clt"?"clt": h==="ponto-free"?"free": h==="meus-docs"?"docs": h.indexOf("convite/")===0?"convite": h.indexOf("termo/")===0?"termo": null; };
+  const read=()=>{ const h=(window.location.hash||"").replace("#",""); return h==="ponto-clt"?"clt": h==="ponto-free"?"free": h==="meus-docs"?"docs": h.indexOf("convite/")===0?"convite": h.indexOf("termo/")===0?"termo": h.indexOf("assinar/")===0?"assinar": null; };
   const [mode,setMode]=useState(read());
   useEffect(()=>{ const on=()=>setMode(read()); window.addEventListener("hashchange",on); return ()=>window.removeEventListener("hashchange",on); },[]);
   return [mode, ()=>{ if(window.location.hash){ window.history.replaceState(null,"",window.location.pathname+window.location.search); } setMode(null); }];
@@ -6722,6 +6942,7 @@ function App() {
   return <StoreProvider>
     {pontoMode==="convite" ? <ConviteCadastro onClose={fecharPonto}/>
      : pontoMode==="termo" ? <TermoAssinatura onClose={fecharPonto}/>
+     : pontoMode==="assinar" ? <AssinarDocumento onClose={fecharPonto}/>
      : pontoMode==="docs" ? <PortalColab onClose={fecharPonto}/>
      : pontoMode ? <PontoKiosk mode={pontoMode} onClose={fecharPonto}/>
      : !authReady ? <div className="min-h-screen grad-ink grad-hero grid place-items-center text-white"><div className="text-center"><div className="w-10 h-10 mx-auto rounded-full border-2 border-white/30 border-t-white animate-spin mb-3"/><Logo light/></div></div>
