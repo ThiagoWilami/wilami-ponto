@@ -38,7 +38,9 @@ async function tokenDocusign() {
     iss: process.env.DOCUSIGN_INTEGRATION_KEY, sub: process.env.DOCUSIGN_USER_ID, aud: AUTH_HOST,
     iat: agora, exp: agora + 3600, scope: "signature impersonation",
   }));
-  const assinatura = crypto.createSign("RSA-SHA256").update(header + "." + corpo).sign(chavePrivada());
+  let assinatura;
+  try { assinatura = crypto.createSign("RSA-SHA256").update(header + "." + corpo).sign(chavePrivada()); }
+  catch (e) { const err = new Error("A chave privada (DOCUSIGN_PRIVATE_KEY) está inválida. Cole a chave inteira, incluindo as linhas -----BEGIN RSA PRIVATE KEY----- e -----END RSA PRIVATE KEY-----."); err.status = 500; throw err; }
   const r = await fetch(`https://${AUTH_HOST}/oauth/token`, {
     method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: header + "." + corpo + "." + b64url(assinatura) }).toString(),
@@ -82,7 +84,10 @@ module.exports = async function handler(req, res) {
   try {
     await verificarUsuario(req);
     if (!configurado()) {
-      return res.status(501).json({ erro: "DocuSign ainda não configurado no servidor (variáveis de ambiente na Vercel).", configurado: false });
+      // Só os NOMES das variáveis que faltam (nunca os valores), para facilitar a configuração.
+      const faltando = ["DOCUSIGN_INTEGRATION_KEY", "DOCUSIGN_USER_ID", "DOCUSIGN_PRIVATE_KEY"].filter((k) => !process.env[k]);
+      return res.status(501).json({ erro: "DocuSign ainda não configurado no servidor (variáveis de ambiente na Vercel).", configurado: false, faltando,
+        projeto: process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL || "" });
     }
 
     if (acao === "status") {
