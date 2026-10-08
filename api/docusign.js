@@ -100,11 +100,13 @@ module.exports = async function handler(req, res) {
       }
       const envelope = {
         emailSubject: String(b.assunto || "Documento para assinatura").slice(0, 100),
-        emailBlurb: String(b.mensagem || "").slice(0, 2000),
+        emailBlurb: String(b.mensagem || "Olá! Segue o documento para assinatura eletrônica. Você não precisa ter conta no DocuSign: clique em \"Revisar documento\" neste e-mail. Se o DocuSign pedir cadastro, crie sua conta gratuita pelo próprio link deste e-mail.").slice(0, 2000),
         documents: [{ documentBase64: b.base64, name: String(b.nome || "documento.pdf").slice(0, 100), fileExtension: "pdf", documentId: "1" }],
         recipients: {
           signers: sigs.map((s, i) => ({
-            email: String(s.email).trim(), name: String(s.nome).trim(), recipientId: String(i + 1), routingOrder: "1",
+            email: String(s.email).trim(), name: String(s.nome).trim(), recipientId: String(i + 1),
+            // Ordem de assinatura: quem tem "ordem" menor assina antes (ex.: 1 empresa, 2 testemunha, 3 colaborador)
+            routingOrder: String(Math.min(99, Math.max(1, parseInt(s.ordem, 10) || 1))),
             tabs: {
               signHereTabs: [{ anchorString: `/assinatura${i + 1}/`, anchorUnits: "pixels", anchorXOffset: "0", anchorYOffset: "-6", anchorIgnoreIfNotPresent: "true" }],
               dateSignedTabs: [{ anchorString: `/assinatura${i + 1}/`, anchorUnits: "pixels", anchorXOffset: "300", anchorYOffset: "0", anchorIgnoreIfNotPresent: "true" }],
