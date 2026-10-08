@@ -5009,12 +5009,16 @@ function ConfigAssinatura(){
         <Btn size="sm" variant="ghost" icon={I.refresh} disabled={testando} onClick={testar}>{testando?"Testando…":"Testar conexão com o DocuSign"}</Btn>
         {teste && (teste.ok
           ? <div className="mt-2 p-3 rounded-xl bg-emerald-50 text-emerald-700 text-sm">Conectado ✓ {teste.conta?("· conta "+teste.conta):""} {teste.ambiente?("· "+teste.ambiente):""}</div>
-          : <div className="mt-2 p-3 rounded-xl bg-rose-50 text-rose-700 text-sm">{teste.erro}{teste.info&&teste.info.consentUrl&&<> — <a className="underline font-semibold" href={teste.info.consentUrl} target="_blank" rel="noreferrer">autorizar o app no DocuSign</a></>}</div>)}
+          : <div className="mt-2 p-3 rounded-xl bg-rose-50 text-rose-700 text-sm">{teste.erro}{teste.info&&teste.info.consentUrl&&<> — <a className="underline font-semibold" href={teste.info.consentUrl} target="_blank" rel="noreferrer">autorizar o app no DocuSign</a></>}
+            {teste.info&&Array.isArray(teste.info.faltando)&&teste.info.faltando.length>0 && <div className="mt-2 text-xs text-rose-700/90">
+              <div className="font-semibold">O servidor não encontrou estas variáveis:</div>
+              <ul className="list-disc pl-5 mt-1">{teste.info.faltando.map(k=><li key={k}><code>{k}</code></li>)}</ul>
+              <div className="mt-1">Crie-as no projeto da Vercel que publica <b>{location.host}</b>{teste.info.projeto?<> (projeto <b>{String(teste.info.projeto).split(".")[0]}</b>)</>:null} e depois faça <b>Redeploy</b>.</div></div>}</div>)}
         <details className="mt-3 text-sm text-slate-600"><summary className="cursor-pointer font-semibold text-slate-700">Como configurar (uma vez)</summary>
           <ol className="list-decimal pl-5 mt-2 space-y-1 text-xs">
             <li>No DocuSign (Admin → Apps and Keys), crie um app e copie o <b>Integration Key</b>, o <b>User ID</b> e o <b>API Account ID</b>.</li>
             <li>Em “Authentication”, gere um par de chaves RSA e copie a <b>chave privada</b>.</li>
-            <li>Na Vercel (projeto wilami-ponto → Settings → Environment Variables), crie: <code>DOCUSIGN_INTEGRATION_KEY</code>, <code>DOCUSIGN_USER_ID</code>, <code>DOCUSIGN_ACCOUNT_ID</code>, <code>DOCUSIGN_PRIVATE_KEY</code> e <code>DOCUSIGN_ENV</code> (<code>demo</code> para testes ou <code>production</code>). Faça um novo deploy.</li>
+            <li>Na Vercel, abra o projeto que publica <b>{location.host}</b> (o ligado ao GitHub é o <b>wilami-ponto-1</b>) → Settings → Environment Variables, e crie: <code>DOCUSIGN_INTEGRATION_KEY</code>, <code>DOCUSIGN_USER_ID</code>, <code>DOCUSIGN_ACCOUNT_ID</code>, <code>DOCUSIGN_PRIVATE_KEY</code> e <code>DOCUSIGN_ENV</code> (<code>demo</code> para testes ou <code>production</code>) e <code>DOCUSIGN_REDIRECT_URI</code> = <code>https://www.docusign.com</code>. Marque os ambientes <b>Production</b> e <b>Preview</b>. Depois vá em Deployments → ⋯ → <b>Redeploy</b> (sem isso as variáveis não valem).</li>
             <li>Clique em “Testar conexão”. Na primeira vez, o DocuSign pede para autorizar o app — use o link que aparecer.</li>
           </ol>
         </details>
