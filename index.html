@@ -624,7 +624,7 @@ const escalaInicial = () => {
 // Esses documentos não têm o campo "ts" (é guardado como "_ts"), então NÃO aparecem na lista de
 // ajustes de ponto, que é ordenada por "ts".
 const COL_HOSPEDEIRA="ajustes";
-const COL_VIRTUAL={ arquivos:["arq_","arquivo"], arquivos_partes:["arqp_","arquivo_parte"], acessosColab:["pin_","pin"], convites:["conv_","convite"], termos:["ter_","termo_pedido"] };
+const COL_VIRTUAL={ arquivos:["arq_","arquivo"], arquivos_partes:["arqp_","arquivo_parte"], acessosColab:["pin_","pin"], convites:["conv_","convite"], termos:["ter_","termo_pedido"], entregas:["ent_","entrega"] };
 const _vEntrada=(nome,data)=>{ const o={...data, _t:COL_VIRTUAL[nome][1]}; if("ts" in o){ o._ts=o.ts; delete o.ts; } return o; };
 const _vSaida=(data)=>{ const o={...(data||{})}; if("_ts" in o){ o.ts=o._ts; delete o._ts; } delete o._t; return o; };
 function nCol(nome){
@@ -1077,7 +1077,8 @@ function StoreProvider({children}) {
   const cargoInfo=(nome)=> cargosDesc.find(c=>c.nome===nome) || null;     // { "clt-1": ["Minha pasta", …] }
   const [modeloContratoPJ,setModeloContratoPJ]=usePersist("modeloContratoPJ",null);   // null = modelo padrão
   const [empresaContratante,setEmpresaContratante]=usePersist("empresaContratante",{});
-  const [termoImagemCfg,setTermoImagemCfg]=usePersist("termoImagemCfg",null);         // null = termo padrão
+  const [termoImagemCfg,setTermoImagemCfg]=usePersist("termoImagemCfg",null);
+  const [catalogoEntregas,setCatalogoEntregas]=usePersist("catalogoEntregas",null);   // null = itens/valores padrão         // null = termo padrão
   const [assinaturaCfg,setAssinaturaCfg]=usePersist("assinaturaCfg",{signatarios:[]}); // signatários padrão da empresa
   const logado = !!authUser || !window.__WPAUTH;
   const [arquivos]=useArquivosMeta(logado);                            // metadados dos arquivos (só no painel)
@@ -1293,7 +1294,7 @@ function StoreProvider({children}) {
     clientes,clienteAtivo,tenantAtual,criarCliente,trocarCliente,
     acesso,donos,setDonos,acessos,acessosOps,
     marca,setMarca, pjs:(casaRestrita!=null?pjsTodos.filter(x=>x.unidade==null||x.unidade==="todas"||_mesmaCasa(x.unidade)):pjsTodos), salvarPj,excluirPj, pagamentosPJ,addPagamentoPJ,removePagamentoPJ,
-    pastasExtra,criarPasta,removerPasta, cargosDesc,salvarCargoDesc,excluirCargoDesc,cargosLista,cargoInfo, assinaturaCfg,setAssinaturaCfg, arquivos, acessosColab, aguardandoInicio, modeloContratoPJ,setModeloContratoPJ, empresaContratante,setEmpresaContratante, termoImagemCfg,setTermoImagemCfg };
+    pastasExtra,criarPasta,removerPasta, cargosDesc,salvarCargoDesc,excluirCargoDesc,cargosLista,cargoInfo, assinaturaCfg,setAssinaturaCfg, arquivos, acessosColab, aguardandoInicio, modeloContratoPJ,setModeloContratoPJ, empresaContratante,setEmpresaContratante, termoImagemCfg,setTermoImagemCfg, catalogoEntregas,setCatalogoEntregas };
   return <StoreCtx.Provider value={value}>{children}</StoreCtx.Provider>;
 }
 const pessoaNome = (pid,tipo,clts,freelas,pjs)=> (tipo==="clt"?clts:tipo==="pj"?(pjs||[]):freelas).find(p=>String(p.id)===String(pid))?.nome || "—";
@@ -4334,12 +4335,12 @@ function AssinaturaModal({arq, pessoa, tipo, onClose}){
   const { assinaturaCfg } = useStore();
   const toast=useContext(ToastCtx);
   const nomePessoa = tipo==="pj" ? (pessoa.responsavel||pessoa.nome) : pessoa.nome;
-  const [sigs,setSigs]=useState(()=>[
-    { nome:nomePessoa||"", email:pessoa.email||"", papel:tipo==="pj"?"Contratada ("+(pessoa.nome||"PJ")+")":"Colaborador", on:true },
-    ...((assinaturaCfg&&assinaturaCfg.signatarios)||[]).map(s=>({...s, on:true})),
-  ]);
+  // Ordem: signatários da empresa na ordem configurada (ex.: 1 Massimo, 2 Thiago/testemunha) e o colaborador/PJ por último.
+  const [sigs,setSigs]=useState(()=>{ const emp=((assinaturaCfg&&assinaturaCfg.signatarios)||[]).map((s,i)=>({...s, ordem:Number(s.ordem)||i+1, on:true}));
+    const ult=emp.reduce((m,s)=>Math.max(m,s.ordem),0)+1;
+    return [...emp, { nome:nomePessoa||"", email:pessoa.email||"", papel:tipo==="pj"?"Contratada ("+(pessoa.nome||"PJ")+")":"Colaborador", ordem:ult, on:true }].sort((a,b)=>a.ordem-b.ordem); });
   const [assunto,setAssunto]=useState("Assinatura: "+String(arq.nome||"").replace(/\.pdf$/i,""));
-  const [mensagem,setMensagem]=useState("Olá! Segue o documento para assinatura eletrônica. Qualquer dúvida, estamos à disposição.");
+  const [mensagem,setMensagem]=useState("Olá! Segue o documento para assinatura eletrônica. Você NÃO precisa ter conta no DocuSign: basta clicar em \"Revisar documento\" neste e-mail e assinar. Se o DocuSign pedir cadastro, crie sua conta gratuita pelo próprio link deste e-mail. Qualquer dúvida, estamos à disposição.");
   const [pagina,setPagina]=useState(true);
   const [status,setStatus]=useState(""); // "" | enviando | erro
   const [erro,setErro]=useState(null);
@@ -4352,7 +4353,7 @@ function AssinaturaModal({arq, pessoa, tipo, onClose}){
     setStatus("enviando"); setErro(null);
     try{
       let du=await arqConteudo(arq);
-      const lista=ativos.map(s=>({nome:s.nome.trim(), email:s.email.trim().toLowerCase(), papel:s.papel||""}));
+      const lista=[...ativos].sort((a,b)=>(Number(a.ordem)||1)-(Number(b.ordem)||1)).map(s=>({nome:s.nome.trim(), email:s.email.trim().toLowerCase(), papel:s.papel||"", ordem:Number(s.ordem)||1}));
       if(pagina) du=await pdfComPaginaAssinaturas(du, arq.nome, lista);
       const j=await docusignApi("enviar",{ body:{ nome:arq.nome, base64:du.split(",")[1], signatarios:lista, assunto, mensagem } });
       await arqAtualizar(arq.id,{ assinatura:{ provedor:"docusign", envelopeId:j.envelopeId, status:j.status||"sent", enviadoEm:Date.now(), signatarios:lista.map(s=>({...s,status:"sent"})) } });
@@ -4372,16 +4373,17 @@ function AssinaturaModal({arq, pessoa, tipo, onClose}){
           <p className="text-sm text-slate-500 break-all">{arq.nome}</p></div>
         <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><Icon d={I.x}/></button>
       </div>
-      <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Signatários (todos assinam o mesmo documento)</div>
+      <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Signatários — assinam na ordem indicada (1º, 2º, 3º…)</div>
       <div className="space-y-2">
-        {sigs.map((s,i)=><div key={i} className={cx("grid sm:grid-cols-[auto_1fr_1fr_auto] gap-2 items-center p-2.5 rounded-xl border", s.on?"border-slate-200":"border-slate-100 opacity-60")}>
+        {sigs.map((s,i)=><div key={i} className={cx("grid sm:grid-cols-[auto_auto_1fr_1fr_auto] gap-2 items-center p-2.5 rounded-xl border", s.on?"border-slate-200":"border-slate-100 opacity-60")}>
           <input type="checkbox" checked={s.on} onChange={e=>setSig(i,"on",e.target.checked)} className="w-4 h-4 accent-green-700"/>
+          <label className="flex items-center gap-1 text-xs text-slate-500" title="Ordem de assinatura">Ordem<input type="number" min="1" max="9" value={s.ordem||1} onChange={e=>setSig(i,"ordem",Number(e.target.value)||1)} className="w-12 px-2 py-1.5 rounded-lg border border-slate-200 text-sm text-center" aria-label={"Ordem de "+(s.nome||"signatário")}/></label>
           <Input value={s.nome} onChange={e=>setSig(i,"nome",e.target.value)} placeholder="Nome completo"/>
           <Input value={s.email} onChange={e=>setSig(i,"email",e.target.value)} placeholder="e-mail" className={s.on&&s.email&&!emailOk(s.email)?"!border-rose-300":""}/>
           <span className="text-xs text-slate-400 sm:w-36 truncate" title={s.papel}>{s.papel||"—"}</span>
         </div>)}
       </div>
-      <button onClick={()=>setSigs(a=>[...a,{nome:"",email:"",papel:"Testemunha",on:true}])} className="mt-2 text-sm font-semibold text-brand-700 hover:underline flex items-center gap-1"><Icon d={I.plus} className="w-4 h-4"/>Adicionar signatário</button>
+      <button onClick={()=>setSigs(a=>[...a,{nome:"",email:"",papel:"Testemunha",ordem:a.reduce((m,s)=>Math.max(m,Number(s.ordem)||1),0)+1,on:true}])} className="mt-2 text-sm font-semibold text-brand-700 hover:underline flex items-center gap-1"><Icon d={I.plus} className="w-4 h-4"/>Adicionar signatário</button>
       {invalidos.length>0 && <p className="text-xs text-rose-500 mt-2">Preencha nome e e-mail válido de todos os signatários marcados.</p>}
       <div className="grid gap-3 mt-4">
         <Field label="Assunto do e-mail"><Input value={assunto} onChange={e=>setAssunto(e.target.value)}/></Field>
@@ -4935,10 +4937,10 @@ function ConfigAssinatura(){
   const { assinaturaCfg, setAssinaturaCfg } = useStore();
   const toast=useContext(ToastCtx);
   const sigs=(assinaturaCfg&&assinaturaCfg.signatarios)||[];
-  const [n,setN]=useState({nome:"",email:"",papel:"Representante da empresa"});
+  const [n,setN]=useState({nome:"",email:"",papel:"Representante da empresa",ordem:""});
   const [teste,setTeste]=useState(null); const [testando,setTestando]=useState(false);
   const testar=async()=>{ setTestando(true); setTeste(null); try{ setTeste({ok:true,...(await docusignApi("status"))}); }catch(e){ setTeste({ok:false,erro:e.message,info:e.info,status:e.status}); } setTestando(false); };
-  const add=()=>{ if(!n.nome.trim()||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(n.email)) { toast("Informe nome e e-mail válidos"); return; } setAssinaturaCfg({...(assinaturaCfg||{}),signatarios:[...sigs,{nome:n.nome.trim(),email:n.email.trim().toLowerCase(),papel:n.papel.trim()}]}); setN({nome:"",email:"",papel:"Representante da empresa"}); toast("Signatário adicionado"); };
+  const add=()=>{ if(!n.nome.trim()||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(n.email)) { toast("Informe nome e e-mail válidos"); return; } setAssinaturaCfg({...(assinaturaCfg||{}),signatarios:[...sigs,{nome:n.nome.trim(),email:n.email.trim().toLowerCase(),papel:n.papel.trim(),ordem:Number(n.ordem)||sigs.length+1}].sort((a,b)=>(a.ordem||9)-(b.ordem||9))}); setN({nome:"",email:"",papel:"Representante da empresa",ordem:""}); toast("Signatário adicionado"); };
   return <Card className="p-5 lg:col-span-2">
     <h3 className="font-bold text-slate-900 mb-1 flex items-center gap-2"><Icon d={I.sign} className="w-4 h-4 text-brand-600"/>Assinatura eletrônica (DocuSign)</h3>
     <p className="text-sm text-slate-500 mb-4">Contratos enviados pelas pastas vão para o colaborador/prestador <b>e</b> para os signatários da empresa abaixo — todos assinam o mesmo documento.</p>
@@ -4948,11 +4950,12 @@ function ConfigAssinatura(){
         <div className="space-y-2 mb-3">
           {sigs.length===0 && <p className="text-sm text-slate-400 py-2">Nenhum — adicione quem assina pela empresa (sócios, diretor, testemunhas).</p>}
           {sigs.map((s,i)=><div key={i} className="flex items-center gap-2 p-2.5 rounded-xl border border-slate-200">
-            <Avatar name={s.nome} size="w-8 h-8"/><div className="flex-1 min-w-0"><div className="text-sm font-semibold text-slate-800 truncate">{s.nome}</div><div className="text-xs text-slate-400 truncate">{s.email} · {s.papel}</div></div>
+            <Avatar name={s.nome} size="w-8 h-8"/><div className="flex-1 min-w-0"><div className="text-sm font-semibold text-slate-800 truncate">{s.nome}</div><div className="text-xs text-slate-400 truncate">{s.ordem||i+1}º a assinar · {s.email} · {s.papel}</div></div>
             <button onClick={()=>setAssinaturaCfg({...(assinaturaCfg||{}),signatarios:sigs.filter((_,j)=>j!==i)})} className="w-8 h-8 rounded-lg grid place-items-center text-slate-400 hover:text-rose-500 hover:bg-rose-50"><Icon d={I.trash} className="w-4 h-4"/></button>
           </div>)}
         </div>
-        <div className="grid sm:grid-cols-3 gap-2"><Input placeholder="Nome" value={n.nome} onChange={e=>setN({...n,nome:e.target.value})}/><Input placeholder="E-mail" value={n.email} onChange={e=>setN({...n,email:e.target.value})}/><Input placeholder="Papel" value={n.papel} onChange={e=>setN({...n,papel:e.target.value})}/></div>
+        <div className="grid sm:grid-cols-[1fr_1fr_1fr_80px] gap-2"><Input placeholder="Nome" value={n.nome} onChange={e=>setN({...n,nome:e.target.value})}/><Input placeholder="E-mail" value={n.email} onChange={e=>setN({...n,email:e.target.value})}/><Input placeholder="Papel" value={n.papel} onChange={e=>setN({...n,papel:e.target.value})}/><Input type="number" min="1" placeholder="Ordem" value={n.ordem} onChange={e=>setN({...n,ordem:e.target.value})} aria-label="Ordem de assinatura"/></div>
+        <p className="text-[11px] text-slate-400 mt-1">Ordem: 1 assina primeiro. O colaborador/PJ entra automaticamente depois dos signatários da empresa.</p>
         <Btn size="sm" variant="soft" icon={I.plus} className="mt-2" onClick={add}>Adicionar signatário</Btn>
       </div>
       <div>
@@ -5130,7 +5133,7 @@ const CLAUSULAS_PJ_PADRAO = [
   { id:"foro", titulo:"DO FORO", texto:"{{N}}.1. Fica eleito o Foro da Comarca de {{FORO}}, com renúncia a qualquer outro, por mais privilegiado que seja, para dirimir eventuais controvérsias oriundas deste contrato." },
 ];
 // Empresa contratante padrão (cartão CNPJ). Campos salvos no painel têm prioridade; os vazios usam estes valores.
-const EMPRESA_CONTRATANTE_PADRAO = { razao:"MASSIMO CASILLI ASSESSORIA EMPRESARIAL LTDA", cnpj:"08.815.275/0001-95",
+const EMPRESA_CONTRATANTE_PADRAO = { razao:"MASSIMO CASILLI ASSESSORIA EMPRESARIAL LTDA", cnpj:"08.815.275/0001-95", testemunha1:"Thiago Wilami Pereira Silva", testemunha2:"",
   endereco:"Rua Cristalino Rolim de Freitas, nº 121, Sala 04, Jurubatuba, São Paulo/SP, CEP 04696-310", cidade:"São Paulo/SP", foro:"São Paulo/SP", representante:"Massimo Casilli", avisoPrevio:30 };
 const empresaEfetiva=(e)=>{ const o={...EMPRESA_CONTRATANTE_PADRAO}; Object.entries(e||{}).forEach(([k,v])=>{ if(v!==""&&v!=null) o[k]=v; }); return o; };
 const MODELO_PJ_PADRAO = { titulo:"CONTRATO DE PRESTAÇÃO DE SERVIÇOS DE {{OBJETO}}", intro:"As partes acima qualificadas resolvem celebrar o presente CONTRATO DE PRESTAÇÃO DE SERVIÇOS DE {{OBJETO}}, que se regerá pelas cláusulas e condições abaixo:", clausulas:CLAUSULAS_PJ_PADRAO };
@@ -5191,7 +5194,7 @@ function montarContratoPJ({modelo, empresa, pj, cargo, extras}){
   blocos.push({t:"local",x:campos.CIDADE+", "+campos.DATA+"."});
   blocos.push({t:"assin",x:"CONTRATANTE",n:(empresa.razao||"").toUpperCase(),d:empresa.cnpj?"CNPJ: "+empresa.cnpj:"",r:empresa.representante||"Representante Legal"});
   blocos.push({t:"assin",x:"CONTRATADA",n:(pj.nome||"").toUpperCase(),d:[pj.cnpj&&"CNPJ: "+pj.cnpj, pj.cpf&&"CPF: "+pj.cpf].filter(Boolean).join(" · "),r:resp||pj.nome||""});
-  blocos.push({t:"testemunhas"});
+  blocos.push({t:"testemunhas", t1:empresa.testemunha1||"", t2:empresa.testemunha2||""});
   return blocos;
 }
 async function pdfContratoPJ(blocos){
@@ -5218,7 +5221,7 @@ async function pdfContratoPJ(blocos){
     else if(b.t==="assin"){ if(y<150) nova(); y-=26; pg.drawLine({start:{x:X,y},end:{x:X+280,y},thickness:0.7}); y-=14;
       escrever(b.x,{f:bold,size:10.5}); if(b.n) escrever(b.n,{size:10.5}); if(b.d) escrever(b.d,{size:10}); if(b.r) escrever(b.r,{size:10}); y-=6; }
     else if(b.t==="testemunhas"){ if(y<170) nova(); y-=14; escrever("TESTEMUNHAS",{f:bold,size:10.5,gap:10});
-      ["1.","2."].forEach(n=>{ escrever(n+" Nome: ___________________________________",{size:10.5,gap:8}); escrever("CPF: ______________________   Assinatura: ______________________",{size:10.5,gap:14}); }); }
+      [["1.",b.t1],["2.",b.t2]].forEach(([n,nm])=>{ escrever(n+" Nome: "+(nm||"___________________________________"),{size:10.5,gap:8}); escrever("CPF: ______________________   Assinatura: ______________________",{size:10.5,gap:14}); }); }
   });
   return bytesParaDataUrl(await doc.save(),"application/pdf");
 }
@@ -5253,6 +5256,8 @@ function ModeloContratoPage(){
             <Field label="Cidade da assinatura"><Input value={emp.cidade} onChange={e=>setEmp({...emp,cidade:e.target.value})}/></Field>
             <Field label="Foro (comarca)"><Input value={emp.foro} onChange={e=>setEmp({...emp,foro:e.target.value})}/></Field>
             <Field label="Aviso prévio (dias)"><Input type="number" value={emp.avisoPrevio} onChange={e=>setEmp({...emp,avisoPrevio:Number(e.target.value)})}/></Field>
+            <Field label="Testemunha 1 (assina todos os contratos)"><Input value={emp.testemunha1||""} onChange={e=>setEmp({...emp,testemunha1:e.target.value})}/></Field>
+            <Field label="Testemunha 2 (opcional)"><Input value={emp.testemunha2||""} onChange={e=>setEmp({...emp,testemunha2:e.target.value})}/></Field>
           </div>
         </Card>
         <Card className="p-5">
@@ -5285,7 +5290,7 @@ function ModeloContratoPage(){
         <div className="space-y-1 text-xs mb-4">{CAMPOS_CONTRATO.map(([k,l])=><div key={k}><code className="text-brand-700">{"{{"+k+"}}"}</code> <span className="text-slate-500">— {l}</span></div>)}</div>
         <div className="text-xs font-bold text-slate-400 uppercase mb-2">Prévia (exemplo)</div>
         <div className="max-h-[50vh] overflow-y-auto text-[11px] leading-relaxed text-slate-700 bg-slate-50 rounded-xl p-3 font-serif">
-          {exemplo.map((b,i)=> b.t==="titulo"?<p key={i} className="font-bold text-center mb-2">{b.x}</p> : b.t==="clausula"?<p key={i} className="font-bold mt-2">{b.x}</p> : b.t==="subtitulo"?<p key={i} className="font-bold">{b.x}</p> : b.t==="item"?<p key={i} className="pl-3">{b.x}</p> : b.t==="assin"?<p key={i} className="mt-2">______________________<br/>{b.x} — {b.n}{b.r?<><br/>{b.r}</>:null}</p> : b.t==="testemunhas"?null : <p key={i} className="mb-1">{b.x}</p>)}
+          {exemplo.map((b,i)=> b.t==="titulo"?<p key={i} className="font-bold text-center mb-2">{b.x}</p> : b.t==="clausula"?<p key={i} className="font-bold mt-2">{b.x}</p> : b.t==="subtitulo"?<p key={i} className="font-bold">{b.x}</p> : b.t==="item"?<p key={i} className="pl-3">{b.x}</p> : b.t==="assin"?<p key={i} className="mt-2">______________________<br/>{b.x} — {b.n}{b.r?<><br/>{b.r}</>:null}</p> : b.t==="testemunhas"?<p key={i} className="mt-2"><b>TESTEMUNHAS:</b> 1. {b.t1||"________"} · 2. {b.t2||"________"}</p> : <p key={i} className="mb-1">{b.x}</p>)}
         </div>
       </Card>
     </div>
@@ -5330,7 +5335,7 @@ function GerarContratoModal({pj,onClose}){
       </div>
       {avisos.length>0 && <div className="mt-3 p-3 rounded-xl bg-amber-50 text-amber-800 text-sm space-y-0.5">{avisos.map((a,i)=><div key={i}>• {a}</div>)}</div>}
       <div className="mt-4 max-h-[45vh] overflow-y-auto rounded-xl border border-slate-200 bg-white p-5 text-[13px] leading-relaxed text-slate-800 font-serif">
-        {blocos.map((b,i)=> b.t==="titulo"?<p key={i} className="font-bold text-center mb-3">{b.x}</p> : b.t==="clausula"?<p key={i} className="font-bold mt-3">{b.x}</p> : b.t==="subtitulo"?<p key={i} className="font-bold mb-1">{b.x}</p> : b.t==="item"?<p key={i} className="pl-4">{b.x}</p> : b.t==="qual"?<p key={i} className="mb-2"><b>{b.x.split(":")[0]}:</b>{b.x.slice(b.x.indexOf(":")+1)}</p> : b.t==="assin"?<div key={i} className="mt-6"><div className="w-64 border-t border-slate-500 pt-1 font-bold">{b.x}</div><div>{b.n}</div><div className="text-xs text-slate-500">{b.d}</div>{b.r&&<div className="text-xs text-slate-600">{b.r}</div>}</div> : b.t==="testemunhas"?<p key={i} className="mt-6 font-bold">TESTEMUNHAS: 1. ______________ 2. ______________</p> : <p key={i} className={cx("mb-1", b.t==="local"&&"mt-5")}>{b.x}</p>)}
+        {blocos.map((b,i)=> b.t==="titulo"?<p key={i} className="font-bold text-center mb-3">{b.x}</p> : b.t==="clausula"?<p key={i} className="font-bold mt-3">{b.x}</p> : b.t==="subtitulo"?<p key={i} className="font-bold mb-1">{b.x}</p> : b.t==="item"?<p key={i} className="pl-4">{b.x}</p> : b.t==="qual"?<p key={i} className="mb-2"><b>{b.x.split(":")[0]}:</b>{b.x.slice(b.x.indexOf(":")+1)}</p> : b.t==="assin"?<div key={i} className="mt-6"><div className="w-64 border-t border-slate-500 pt-1 font-bold">{b.x}</div><div>{b.n}</div><div className="text-xs text-slate-500">{b.d}</div>{b.r&&<div className="text-xs text-slate-600">{b.r}</div>}</div> : b.t==="testemunhas"?<p key={i} className="mt-6"><b>TESTEMUNHAS:</b> 1. {b.t1||"______________"} · 2. {b.t2||"______________"}</p> : <p key={i} className={cx("mb-1", b.t==="local"&&"mt-5")}>{b.x}</p>)}
       </div>
       <div className="flex gap-2 mt-4"><Btn variant="ghost" onClick={onClose}>Cancelar</Btn><Btn className="flex-1" icon={gerando?null:I.doc} disabled={gerando} onClick={gerar}>{gerando?"Gerando…":"Gerar PDF e salvar na pasta do prestador"}</Btn></div>
     </div>
@@ -5477,7 +5482,7 @@ function TermosPage(){
   const [cfg,setCfg]=useState(()=>({grupo:"GRUPO SKY HALL", cidade:"São Paulo", titulo:TERMO_IMAGEM_PADRAO.titulo, texto:TERMO_IMAGEM_PADRAO.texto, ...(termoImagemCfg||{})}));
   const pessoas=[...clts.map(p=>({tipo:"clt",p})), ...freelas.map(p=>({tipo:"free",p})), ...pjs.map(p=>({tipo:"pj",p}))];
   const assinadoDe=(k)=> arquivos.find(a=>a.donoKey===k && a.categoria==="termo_imagem");
-  const pedidoDe=(k)=> pedidos.filter(x=>x.pessoaKey===k && x.status==="aberto").sort((a,b)=>(b.criadoEm||0)-(a.criadoEm||0))[0];
+  const pedidoDe=(k)=> pedidos.filter(x=>x.pessoaKey===k && x.status==="aberto" && (x.termoId||"imagem")==="imagem").sort((a,b)=>(b.criadoEm||0)-(a.criadoEm||0))[0];
   const linhas=pessoas.map(({tipo,p})=>{ const k=donoKeyDe(tipo,p.id); const a=assinadoDe(k); return {tipo,p,k,a,ped:!a&&pedidoDe(k)}; });
   const vis=linhas.filter(l=> filtro==="todos" || (filtro==="assinado"?!!l.a:!l.a));
   const gerar=async(l)=>{
@@ -5538,6 +5543,11 @@ function TermoAssinatura({onClose}){
   const [ped,setPed]=useState(undefined); const [enviando,setEnviando]=useState(false); const [feito,setFeito]=useState(false); const [erro,setErro]=useState("");
   useEffect(()=>{ if(!window.__WPDB||!token){ setPed(null); return; }
     nCol("termos").doc(token).get().then(s=>setPed(s.exists?s.data():null)).catch(()=>setPed(null)); },[token]);
+  const assinarEntregaLink=async(ass)=>{ setEnviando(true); setErro("");
+    try{ const ent={...ped.entrega, id:ped.entregaId}; const r=await assinarEntrega(ent, ass, (termoImagemCfg&&termoImagemCfg.cidade)||"São Paulo");
+      await nCol("termos").doc(token).set({status:"assinado", assinadoEm:r.em, arquivoId:r.arquivoId},{merge:true}).catch(()=>{}); setFeito(true); }
+    catch(e){ setErro("Não foi possível enviar agora. Verifique sua internet e tente de novo."); }
+    setEnviando(false); };
   const assinar=async(ass)=>{ setEnviando(true); setErro("");
     try{ const r=await salvarTermoAssinado({ cfg:termoImagemCfg, donoKey:ped.pessoaKey, donoTipo:ped.tipo, donoId:ped.pessoaKey.split("-").slice(1).join("-"), nome:ped.nome, cpf:ped.cpf, rg:ped.rg, cargo:ped.cargo, unidade:ped.unidade, assinatura:ass });
       await nCol("termos").doc(token).set({status:"assinado", assinadoEm:r.em, arquivoId:r.arquivoId},{merge:true}).catch(()=>{});
@@ -5553,11 +5563,259 @@ function TermoAssinatura({onClose}){
     <div className="text-xs font-bold uppercase tracking-wide text-free-600">Assinatura de termo</div>
     <h2 className="text-xl font-extrabold text-slate-900 mt-1 mb-1">Olá, {String(ped.nome||"").split(" ")[0]}!</h2>
     <div className="text-xs text-slate-500 mb-3">{ped.nome}{ped.cpf?" · CPF "+ped.cpf:""}{ped.cargo?" · "+ped.cargo:""}</div>
-    <EtapaTermoImagem cfg={termoImagemCfg} nome={ped.nome} enviando={enviando} onAssinar={assinar}/>
+    {ped.termoId==="entrega" && ped.entrega ? <EtapaTermoEntrega ent={ped.entrega} enviando={enviando} onAssinar={assinarEntregaLink}/>
+      : <EtapaTermoImagem cfg={termoImagemCfg} nome={ped.nome} enviando={enviando} onAssinar={assinar}/>}
     {erro && <p className="text-sm text-rose-500 mt-3">{erro}</p>}
   </>);
 }
 
+
+/* ============================ ARMÁRIO, UNIFORMES & EPIs (entrega, termo, devolução) ============================ */
+const CATALOGO_ENTREGAS_PADRAO = [
+  { id:"camisa_social", nome:"Camisa social", cat:"uniforme", valor:109, setores:["salao"] },
+  { id:"avental_salao", nome:"Avental personalizado (salão)", cat:"uniforme", valor:100, setores:["salao"] },
+  { id:"calca", nome:"Calça", cat:"uniforme", valor:100, setores:["salao","cozinha"] },
+  { id:"dolma", nome:"Dólmã", cat:"uniforme", valor:150, setores:["cozinha"] },
+  { id:"avental_cozinha", nome:"Avental (cozinha)", cat:"uniforme", valor:70, setores:["cozinha"] },
+  { id:"chave_armario", nome:"Chave do armário", cat:"armario", valor:20, setores:["*"] },
+  { id:"galocha", nome:"Galocha antiderrapante", cat:"epi", valor:50, setores:["cozinha"] },
+  { id:"crocs", nome:"Crocs antiderrapante", cat:"epi", valor:70, setores:["cozinha"] },
+  { id:"luva_aco", nome:"Luva de malha de aço (corte de carnes)", cat:"epi", valor:0, setores:["cozinha"] },
+  { id:"japona", nome:"Japona / jaqueta térmica (câmara fria)", cat:"epi", valor:0, setores:[] },
+  { id:"luva_termica", nome:"Luva térmica (câmara fria)", cat:"epi", valor:0, setores:[] },
+  { id:"touca_termica", nome:"Touca / balaclava térmica (câmara fria)", cat:"epi", valor:0, setores:[] },
+];
+const CAT_ENTREGA={ uniforme:["Uniforme","#6366f1"], armario:["Armário","#d39520"], epi:["EPI","#10b981"] };
+const totalItens=(itens,soPendentes)=> (itens||[]).filter(i=>!soPendentes||!i.devolvido).reduce((s,i)=>s+(Number(i.valor)||0)*(Number(i.qtd)||1),0);
+// Texto do termo (linhas; "# " = título de seção)
+function termoEntregaLinhas({grupo, nome, cpf, cargo, unidade, armario, itens}){
+  const G=(grupo||"GRUPO SKY HALL").toUpperCase(); const temEpi=(itens||[]).some(i=>i.cat==="epi");
+  const L=[];
+  L.push(`Pelo presente termo, eu, ${nome||"________"}${cpf?", CPF "+cpf:""}${cargo?", "+cargo:""}${unidade?", lotado(a) em "+unidade:""}, declaro ter recebido do ${G}, em perfeito estado de conservação, os itens relacionados abaixo, para uso exclusivo no trabalho, e assumo as responsabilidades descritas neste termo.`);
+  L.push("# 1. ITENS RECEBIDOS");
+  (itens||[]).forEach(i=>L.push(`• ${i.qtd>1?i.qtd+"x ":""}${i.nome}${Number(i.valor)>0?" — valor unitário "+fmtBRL(Number(i.valor)):""}`));
+  if(armario) L.push(`Armário nº ${armario}.`);
+  L.push(`Valor total dos itens: ${fmtBRL(totalItens(itens))}.`);
+  L.push("# 2. USO E CONSERVAÇÃO DO UNIFORME");
+  L.push("2.1. O uniforme deve ser usado limpo e completo durante toda a jornada e somente para o trabalho.");
+  L.push("2.2. Comprometo-me a zelar pela conservação dos itens e a comunicar imediatamente qualquer dano, perda ou extravio. O desgaste natural decorrente do uso normal não será cobrado.");
+  L.push("# 3. ARMÁRIO");
+  L.push("3.1. O armário é de uso pessoal e intransferível, destinado à guarda de roupas e objetos pessoais durante a jornada. É proibido guardar alimentos perecíveis, bebidas alcoólicas, produtos da empresa ou objetos ilícitos.");
+  L.push("3.2. A chave é de minha responsabilidade e não pode ser copiada ou emprestada. Em caso de perda, comunicarei de imediato.");
+  L.push("3.3. A empresa não se responsabiliza por valores deixados no armário e poderá realizar vistoria na presença do(a) colaborador(a) quando necessário.");
+  L.push("# 4. EQUIPAMENTOS DE PROTEÇÃO INDIVIDUAL (EPI) — IMPORTÂNCIA E USO OBRIGATÓRIO");
+  L.push("4.1. Declaro ter recebido orientação sobre a importância, o uso correto, a guarda e a conservação dos EPIs, conforme a Norma Regulamentadora nº 6 (NR-6) e o art. 158 da CLT. Os EPIs protegem a minha saúde e a minha integridade física.");
+  L.push("4.2. O uso é OBRIGATÓRIO sempre que a atividade exigir, em especial:");
+  L.push("a) Luva de malha de aço: ao utilizar facas grandes, desossar, porcionar ou fracionar carnes e em qualquer corte de risco;");
+  L.push("b) Vestimenta térmica (japona/jaqueta, luvas e touca térmicas): para entrar e permanecer na câmara fria ou no freezer;");
+  L.push("c) Calçado antiderrapante (galocha ou crocs antiderrapante): durante todo o trabalho na cozinha e áreas molhadas.");
+  L.push("4.3. Comprometo-me a usar os EPIs apenas para a finalidade a que se destinam, mantê-los higienizados e solicitar a troca quando danificados ou desgastados.");
+  L.push("4.4. Estou ciente de que a recusa injustificada ao uso dos EPIs constitui ato faltoso (art. 158, parágrafo único, da CLT), sujeito às medidas disciplinares cabíveis.");
+  if(!temEpi) L.push("4.5. Os EPIs necessários à minha função serão entregues e registrados quando a atividade exigir.");
+  L.push("# 5. DEVOLUÇÃO E DESCONTO");
+  L.push("5.1. Ao deixar a empresa, por qualquer motivo, devolverei todos os itens acima (uniformes, chave do armário e EPIs) até o último dia de trabalho.");
+  L.push("5.2. Caso algum item não seja devolvido, ou seja devolvido danificado por mau uso, AUTORIZO EXPRESSAMENTE o desconto do valor indicado neste termo nos valores a receber no acerto final (rescisão), nos termos do art. 462, § 1º, da CLT.");
+  L.push("# 6. DECLARAÇÃO");
+  L.push("Declaro que li, compreendi e concordo com todas as condições deste termo, que assino eletronicamente.");
+  return L;
+}
+async function pdfTermoEntrega({linhas, nome, cpf, cidade, assinatura, em}){
+  const PDFLib=await carregarPdfLib();
+  const doc=await PDFLib.PDFDocument.create();
+  const font=await doc.embedFont(PDFLib.StandardFonts.Helvetica), bold=await doc.embedFont(PDFLib.StandardFonts.HelveticaBold);
+  const limpo=(t)=>String(t||"").replace(/[^\x20-\x7E -ÿ–—‘’“”•…]/g,"").replace(/[“”]/g,'"');
+  const X=56, W=483; let pg=doc.addPage([595,842]); let y=790;
+  const nova=()=>{ pg=doc.addPage([595,842]); y=790; };
+  const esc=(txt,{f=font,size=9.8,gap=3,centro=false,ind=0}={})=>{ const ws=limpo(txt).split(/\s+/).filter(Boolean); let a=""; const ls=[];
+    ws.forEach(w=>{ const t=a?a+" "+w:w; if(f.widthOfTextAtSize(t,size)>W-ind&&a){ ls.push(a); a=w; } else a=t; }); if(a) ls.push(a);
+    ls.forEach(l=>{ if(y<60) nova(); const lw=f.widthOfTextAtSize(l,size); pg.drawText(l,{x:centro?X+(W-lw)/2:X+ind,y,size,font:f}); y-=size+gap; }); };
+  esc("TERMO DE RESPONSABILIDADE — ARMÁRIO, UNIFORMES E EPIs",{f:bold,size:12.5,centro:true,gap:10}); y-=4;
+  linhas.forEach(l=>{ if(l.startsWith("# ")){ y-=5; esc(l.slice(2),{f:bold,size:10.5,gap:4}); } else if(/^[•a-z]\)|^•/.test(l)){ esc(l,{ind:12}); } else { esc(l); y-=2; } });
+  y-=14; if(y<200) nova();
+  esc((cidade||"São Paulo")+", "+dataExtenso(ymd(new Date(em)))+".",{size:10}); y-=12;
+  try{ const png=await doc.embedPng(assinatura); const h=60, w=Math.min(220, png.width*(h/png.height)); pg.drawImage(png,{x:X,y:y-h,width:w,height:h}); y-=h+2; }catch(e){}
+  pg.drawLine({start:{x:X,y},end:{x:X+260,y},thickness:0.7}); y-=13;
+  esc("COLABORADOR(A): "+nome,{f:bold,size:10}); if(cpf) esc("CPF: "+cpf,{size:9.5});
+  y-=10; esc("Assinado eletronicamente em "+new Date(em).toLocaleString("pt-BR")+", com aceite expresso e assinatura desenhada pelo(a) próprio(a) colaborador(a).",{size:8.5,gap:2});
+  return bytesParaDataUrl(await doc.save(),"application/pdf");
+}
+// Assina a entrega: gera o PDF, guarda na pasta "Termos assinados" e marca a entrega como assinada
+async function assinarEntrega(ent, assinatura, cidade){
+  const em=Date.now();
+  const linhas=termoEntregaLinhas(ent);
+  const du=await pdfTermoEntrega({linhas, nome:ent.nome, cpf:ent.cpf, cidade, assinatura, em});
+  const arquivoId=await arqSalvar({ nome:"Termo armário, uniforme e EPI (assinado) - "+ent.nome+".pdf", donoKey:ent.pessoaKey, donoTipo:ent.tipo, donoId:String(ent.pessoaKey).split("-").slice(1).join("-"), donoNome:ent.nome, cpf:soDigitos(ent.cpf),
+    pasta:"Termos assinados", categoria:"termo_entrega", visivelColab:true, entregaId:ent.id, assinadoEm:em }, du);
+  await nCol("entregas").doc(ent.id).set({ assinatura:{ status:"assinado", em, arquivoId } },{merge:true});
+  return {arquivoId, em};
+}
+const TermoEntregaLeitura=({linhas})=> <div className="max-h-[42vh] overflow-y-auto rounded-2xl border border-slate-200 bg-white p-4 text-[13px] leading-relaxed text-slate-700">
+  <p className="font-bold text-slate-900 text-center mb-3">TERMO DE RESPONSABILIDADE — ARMÁRIO, UNIFORMES E EPIs</p>
+  {linhas.map((l,i)=> l.startsWith("# ") ? <p key={i} className="font-bold text-slate-900 mt-3 mb-1">{l.slice(2)}</p> : <p key={i} className={cx("mb-1.5", /^[•a-z]\)|^•/.test(l)&&"pl-3")}>{l}</p>)}
+</div>;
+function EtapaTermoEntrega({ent, onAssinar, enviando, onVoltar}){
+  const [ok,setOk]=useState(false); const [ass,setAss]=useState(null);
+  const linhas=termoEntregaLinhas(ent);
+  return <div>
+    <p className="text-sm text-slate-500 mb-3">Leia o termo. Para concluir, marque que está de acordo e assine com o dedo.</p>
+    <TermoEntregaLeitura linhas={linhas}/>
+    <label className={cx("mt-4 flex items-start gap-3 p-4 rounded-2xl border-2 cursor-pointer transition", ok?"border-brand-400 bg-brand-50/50":"border-slate-200")}>
+      <input type="checkbox" checked={ok} onChange={e=>setOk(e.target.checked)} className="mt-0.5 w-5 h-5 accent-green-700 shrink-0"/>
+      <span className="text-sm text-slate-700"><b>Recebi os itens e estou de acordo</b> com as regras de uso do uniforme, do armário e dos EPIs, e com o desconto em caso de não devolução.</span>
+    </label>
+    <div className="mt-4"><div className="text-xs font-bold text-slate-400 uppercase mb-1.5">Assinatura — {ent.nome}</div><AssinaturaPad onChange={setAss}/></div>
+    <div className="flex gap-2 mt-4">{onVoltar && <Btn variant="ghost" onClick={onVoltar}>Voltar</Btn>}
+      <Btn className="flex-1" size="lg" icon={enviando?null:I.sign} disabled={!ok||!ass||enviando} onClick={()=>onAssinar(ass)}>{enviando?"Assinando…":"Assinar termo"}</Btn></div>
+  </div>;
+}
+function useEntregas(ativo){
+  const [items,setItems]=useState([]);
+  useEffect(()=>{ if(!window.__WPDB||!ativo) return; try{ return nCol("entregas").onSnapshot(function(snap){ const a=[]; snap.forEach(function(d){ a.push({...(d.data()||{}),id:d.id}); }); a.sort((x,y)=>(y.entregueEm||0)-(x.entregueEm||0)); setItems(a); }, function(){}); }catch(e){} },[ativo]);
+  return items;
+}
+/* ---------- Painel ---------- */
+function EntregasPage(){
+  const { clts, freelas, unidades, catalogoEntregas, setCatalogoEntregas, termoImagemCfg, arquivos, can } = useStore();
+  const toast=useContext(ToastCtx);
+  const entregas=useEntregas(true);
+  const catalogo=(catalogoEntregas&&catalogoEntregas.length)?catalogoEntregas:CATALOGO_ENTREGAS_PADRAO;
+  const [aba,setAba]=useState("entregas");
+  const [nova,setNova]=useState(null);       // {pessoaKey, armario, data, sel:{id:qtd}}
+  const [ver,setVer]=useState(null);         // entrega aberta
+  const [assinarAqui,setAssinarAqui]=useState(null);
+  const [enviando,setEnviando]=useState(false);
+  const [q,setQ]=useState("");
+  const editavel=can("documentos")||can("colaboradores");
+  const pessoas=[...clts.filter(c=>c.vinculo!=="confianca").map(p=>({tipo:"clt",p})), ...freelas.map(p=>({tipo:"free",p}))].map(x=>({...x,k:donoKeyDe(x.tipo,x.p.id)}));
+  const pessoaPor=(k)=>pessoas.find(x=>x.k===k);
+  const cidade=(termoImagemCfg&&termoImagemCfg.cidade)||"São Paulo";
+  const grupo=(termoImagemCfg&&termoImagemCfg.grupo)||"GRUPO SKY HALL";
+  const sugestao=(p)=>{ const st=setorDe(p); const sel={}; catalogo.forEach(i=>{ if((i.setores||[]).includes("*")||(i.setores||[]).includes(st)) sel[i.id]=1; }); return sel; };
+  const abrirNova=(k)=>{ const x=k&&pessoaPor(k); setNova({ pessoaKey:k||"", armario:"", data:hojeStr(), sel:x?sugestao(x.p):{} }); };
+  const salvarNova=async(depois)=>{
+    const x=pessoaPor(nova.pessoaKey); if(!x){ toast("Escolha o colaborador"); return; }
+    const itens=catalogo.filter(i=>nova.sel[i.id]>0).map(i=>({id:i.id,nome:i.nome,cat:i.cat,valor:Number(i.valor)||0,qtd:Number(nova.sel[i.id])||1,devolvido:false}));
+    if(!itens.length){ toast("Marque ao menos um item"); return; }
+    const id=gerarTokenConvite();
+    const ent={ pessoaKey:x.k, tipo:x.tipo, nome:x.p.nome, cpf:x.p.cpf||"", cargo:x.p.cargo||"", unidade:unidadeNome(x.p.unidade,unidades), tel:soDigitos(x.p.tel),
+      armario:String(nova.armario||"").trim(), itens, grupo, entregueEm:new Date(nova.data+"T12:00:00").getTime(), criadoEm:Date.now(), assinatura:{status:"pendente"} };
+    try{ await nCol("entregas").doc(id).set(ent); setNova(null); toast("Entrega registrada");
+      if(depois==="aqui") setAssinarAqui({...ent,id}); else if(depois==="link") enviarLink({...ent,id}); }
+    catch(e){ toast("Não foi possível salvar: "+erroBanco(e)); }
+  };
+  const enviarLink=async(ent)=>{
+    const token=gerarTokenConvite();
+    try{ await nCol("termos").doc(token).set({ termoId:"entrega", entregaId:ent.id, entrega:{...ent}, pessoaKey:ent.pessoaKey, tipo:ent.tipo, nome:ent.nome, cpf:ent.cpf, status:"aberto", criadoEm:Date.now(), expira:Date.now()+30*864e5 });
+      const msg=`Olá, ${String(ent.nome||"").split(" ")[0]}! Assine o termo de recebimento do uniforme, armário e EPIs pelo link (leva 1 minuto):\n${linkTermo(token)}`;
+      const tel=soDigitos(ent.tel); const t=tel?(tel.length<=11?"55"+tel:tel):"";
+      window.open("https://wa.me/"+t+"?text="+encodeURIComponent(msg),"_blank"); }
+    catch(e){ toast("Não foi possível gerar o link: "+erroBanco(e)); }
+  };
+  const assinarNoAparelho=async(ass)=>{ setEnviando(true);
+    try{ await assinarEntrega(assinarAqui, ass, cidade); toast("Termo assinado e salvo na pasta do colaborador"); setAssinarAqui(null); }
+    catch(e){ toast("Falha ao assinar: "+(e.message||e)); }
+    setEnviando(false); };
+  const marcarDevolvido=async(ent,idx,v)=>{ const itens=ent.itens.map((it,j)=>j===idx?{...it,devolvido:v,devolvidoEm:v?Date.now():null}:it);
+    try{ await nCol("entregas").doc(ent.id).set({itens},{merge:true}); setVer({...ent,itens}); }catch(e){ toast(erroBanco(e)); } };
+  const vis=entregas.filter(e=>normTxt(e.nome).includes(normTxt(q)));
+  const semEntrega=pessoas.filter(x=>!entregas.some(e=>e.pessoaKey===x.k));
+  return <div className="fade-in">
+    <PageHeader title="Armário, uniformes & EPIs" sub="Entrega com termo assinado · uso obrigatório de EPIs · devolução e desconto no acerto">
+      {editavel && <Btn icon={I.plus} onClick={()=>abrirNova("")}>Registrar entrega</Btn>}
+    </PageHeader>
+    <div className="inline-flex p-1 bg-slate-100 rounded-xl mb-4">
+      {[["entregas","Entregas ("+entregas.length+")"],["pendentes","Sem entrega ("+semEntrega.length+")"],["catalogo","Itens e valores"]].map(([k,l])=><button key={k} onClick={()=>setAba(k)} className={cx("px-4 py-2 rounded-lg text-sm font-semibold transition", aba===k?"bg-white shadow-soft text-brand-700":"text-slate-500 hover:text-slate-700")}>{l}</button>)}
+    </div>
+
+    {aba==="entregas" && <>
+      <Card className="p-2 mb-3"><div className="flex items-center gap-2 px-3 py-2"><Icon d={I.search} className="w-4 h-4 text-slate-400"/><input value={q} onChange={e=>setQ(e.target.value)} placeholder="Buscar colaborador…" className="flex-1 outline-none text-sm bg-transparent"/></div></Card>
+      <div className="space-y-2">
+        {vis.length===0 && <Card className="p-8 text-center text-sm text-slate-400">Nenhuma entrega registrada ainda.</Card>}
+        {vis.map(e=>{ const pend=e.itens.filter(i=>!i.devolvido); const ass=e.assinatura&&e.assinatura.status==="assinado";
+          return <Card key={e.id} className="p-3 flex flex-wrap items-center gap-3 cursor-pointer hover:border-brand-300" onClick={()=>setVer(e)}>
+            <Avatar name={e.nome} tone={e.tipo==="free"?"free":"brand"} size="w-9 h-9"/>
+            <div className="flex-1 min-w-[180px]"><div className="font-semibold text-slate-800 text-sm">{e.nome}</div>
+              <div className="text-xs text-slate-400">{e.itens.length} item(ns){e.armario?" · armário "+e.armario:""} · entregue em {new Date(e.entregueEm).toLocaleDateString("pt-BR")}</div></div>
+            <Badge tone={ass?"green":"amber"}>{ass?"Termo assinado":"Assinatura pendente"}</Badge>
+            <span className="text-sm font-bold text-slate-700" title="Valor dos itens ainda com o colaborador">{fmtBRL(totalItens(e.itens,true))}{pend.length<e.itens.length && <span className="text-xs font-normal text-emerald-600"> · {e.itens.length-pend.length} devolvido(s)</span>}</span>
+          </Card>; })}
+      </div>
+    </>}
+
+    {aba==="pendentes" && <div className="space-y-2">
+      {semEntrega.length===0 && <Card className="p-8 text-center text-sm text-slate-400">Todos já têm entrega registrada 🎉</Card>}
+      {semEntrega.map(x=><Card key={x.k} className="p-3 flex items-center gap-3">
+        <Avatar name={x.p.nome} src={x.p.foto} tone={x.tipo==="free"?"free":"brand"} size="w-9 h-9"/>
+        <div className="flex-1"><div className="font-semibold text-slate-800 text-sm">{x.p.nome}</div><div className="text-xs text-slate-400">{x.tipo==="free"?"Freelancer":"CLT"} · {x.p.cargo||""} · {(SETOR_MAP[setorDe(x.p)]||{}).l||""}</div></div>
+        {editavel && <Btn size="sm" icon={I.plus} onClick={()=>abrirNova(x.k)}>Registrar entrega</Btn>}
+      </Card>)}
+    </div>}
+
+    {aba==="catalogo" && <Card className="p-5">
+      <p className="text-sm text-slate-500 mb-3">Valores usados no termo e no desconto em caso de não devolução. A coluna "sugerir para" marca o item automaticamente conforme o setor do colaborador.</p>
+      <div className="space-y-2">{catalogo.map((it,i)=><div key={it.id} className="grid grid-cols-[1fr_110px_120px_auto] gap-2 items-center">
+        <Input value={it.nome} disabled={!editavel} onChange={e=>setCatalogoEntregas(catalogo.map((x,j)=>j===i?{...x,nome:e.target.value}:x))} aria-label="Item"/>
+        <Select value={it.cat} disabled={!editavel} onChange={e=>setCatalogoEntregas(catalogo.map((x,j)=>j===i?{...x,cat:e.target.value}:x))}>{Object.entries(CAT_ENTREGA).map(([k,[l]])=><option key={k} value={k}>{l}</option>)}</Select>
+        <div className="flex items-center gap-1"><span className="text-xs text-slate-400">R$</span><Input type="number" min="0" step="0.01" value={it.valor} disabled={!editavel} onChange={e=>setCatalogoEntregas(catalogo.map((x,j)=>j===i?{...x,valor:Number(e.target.value)}:x))} aria-label={"Valor de "+it.nome}/></div>
+        {editavel && <button title="Remover" onClick={()=>setCatalogoEntregas(catalogo.filter((_,j)=>j!==i))} className="w-8 h-8 rounded-lg grid place-items-center text-slate-400 hover:text-rose-500 hover:bg-rose-50"><Icon d={I.trash} className="w-4 h-4"/></button>}
+      </div>)}</div>
+      {editavel && <div className="flex gap-2 mt-3"><Btn size="sm" variant="soft" icon={I.plus} onClick={()=>setCatalogoEntregas([...catalogo,{id:"i"+Date.now(),nome:"Novo item",cat:"uniforme",valor:0,setores:[]}])}>Adicionar item</Btn>
+        <Btn size="sm" variant="ghost" onClick={()=>{ if(confirm("Voltar à lista e aos valores padrão?")) setCatalogoEntregas(CATALOGO_ENTREGAS_PADRAO); }}>Restaurar padrão</Btn></div>}
+    </Card>}
+
+    <Modal open={!!nova} onClose={()=>setNova(null)} wide>
+      {nova && <div className="p-6">
+        <h3 className="text-lg font-bold text-slate-900 mb-4">Registrar entrega de armário, uniforme e EPI</h3>
+        <div className="grid sm:grid-cols-3 gap-3">
+          <div className="sm:col-span-3"><Field label="Colaborador"><Select value={nova.pessoaKey} onChange={e=>{ const x=pessoaPor(e.target.value); setNova({...nova,pessoaKey:e.target.value, sel:x?sugestao(x.p):nova.sel}); }}>
+            <option value="">— escolha —</option>{pessoas.map(x=><option key={x.k} value={x.k}>{x.p.nome} · {x.tipo==="free"?"Freela":"CLT"}{x.p.cargo?" · "+x.p.cargo:""}</option>)}</Select></Field></div>
+          <Field label="Nº do armário"><Input value={nova.armario} onChange={e=>setNova({...nova,armario:e.target.value})} placeholder="Ex.: 12"/></Field>
+          <Field label="Data da entrega"><Input type="date" value={nova.data} onChange={e=>setNova({...nova,data:e.target.value})}/></Field>
+        </div>
+        <div className="mt-4 space-y-3">{Object.entries(CAT_ENTREGA).map(([ck,[cl,cc]])=><div key={ck}>
+          <div className="text-xs font-bold uppercase tracking-wide mb-1.5" style={{color:cc}}>{cl}</div>
+          <div className="grid sm:grid-cols-2 gap-1.5">{catalogo.filter(i=>i.cat===ck).map(i=>{ const qt=nova.sel[i.id]||0;
+            return <div key={i.id} className={cx("flex items-center gap-2 px-3 py-2 rounded-xl border text-sm", qt?"border-brand-300 bg-brand-50/40":"border-slate-200")}>
+              <input type="checkbox" checked={qt>0} onChange={e=>setNova({...nova,sel:{...nova.sel,[i.id]:e.target.checked?1:0}})} className="w-4 h-4 accent-green-700" aria-label={i.nome}/>
+              <span className="flex-1">{i.nome}</span><span className="text-xs text-slate-400">{Number(i.valor)>0?fmtBRL(Number(i.valor)):"—"}</span>
+              {qt>0 && <input type="number" min="1" max="9" value={qt} onChange={e=>setNova({...nova,sel:{...nova.sel,[i.id]:Math.max(1,Number(e.target.value)||1)}})} className="w-12 px-1.5 py-1 rounded-lg border border-slate-200 text-center text-xs" title="Quantidade"/>}
+            </div>; })}</div></div>)}</div>
+        <div className="mt-3 text-sm text-slate-600">Total: <b>{fmtBRL(catalogo.reduce((s,i)=>s+(nova.sel[i.id]||0)*(Number(i.valor)||0),0))}</b></div>
+        <div className="flex flex-wrap gap-2 mt-5"><Btn variant="ghost" onClick={()=>setNova(null)}>Cancelar</Btn>
+          <Btn variant="soft" icon={I.arrow} onClick={()=>salvarNova("link")}>Salvar e enviar link (WhatsApp)</Btn>
+          <Btn className="flex-1" icon={I.sign} onClick={()=>salvarNova("aqui")}>Salvar e assinar agora neste aparelho</Btn></div>
+      </div>}
+    </Modal>
+
+    <Modal open={!!ver} onClose={()=>setVer(null)} wide>
+      {ver && (()=>{ const ass=ver.assinatura&&ver.assinatura.status==="assinado"; const pend=totalItens(ver.itens,true);
+        return <div className="p-6">
+        <div className="flex items-start justify-between gap-3 mb-3"><div><h3 className="text-lg font-bold text-slate-900">{ver.nome}</h3>
+          <p className="text-sm text-slate-500">{ver.cargo}{ver.unidade?" · "+ver.unidade:""}{ver.armario?" · armário "+ver.armario:""} · entregue em {new Date(ver.entregueEm).toLocaleDateString("pt-BR")}</p></div>
+          <Badge tone={ass?"green":"amber"}>{ass?"Termo assinado em "+new Date(ver.assinatura.em).toLocaleDateString("pt-BR"):"Assinatura pendente"}</Badge></div>
+        <div className="text-xs font-bold text-slate-400 uppercase mb-1.5">Itens — marque o que foi devolvido</div>
+        <div className="space-y-1.5">{ver.itens.map((it,i)=><label key={i} className={cx("flex items-center gap-3 px-3 py-2 rounded-xl border text-sm", it.devolvido?"border-emerald-200 bg-emerald-50/50":"border-slate-200")}>
+          <input type="checkbox" checked={!!it.devolvido} disabled={!editavel} onChange={e=>marcarDevolvido(ver,i,e.target.checked)} className="w-4 h-4 accent-green-700"/>
+          <span className="flex-1">{it.qtd>1?it.qtd+"x ":""}{it.nome} <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" style={{background:(CAT_ENTREGA[it.cat]||["",""])[1]+"22",color:(CAT_ENTREGA[it.cat]||["",""])[1]}}>{(CAT_ENTREGA[it.cat]||[""])[0]}</span></span>
+          <span className="tabular-nums text-slate-600">{fmtBRL((Number(it.valor)||0)*(Number(it.qtd)||1))}</span>
+          {it.devolvido && <span className="text-xs text-emerald-600 font-semibold">devolvido</span>}
+        </label>)}</div>
+        <div className={cx("mt-3 p-3 rounded-xl text-sm", pend>0?"bg-amber-50 text-amber-800":"bg-emerald-50 text-emerald-700")}>{pend>0?<>Valor a descontar no acerto se não houver devolução: <b>{fmtBRL(pend)}</b></>:"Todos os itens foram devolvidos — nada a descontar."}</div>
+        <div className="flex flex-wrap gap-2 mt-4">
+          {pend>0 && <Btn size="sm" variant="ghost" icon={I.copy} onClick={()=>{ copyText(`Itens não devolvidos — ${ver.nome}\n`+ver.itens.filter(i=>!i.devolvido).map(i=>`• ${i.qtd>1?i.qtd+"x ":""}${i.nome}: ${fmtBRL((Number(i.valor)||0)*(Number(i.qtd)||1))}`).join("\n")+`\nTotal a descontar no acerto: ${fmtBRL(pend)}`); toast("Resumo copiado"); }}>Copiar resumo para o acerto</Btn>}
+          {!ass && editavel && <><Btn size="sm" variant="soft" icon={I.arrow} onClick={()=>enviarLink(ver)}>Enviar link (WhatsApp)</Btn><Btn size="sm" icon={I.sign} onClick={()=>{ setAssinarAqui(ver); setVer(null); }}>Assinar agora neste aparelho</Btn></>}
+          {ass && <Btn size="sm" variant="ghost" icon={I.eye} onClick={()=>{ const a=(arquivos||[]).find(x=>x.id===ver.assinatura.arquivoId); if(a) arqAbrir(a).catch(e=>toast(e.message)); else toast("O arquivo está na pasta Termos assinados do colaborador"); }}>Ver termo assinado</Btn>}
+        </div>
+      </div>; })()}
+    </Modal>
+
+    <Modal open={!!assinarAqui} onClose={()=>setAssinarAqui(null)} wide>
+      {assinarAqui && <div className="p-6"><h3 className="text-lg font-bold text-slate-900 mb-1">Assinatura — {assinarAqui.nome}</h3>
+        <p className="text-xs text-slate-500 mb-3">Entregue o aparelho ao colaborador para ler e assinar.</p>
+        <EtapaTermoEntrega ent={assinarAqui} enviando={enviando} onAssinar={assinarNoAparelho} onVoltar={()=>setAssinarAqui(null)}/></div>}
+    </Modal>
+  </div>;
+}
 
 /* ============================ CONVITES DE CADASTRO (link + leitura automática dos documentos) ============================ */
 // Documentos pedidos no link, por tipo de vínculo. "chave" casa com DOC_TIPOS (pasta do colaborador) quando existir.
@@ -6064,6 +6322,7 @@ const NAV = [
     {k:"arquivos",l:"Arquivos & pastas",d:I.folder},
     {k:"holerites",l:"Holerites",d:I.receipt},
     {k:"termos",l:"Termos e assinaturas",d:I.sign},
+    {k:"entregas",l:"Armário, uniformes & EPIs",d:I.shield},
     {k:"modeloContrato",l:"Modelo de contrato PJ",d:I.doc},
     {k:"dossie",l:"Dossiê",d:I.doc},
   ]},
@@ -6080,7 +6339,7 @@ const NAV = [
     {k:"ajuda",l:"Ajuda",d:I.help},
   ]},
 ];
-const TITULOS={dashboard:"Painel",escala:"Escala por unidade",ponto:"Ponto ao vivo",ajustes:"Ajustes de ponto",clt:"Colaboradores CLT",freelas:"Freelancers",pjs:"Prestadores PJ",cargos:"Cargos & funções",convites:"Convites de cadastro",arquivos:"Arquivos & pastas",holerites:"Holerites",termos:"Termos e assinaturas",modeloContrato:"Modelo de contrato PJ",dossie:"Dossiê do colaborador",equipe:"Equipe & permissões",relatorios:"Relatórios",financeiro:"Financeiro",pagamentos:"Pagamentos",unidades:"Unidades",links:"Links & QR",acessos:"Gerentes & acessos",config:"Configurações",ajuda:"Ajuda"};
+const TITULOS={dashboard:"Painel",escala:"Escala por unidade",ponto:"Ponto ao vivo",ajustes:"Ajustes de ponto",clt:"Colaboradores CLT",freelas:"Freelancers",pjs:"Prestadores PJ",cargos:"Cargos & funções",convites:"Convites de cadastro",arquivos:"Arquivos & pastas",holerites:"Holerites",termos:"Termos e assinaturas",entregas:"Armário, uniformes & EPIs",modeloContrato:"Modelo de contrato PJ",dossie:"Dossiê do colaborador",equipe:"Equipe & permissões",relatorios:"Relatórios",financeiro:"Financeiro",pagamentos:"Pagamentos",unidades:"Unidades",links:"Links & QR",acessos:"Gerentes & acessos",config:"Configurações",ajuda:"Ajuda"};
 
 // Seletor de cliente (multiempresa) — troca entre grupos de restaurantes e cria novo cliente.
 function ClienteSwitcher(){
@@ -6342,7 +6601,7 @@ function Shell({ onLogout }) {
   if(acesso && acesso.semAcesso) return <TelaBloqueio icone={I.shield} titulo="Sua conta ainda não tem acesso" texto="Peça ao administrador para vincular seu e-mail a um cliente. Assim que ele liberar, é só entrar novamente." onLogout={onLogout}/>;
   if(acesso && acesso.tenantBind!=null && acesso.tenantBind!==tenantAtual) return <TelaBloqueio spin titulo="Abrindo seu cliente…"/>;
   const views={ dashboard:<Dashboard go={setView}/>, escala:<EscalaVisual/>, ponto:<PontoLive/>, ajustes:<AjustesPonto/>, clt:<ColaboradoresCLT/>, freelas:<Freelancers/>,
-    dossie:<Dossie/>, pjs:<PrestadoresPJ/>, cargos:<CargosPage/>, convites:<ConvitesPage/>, arquivos:<ArquivosPage/>, holerites:<HoleritesPage/>, termos:<TermosPage/>, modeloContrato:<ModeloContratoPage/>, equipe:<Equipe/>, relatorios:<Relatorios/>, financeiro:<Financeiro/>, pagamentos:<Pagamentos/>, unidades:<Unidades/>, links:<LinksQR/>, acessos:<GerentesAcesso/>, config:<Configuracoes/>, ajuda:<Ajuda/> };
+    dossie:<Dossie/>, pjs:<PrestadoresPJ/>, cargos:<CargosPage/>, convites:<ConvitesPage/>, arquivos:<ArquivosPage/>, holerites:<HoleritesPage/>, termos:<TermosPage/>, entregas:<EntregasPage/>, modeloContrato:<ModeloContratoPage/>, equipe:<Equipe/>, relatorios:<Relatorios/>, financeiro:<Financeiro/>, pagamentos:<Pagamentos/>, unidades:<Unidades/>, links:<LinksQR/>, acessos:<GerentesAcesso/>, config:<Configuracoes/>, ajuda:<Ajuda/> };
   return <ToastCtx.Provider value={pushToast}>
     <div className="flex min-h-screen">
       <Sidebar view={view} setView={setView} open={sbOpen} setOpen={setSbOpen} onLogout={onLogout}/>
