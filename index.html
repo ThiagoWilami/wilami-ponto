@@ -5934,7 +5934,12 @@ const mascaraCpf=(c)=>{ const d=soDigitos(c); return d.length===11?("***."+d.sli
 const proximoAssinante=(env)=> (env.signatarios||[]).filter(s=>s.status!=="assinado").sort((a,b)=>(a.ordem||1)-(b.ordem||1))[0]||null;
 const msgAssinatura=(env,s)=>`Olá, ${String(s.nome||"").split(" ")[0]}! Você tem um documento para assinar: "${String(env.documento||"").replace(/\.pdf$/i,"")}".\nAbra o link, confira o documento e assine com o dedo (leva 2 minutos):\n${linkAssinar(env.id,s.token)}`;
 const whatsAssinante=(env,s)=>{ const tel=soDigitos(s.tel); const t=tel?(tel.length<=11?"55"+tel:tel):""; return "https://wa.me/"+t+"?text="+encodeURIComponent(msgAssinatura(env,s)); };
-const emailAssinante=(env,s)=> "mailto:"+encodeURIComponent(s.email||"")+"?subject="+encodeURIComponent("Documento para assinatura: "+String(env.documento||"").replace(/\.pdf$/i,""))+"&body="+encodeURIComponent(msgAssinatura(env,s));
+// E-mail já preenchido. "mailto:" só funciona com um programa de e-mail instalado; no computador
+// muita gente usa o Gmail/Outlook no navegador, então há links diretos para eles.
+const emailAssinante=(env,s,via="app")=>{ const para=encodeURIComponent(s.email||""), assunto=encodeURIComponent("Documento para assinatura: "+String(env.documento||"").replace(/\.pdf$/i,"")), corpo=encodeURIComponent(msgAssinatura(env,s));
+  if(via==="gmail") return "https://mail.google.com/mail/?view=cm&fs=1&to="+para+"&su="+assunto+"&body="+corpo;
+  if(via==="outlook") return "https://outlook.live.com/mail/0/deeplink/compose?to="+para+"&subject="+assunto+"&body="+corpo;
+  return "mailto:"+para+"?subject="+assunto+"&body="+corpo; };
 async function criarEnvelopeWilami(arq, lista){
   const du=await arqConteudo(arq); const bytes=b64ToBytes(du); const hash=await sha256Hex(bytes);
   const id=gerarTokenConvite();
@@ -6103,7 +6108,8 @@ function AssinarDocumentoPagina({onClose}){
     {prox && <div className="mt-5 p-4 rounded-2xl bg-slate-50 text-left">
       <div className="text-sm text-slate-600 mb-2">Próximo a assinar: <b>{prox.nome}</b>{prox.papel?" ("+prox.papel+")":""}. Avise agora:</div>
       <div className="flex flex-wrap gap-2">{prox.tel && <a href={whatsAssinante(env,prox)} target="_blank" rel="noopener" className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 text-white text-sm font-semibold"><Icon d={I.arrow} className="w-4 h-4"/>Enviar pelo WhatsApp</a>}
-        {prox.email && <a href={emailAssinante(env,prox)} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl border border-slate-200 text-slate-700 text-sm font-semibold">Enviar por e-mail</a>}</div>
+        {prox.email && <><a href={emailAssinante(env,prox,"gmail")} target="_blank" rel="noopener" className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl border border-rose-200 bg-rose-50 text-rose-700 text-sm font-semibold">Enviar pelo Gmail</a>
+          <a href={emailAssinante(env,prox)} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl border border-slate-200 text-slate-700 text-sm font-semibold">Outro e-mail</a></>}</div>
     </div>}
   </div>);
   if(antes.length) return casca(<div className="py-6 text-center"><h2 className="text-xl font-bold text-slate-900">Aguardando assinatura anterior</h2>
@@ -6174,7 +6180,9 @@ function EnvelopeWilamiModal({envId,onClose}){
             {s.status==="assinado" ? <Badge tone="green"><Icon d={I.check} className="w-3 h-3"/>Assinou {new Date(s.assinadoEm).toLocaleString("pt-BR")}</Badge>
               : <>{vez ? <Badge tone="amber">Vez dele(a)</Badge> : <Badge>Aguardando</Badge>}
                 {s.tel && <a href={whatsAssinante(env,s)} target="_blank" rel="noopener" className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold">WhatsApp</a>}
-                {s.email && <a href={emailAssinante(env,s)} className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-200 text-slate-700 text-xs font-semibold">E-mail</a>}
+                {s.email && <><a href={emailAssinante(env,s,"gmail")} target="_blank" rel="noopener" title="Abre o Gmail com o e-mail pronto para enviar" className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-rose-200 bg-rose-50 text-rose-700 text-xs font-semibold">Gmail</a>
+                  <a href={emailAssinante(env,s,"outlook")} target="_blank" rel="noopener" title="Abre o Outlook com o e-mail pronto para enviar" className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-sky-200 bg-sky-50 text-sky-700 text-xs font-semibold">Outlook</a>
+                  <a href={emailAssinante(env,s)} title="Abre o programa de e-mail do aparelho" className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-200 text-slate-700 text-xs font-semibold">App de e-mail</a></>}
                 <button onClick={()=>{ toast(copyText(linkAssinar(env.id,s.token))?"Link copiado":"Selecione e copie o link abaixo"); }} className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-200 text-slate-700 text-xs font-semibold">Copiar link</button>
                 <input readOnly value={linkAssinar(env.id,s.token)} onFocus={e=>e.target.select()} aria-label={"Link de "+s.nome} className="basis-full px-2 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-[11px] text-slate-500"/></>}
           </div>; })}</div>
