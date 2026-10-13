@@ -4289,6 +4289,9 @@ function PastasPessoa({tipo, pessoa}){
   const [nova,setNova]=useState(null);       // nome da nova pasta (null = fechado)
   const [assinar,setAssinar]=useState(null); // arquivo a enviar p/ assinatura
   const [envAberto,setEnvAberto]=useState(null); // envelope de assinatura Wilami aberto
+  // traz para a pasta as assinaturas feitas pelos links (quem assina não consegue alterar o arquivo)
+  const pendentesWilami=meus.filter(a=>a.assinatura&&a.assinatura.provedor==="wilami"&&a.assinatura.envId&&a.assinatura.status!=="completed").map(a=>a.assinatura.envId).join(",");
+  useEffect(()=>{ if(!pendentesWilami||!can("documentos")) return; pendentesWilami.split(",").forEach(id=>sincronizarEnvelopeWilami(id).catch(()=>{})); },[pendentesWilami]); // eslint-disable-line
   // PDF vai direto; foto vira PDF; Word e outros formatos precisam ser salvos como PDF antes
   const pedirAssinatura=async(a)=>{
     if(ehPdf(a)) return setAssinar(a);
@@ -5989,14 +5992,40 @@ async function concluirEnvelopeWilami(env){
   const base=String(env.documento||"documento").replace(/\.pdf$/i,"");
   const finalId=await arqSalvar({ nome:base+" (assinado).pdf", donoKey:env.donoKey, donoTipo:env.donoTipo, donoId:env.donoId, donoNome:env.donoNome, cpf:env.cpfDono||"",
     pasta:env.pasta, categoria:"contrato_assinado", visivelColab:true, origemId:env.arquivo.id, envId:env.id }, bytesParaDataUrl(finais,"application/pdf"));
-  await nCol("assinaturas").doc(env.id).set({status:"concluido", concluidoEm:Date.now(), finalArquivoId:finalId},{merge:true});
+  await nCol("assinaturas_provas").doc(idProva(env.id,"final")).set({ envId:env.id, token:"final", finalArquivoId:finalId, em:Date.now() }).catch(()=>{});
+  await nCol("assinaturas").doc(env.id).set({status:"concluido", concluidoEm:Date.now(), finalArquivoId:finalId},{merge:true}).catch(()=>{});
   return finalId;
 }
 // Repete uma gravação/leitura (no celular a conexão cai por instantes ao abrir a câmera)
 async function comRetentativa(fn, vezes=3){ let ult; for(let i=0;i<vezes;i++){ try{ return await fn(); }catch(e){ ult=e; await new Promise(r=>setTimeout(r,1200*(i+1))); } } throw ult; }
 const detalheErro=(e)=> e ? String((e.code?e.code+": ":"")+(e.message||e)).slice(0,160) : "";
-// Selfie e assinatura de cada assinante ficam num documento próprio (o envelope fica leve)
+// Quem assina pelo link não está logado: as regras do banco só deixam CRIAR documentos, não alterar.
+// Por isso cada assinante cria o próprio "comprovante" (assinaturas_provas) com status, evidências,
+// selfie e assinatura; o envelope é montado juntando esses comprovantes. O painel (logado) sincroniza.
 const idProva=(envId,tok)=> envId+"_"+tok;
+const CAMPOS_PROVA=["status","assinadoEm","cpfInformado","ip","ua","geo","prova"];
+async function envComProvas(env){
+  if(!env) return env;
+  const sigs=await Promise.all((env.signatarios||[]).map(async s=>{ if(s.status==="assinado") return s;
+    try{ const d=await nCol("assinaturas_provas").doc(idProva(env.id,s.token)).get(); if(d.exists){ const v=d.data(); const o={...s}; CAMPOS_PROVA.forEach(k=>{ if(v[k]!==undefined) o[k]=v[k]; }); return o; } }catch(e){}
+    return s; }));
+  let out={...env, signatarios:sigs};
+  if(out.status!=="concluido"){ try{ const f=await nCol("assinaturas_provas").doc(idProva(env.id,"final")).get(); if(f.exists&&f.data().finalArquivoId) out={...out,status:"concluido",finalArquivoId:f.data().finalArquivoId,concluidoEm:f.data().em}; }catch(e){} }
+  return out;
+}
+// Painel (logado): grava no envelope e no arquivo o que os assinantes registraram
+async function sincronizarEnvelopeWilami(envId){
+  const d=await nCol("assinaturas").doc(envId).get(); if(!d.exists) return null;
+  const bruto={...d.data(),id:envId}; const env=await envComProvas(bruto);
+  const mudou=JSON.stringify((bruto.signatarios||[]).map(s=>s.status))!==JSON.stringify((env.signatarios||[]).map(s=>s.status)) || bruto.status!==env.status;
+  if(mudou){
+    await nCol("assinaturas").doc(envId).set({signatarios:env.signatarios, status:env.status, ...(env.finalArquivoId?{finalArquivoId:env.finalArquivoId,concluidoEm:env.concluidoEm||Date.now()}:{})},{merge:true}).catch(()=>{});
+    const todos=(env.signatarios||[]).every(s=>s.status==="assinado");
+    await arqAtualizar(env.arquivo.id,{assinatura:{ provedor:"wilami", envId, status:(todos&&env.status==="concluido")?"completed":"sent", ...(env.finalArquivoId?{assinadoArquivoId:env.finalArquivoId,concluidoEm:env.concluidoEm||Date.now()}:{}),
+      signatarios:env.signatarios.map(s=>({nome:s.nome,email:s.email,papel:s.papel,ordem:s.ordem,status:s.status==="assinado"?"completed":"sent"})) }}).catch(()=>{});
+  }
+  return env;
+}
 async function provasDoEnvelope(env){
   const out={}; for(const s of (env.signatarios||[])){ if(s.status!=="assinado") continue;
     if(s.selfie||s.assinatura){ out[s.token]={selfie:s.selfie||"",assinatura:s.assinatura||""}; continue; }
@@ -6017,7 +6046,7 @@ function AssinarDocumentoPagina({onClose}){
   const [paginas,setPaginas]=useState(null); const [erroDoc,setErroDoc]=useState(""); const [erroCarga,setErroCarga]=useState("");
   const [cpf,setCpf]=useState(""); const [selfie,setSelfie]=useState(""); const [aceite,setAceite]=useState(false); const [ass,setAss]=useState(null);
   const [geo,setGeo]=useState(null); const [rede,setRede]=useState(null); const [erro,setErro]=useState(""); const [finalOk,setFinalOk]=useState(false);
-  const carregar=()=> comRetentativa(()=>nCol("assinaturas").doc(envId).get()).then(s=>{ const d=s.exists?{...s.data(),id:envId}:null; setEnv(d); return d; }).catch(e=>{ console.warn("assinar: envelope",e); setErroCarga(detalheErro(e)); setEnv(null); return null; });
+  const carregar=()=> comRetentativa(()=>nCol("assinaturas").doc(envId).get()).then(s=>s.exists?envComProvas({...s.data(),id:envId}):null).then(d=>{ setEnv(d); return d; }).catch(e=>{ console.warn("assinar: envelope",e); setErroCarga(detalheErro(e)); setEnv(null); return null; });
   useEffect(()=>{ if(!window.__WPDB||!envId||!tok){ setEnv(null); return; } carregar(); },[]); // eslint-disable-line
   const eu=env&&(env.signatarios||[]).find(s=>s.token===tok);
   const antes=env&&eu?(env.signatarios||[]).filter(s=>(s.ordem||1)<(eu.ordem||1)&&s.status!=="assinado"):[];
@@ -6035,15 +6064,17 @@ function AssinarDocumentoPagina({onClose}){
   const assinar=async()=>{ setEtapa("enviando"); setErro("");
     try{
       // relê o envelope (outro assinante pode ter assinado); se a leitura falhar, usa o que já está na tela
-      let atual=null; try{ const d=await comRetentativa(()=>nCol("assinaturas").doc(envId).get(),2); if(d.exists) atual={...d.data(),id:envId}; }catch(e){}
+      let atual=null; try{ const d=await comRetentativa(()=>nCol("assinaturas").doc(envId).get(),2); if(d.exists) atual=await envComProvas({...d.data(),id:envId}); }catch(e){}
       if(!atual) atual=env;
       const meu=(atual.signatarios||[]).find(s=>s.token===tok);
       if(!meu || meu.status==="assinado"){ setEtapa("ok"); return; }
       const agora=Date.now();
-      await comRetentativa(()=>nCol("assinaturas_provas").doc(idProva(envId,tok)).set({ envId, token:tok, nome:meu.nome||"", selfie:selfie||"", assinatura:ass||"", em:agora }));
       const reg={ status:"assinado", assinadoEm:agora, cpfInformado:soDigitos(cpf), ip:(rede&&rede.ip)||"", ua:String((rede&&rede.ua)||navigator.userAgent||"").slice(0,300), geo:geo?{lat:geo.lat,lng:geo.lng,precisao:geo.precisao||0}:null, prova:true };
+      // grava só o comprovante deste assinante (criação — permitida para quem abre o link)
+      await comRetentativa(()=>nCol("assinaturas_provas").doc(idProva(envId,tok)).set({ envId, token:tok, nome:meu.nome||"", ...reg, selfie:selfie||"", assinatura:ass||"", em:agora }));
       const lista=(atual.signatarios||[]).map(s=>s.token===tok?{...s,...reg}:s);
-      await comRetentativa(()=>nCol("assinaturas").doc(envId).set({signatarios:lista},{merge:true}));
+      // se quem assina estiver logado (ex.: a empresa), já atualiza o envelope; sem login, o painel sincroniza depois
+      nCol("assinaturas").doc(envId).set({signatarios:lista},{merge:true}).catch(()=>{});
       const todos=lista.every(s=>s.status==="assinado");
       await arqAtualizar(atual.arquivo.id,{assinatura:{ provedor:"wilami", envId, status:todos?"completed":"sent", signatarios:lista.map(s=>({nome:s.nome,email:s.email,papel:s.papel,ordem:s.ordem,status:s.status==="assinado"?"completed":"sent"})) }}).catch(()=>{});
       const novo={...atual,signatarios:lista}; setEnv(novo);
@@ -6111,11 +6142,13 @@ function AssinarDocumentoPagina({onClose}){
 function EnvelopeWilamiModal({envId,onClose}){
   const toast=useContext(ToastCtx);
   const [env,setEnv]=useState(null); const [erroEnv,setErroEnv]=useState("");
-  useEffect(()=>{ let off=null; const ref=nCol("assinaturas").doc(envId);
-    const recebe=(s)=>{ if(s.exists) setEnv({...s.data(),id:envId}); else setErroEnv("Solicitação de assinatura não encontrada. Cancele e crie de novo."); };
-    const busca=()=>ref.get().then(recebe).catch(e=>setErroEnv("Não foi possível abrir a solicitação: "+erroBanco(e)));
-    try{ off=ref.onSnapshot(recebe,()=>busca()); }catch(e){ busca(); }
-    return ()=>{ try{ off&&off(); }catch(e){} }; },[envId]);
+  // junta o envelope com os comprovantes de quem já assinou e atualiza a cada nova assinatura
+  useEffect(()=>{ let vivo=true, off=null;
+    const atualiza=()=>sincronizarEnvelopeWilami(envId).then(e=>{ if(!vivo) return; if(e) setEnv(e); else setErroEnv("Solicitação de assinatura não encontrada. Cancele e crie de novo."); }).catch(e=>{ if(vivo) setErroEnv("Não foi possível abrir a solicitação: "+erroBanco(e)); });
+    atualiza();
+    try{ off=nCol("assinaturas_provas").where("envId","==",envId).onSnapshot(()=>atualiza(),()=>{}); }catch(e){}
+    const t=setInterval(atualiza,30000);
+    return ()=>{ vivo=false; clearInterval(t); try{ off&&off(); }catch(e){} }; },[envId]);
   const prox=env&&proximoAssinante(env);
   const [gerando,setGerando]=useState(false);
   const gerarFinal=async()=>{ setGerando(true); try{ const fid=await concluirEnvelopeWilami(env); await arqAtualizar(env.arquivo.id,{assinatura:{provedor:"wilami",envId,status:"completed",assinadoArquivoId:fid,concluidoEm:Date.now()}}).catch(()=>{}); toast("Via assinada salva na pasta"); }catch(e){ toast("Não foi possível gerar: "+detalheErro(e)); } setGerando(false); };
