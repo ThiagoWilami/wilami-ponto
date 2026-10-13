@@ -624,7 +624,7 @@ const escalaInicial = () => {
 // Esses documentos não têm o campo "ts" (é guardado como "_ts"), então NÃO aparecem na lista de
 // ajustes de ponto, que é ordenada por "ts".
 const COL_HOSPEDEIRA="ajustes";
-const COL_VIRTUAL={ arquivos:["arq_","arquivo"], arquivos_partes:["arqp_","arquivo_parte"], acessosColab:["pin_","pin"], convites:["conv_","convite"], termos:["ter_","termo_pedido"], entregas:["ent_","entrega"], assinaturas:["ass_","assinatura_env"] };
+const COL_VIRTUAL={ arquivos:["arq_","arquivo"], arquivos_partes:["arqp_","arquivo_parte"], acessosColab:["pin_","pin"], convites:["conv_","convite"], termos:["ter_","termo_pedido"], entregas:["ent_","entrega"], assinaturas:["ass_","assinatura_env"], assinaturas_provas:["assp_","assinatura_prova"] };
 const _vEntrada=(nome,data)=>{ const o={...data, _t:COL_VIRTUAL[nome][1]}; if("ts" in o){ o._ts=o.ts; delete o.ts; } return o; };
 const _vSaida=(data)=>{ const o={...(data||{})}; if("_ts" in o){ o.ts=o._ts; delete o._ts; } delete o._t; return o; };
 function nCol(nome){
@@ -5984,12 +5984,24 @@ async function pdfViaFinalWilami(env, bytesOriginais){
 }
 async function concluirEnvelopeWilami(env){
   const du=await arqConteudo(env.arquivo); const bytes=b64ToBytes(du);
-  const finais=await pdfViaFinalWilami(env, bytes);
+  const pv=await provasDoEnvelope(env);
+  const finais=await pdfViaFinalWilami({...env, signatarios:(env.signatarios||[]).map(s=>({...s, ...(pv[s.token]||{})}))}, bytes);
   const base=String(env.documento||"documento").replace(/\.pdf$/i,"");
   const finalId=await arqSalvar({ nome:base+" (assinado).pdf", donoKey:env.donoKey, donoTipo:env.donoTipo, donoId:env.donoId, donoNome:env.donoNome, cpf:env.cpfDono||"",
     pasta:env.pasta, categoria:"contrato_assinado", visivelColab:true, origemId:env.arquivo.id, envId:env.id }, bytesParaDataUrl(finais,"application/pdf"));
   await nCol("assinaturas").doc(env.id).set({status:"concluido", concluidoEm:Date.now(), finalArquivoId:finalId},{merge:true});
   return finalId;
+}
+// Repete uma gravação/leitura (no celular a conexão cai por instantes ao abrir a câmera)
+async function comRetentativa(fn, vezes=3){ let ult; for(let i=0;i<vezes;i++){ try{ return await fn(); }catch(e){ ult=e; await new Promise(r=>setTimeout(r,1200*(i+1))); } } throw ult; }
+const detalheErro=(e)=> e ? String((e.code?e.code+": ":"")+(e.message||e)).slice(0,160) : "";
+// Selfie e assinatura de cada assinante ficam num documento próprio (o envelope fica leve)
+const idProva=(envId,tok)=> envId+"_"+tok;
+async function provasDoEnvelope(env){
+  const out={}; for(const s of (env.signatarios||[])){ if(s.status!=="assinado") continue;
+    if(s.selfie||s.assinatura){ out[s.token]={selfie:s.selfie||"",assinatura:s.assinatura||""}; continue; }
+    try{ const d=await nCol("assinaturas_provas").doc(idProva(env.id,s.token)).get(); if(d.exists) out[s.token]=d.data(); }catch(e){} }
+  return out;
 }
 /* ---------- Página pública: #assinar/<envelope>.<token> ---------- */
 // Recria a página quando o link muda na mesma aba (outro assinante)
@@ -6002,16 +6014,16 @@ function AssinarDocumentoPagina({onClose}){
   const par=codigoAssinarDaUrl(); const [envId,tok]=par.split(".");
   const [env,setEnv]=useState(undefined);
   const [etapa,setEtapa]=useState("doc");   // doc | id | assinar | enviando | ok
-  const [paginas,setPaginas]=useState(null); const [erroDoc,setErroDoc]=useState("");
+  const [paginas,setPaginas]=useState(null); const [erroDoc,setErroDoc]=useState(""); const [erroCarga,setErroCarga]=useState("");
   const [cpf,setCpf]=useState(""); const [selfie,setSelfie]=useState(""); const [aceite,setAceite]=useState(false); const [ass,setAss]=useState(null);
   const [geo,setGeo]=useState(null); const [rede,setRede]=useState(null); const [erro,setErro]=useState(""); const [finalOk,setFinalOk]=useState(false);
-  const carregar=()=> nCol("assinaturas").doc(envId).get().then(s=>{ const d=s.exists?{...s.data(),id:envId}:null; setEnv(d); return d; }).catch(()=>{ setEnv(null); return null; });
+  const carregar=()=> comRetentativa(()=>nCol("assinaturas").doc(envId).get()).then(s=>{ const d=s.exists?{...s.data(),id:envId}:null; setEnv(d); return d; }).catch(e=>{ console.warn("assinar: envelope",e); setErroCarga(detalheErro(e)); setEnv(null); return null; });
   useEffect(()=>{ if(!window.__WPDB||!envId||!tok){ setEnv(null); return; } carregar(); },[]); // eslint-disable-line
   const eu=env&&(env.signatarios||[]).find(s=>s.token===tok);
   const antes=env&&eu?(env.signatarios||[]).filter(s=>(s.ordem||1)<(eu.ordem||1)&&s.status!=="assinado"):[];
   // Documento em imagens (funciona em qualquer celular)
   useEffect(()=>{ if(!env||!eu||eu.status==="assinado"||antes.length||paginas) return; let vivo=true;
-    (async()=>{ try{ const du=await arqConteudo(env.arquivo); const pdfjs=await carregarPdfJs(); const pdf=await pdfjs.getDocument({data:b64ToBytes(du)}).promise; const out=[];
+    (async()=>{ try{ const du=await comRetentativa(()=>arqConteudo(env.arquivo)); const pdfjs=await comRetentativa(()=>carregarPdfJs(),2); const pdf=await pdfjs.getDocument({data:b64ToBytes(du)}).promise; const out=[];
         for(let i=1;i<=Math.min(pdf.numPages,30);i++){ const pg=await pdf.getPage(i); const vp=pg.getViewport({scale:1.6}); const c=document.createElement("canvas"); c.width=vp.width; c.height=vp.height; await pg.render({canvasContext:c.getContext("2d"),viewport:vp}).promise; out.push(c.toDataURL("image/jpeg",0.82)); }
         if(vivo) setPaginas(out); }catch(e){ console.warn("assinar: falha ao exibir PDF",e); if(vivo) setErroDoc("Não foi possível exibir o documento aqui. Abra o arquivo pelo botão abaixo para ler antes de assinar."); } })();
     return ()=>{ vivo=false; }; },[env]); // eslint-disable-line
@@ -6022,21 +6034,27 @@ function AssinarDocumentoPagina({onClose}){
   const cpfConfere = cpfValido(cpf) && (!eu||!eu.cpf || soDigitos(eu.cpf)===soDigitos(cpf));
   const assinar=async()=>{ setEtapa("enviando"); setErro("");
     try{
-      const atual=await carregar(); const meu=(atual.signatarios||[]).find(s=>s.token===tok);
+      // relê o envelope (outro assinante pode ter assinado); se a leitura falhar, usa o que já está na tela
+      let atual=null; try{ const d=await comRetentativa(()=>nCol("assinaturas").doc(envId).get(),2); if(d.exists) atual={...d.data(),id:envId}; }catch(e){}
+      if(!atual) atual=env;
+      const meu=(atual.signatarios||[]).find(s=>s.token===tok);
       if(!meu || meu.status==="assinado"){ setEtapa("ok"); return; }
-      const reg={ status:"assinado", assinadoEm:Date.now(), cpfInformado:soDigitos(cpf), selfie, assinatura:ass, ip:(rede&&rede.ip)||"", ua:(rede&&rede.ua)||navigator.userAgent, geo:geo||null };
+      const agora=Date.now();
+      await comRetentativa(()=>nCol("assinaturas_provas").doc(idProva(envId,tok)).set({ envId, token:tok, nome:meu.nome||"", selfie:selfie||"", assinatura:ass||"", em:agora }));
+      const reg={ status:"assinado", assinadoEm:agora, cpfInformado:soDigitos(cpf), ip:(rede&&rede.ip)||"", ua:String((rede&&rede.ua)||navigator.userAgent||"").slice(0,300), geo:geo?{lat:geo.lat,lng:geo.lng,precisao:geo.precisao||0}:null, prova:true };
       const lista=(atual.signatarios||[]).map(s=>s.token===tok?{...s,...reg}:s);
-      await nCol("assinaturas").doc(envId).set({signatarios:lista},{merge:true});
+      await comRetentativa(()=>nCol("assinaturas").doc(envId).set({signatarios:lista},{merge:true}));
       const todos=lista.every(s=>s.status==="assinado");
       await arqAtualizar(atual.arquivo.id,{assinatura:{ provedor:"wilami", envId, status:todos?"completed":"sent", signatarios:lista.map(s=>({nome:s.nome,email:s.email,papel:s.papel,ordem:s.ordem,status:s.status==="assinado"?"completed":"sent"})) }}).catch(()=>{});
       const novo={...atual,signatarios:lista}; setEnv(novo);
-      if(todos){ const fid=await concluirEnvelopeWilami(novo); await arqAtualizar(atual.arquivo.id,{assinatura:{provedor:"wilami",envId,status:"completed",assinadoArquivoId:fid,concluidoEm:Date.now()}}).catch(()=>{}); setFinalOk(true); }
+      // a assinatura já está gravada; se a via final falhar aqui, a empresa gera em "Acompanhar"
+      if(todos){ try{ const fid=await concluirEnvelopeWilami(novo); await arqAtualizar(atual.arquivo.id,{assinatura:{provedor:"wilami",envId,status:"completed",assinadoArquivoId:fid,concluidoEm:Date.now()}}).catch(()=>{}); setFinalOk(true); }catch(e){ console.warn("via final",e); } }
       setEtapa("ok");
-    }catch(e){ setErro("Não foi possível concluir agora. Verifique sua internet e tente de novo."); setEtapa("assinar"); }
+    }catch(e){ console.warn("assinar",e); setErro("Não foi possível gravar a assinatura. Toque em “Assinar documento” de novo. Se repetir, envie esta mensagem para a empresa: "+detalheErro(e)); setEtapa("assinar"); }
   };
   const casca=(c)=> <div className="min-h-screen grad-ink grad-hero flex items-start justify-center p-3 sm:p-4 py-6"><div className="w-full max-w-2xl"><div className="flex justify-center mb-4"><Logo light/></div><Card className="p-4 sm:p-6">{c}</Card></div></div>;
   if(env===undefined) return casca(<div className="py-10 text-center"><div className="w-8 h-8 mx-auto rounded-full border-2 border-slate-200 border-t-brand-600 animate-spin"/></div>);
-  if(!env||!eu||env.status==="cancelado") return casca(<div className="py-6 text-center"><h2 className="text-xl font-bold text-slate-900">Link indisponível</h2><p className="text-slate-500 text-sm mt-1">Este link não é válido ou o documento foi cancelado. Fale com a empresa.</p></div>);
+  if(!env||!eu||env.status==="cancelado") return casca(<div className="py-6 text-center"><h2 className="text-xl font-bold text-slate-900">Link indisponível</h2><p className="text-slate-500 text-sm mt-1">{erroCarga?"Não foi possível abrir o documento agora. Recarregue a página em instantes.":"Este link não é válido ou o documento foi cancelado. Fale com a empresa."}</p>{erroCarga&&<p className="text-[11px] text-slate-400 mt-2 break-all">{erroCarga}</p>}</div>);
   const prox=proximoAssinante(env);
   if(etapa==="ok"||eu.status==="assinado") return casca(<div className="py-6 text-center">
     <div className="w-20 h-20 mx-auto rounded-full bg-emerald-500 grid place-items-center text-white mb-4 shadow-glow"><Icon d={I.check} className="w-10 h-10" stroke={3}/></div>
@@ -6099,6 +6117,8 @@ function EnvelopeWilamiModal({envId,onClose}){
     try{ off=ref.onSnapshot(recebe,()=>busca()); }catch(e){ busca(); }
     return ()=>{ try{ off&&off(); }catch(e){} }; },[envId]);
   const prox=env&&proximoAssinante(env);
+  const [gerando,setGerando]=useState(false);
+  const gerarFinal=async()=>{ setGerando(true); try{ const fid=await concluirEnvelopeWilami(env); await arqAtualizar(env.arquivo.id,{assinatura:{provedor:"wilami",envId,status:"completed",assinadoArquivoId:fid,concluidoEm:Date.now()}}).catch(()=>{}); toast("Via assinada salva na pasta"); }catch(e){ toast("Não foi possível gerar: "+detalheErro(e)); } setGerando(false); };
   const cancelar=async()=>{ if(!confirm("Cancelar esta solicitação de assinatura? Os links deixam de funcionar.")) return;
     await nCol("assinaturas").doc(envId).set({status:"cancelado"},{merge:true}); await arqAtualizar(env.arquivo.id,{assinatura:null}).catch(()=>{}); toast("Solicitação cancelada"); onClose(); };
   return <Modal open onClose={onClose} wide>
@@ -6117,7 +6137,8 @@ function EnvelopeWilamiModal({envId,onClose}){
                 <input readOnly value={linkAssinar(env.id,s.token)} onFocus={e=>e.target.select()} aria-label={"Link de "+s.nome} className="basis-full px-2 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-[11px] text-slate-500"/></>}
           </div>; })}</div>
         <p className="text-xs text-slate-400 mt-3">A assinatura segue a ordem. Cada um recebe o link na sua vez; quem assina pode avisar o próximo direto pela tela final. Hash SHA-256 do documento: <code className="break-all">{env.hash}</code></p>
-        {env.status==="concluido" ? <div className="mt-3 p-3 rounded-xl bg-emerald-50 text-emerald-700 text-sm">Todos assinaram. A via final (com o manifesto de assinaturas) está na pasta.</div>
+        {env.status!=="concluido" && env.status!=="cancelado" && (env.signatarios||[]).every(s=>s.status==="assinado") ? <div className="mt-3 p-3 rounded-xl bg-amber-50 text-amber-800 text-sm flex flex-wrap items-center gap-2">Todos assinaram, mas a via final ainda não foi gerada.<Btn size="sm" disabled={gerando} onClick={gerarFinal}>{gerando?"Gerando…":"Gerar via assinada"}</Btn></div>
+        : env.status==="concluido" ? <div className="mt-3 p-3 rounded-xl bg-emerald-50 text-emerald-700 text-sm">Todos assinaram. A via final (com o manifesto de assinaturas) está na pasta.</div>
           : <Btn variant="ghost" size="sm" className="mt-3 text-rose-600" icon={I.x} onClick={cancelar}>Cancelar solicitação</Btn>}
       </>}
     </div>
