@@ -6046,6 +6046,37 @@ async function provasDoEnvelope(env){
     else if(pv[s.token]) out[s.token]={selfie:pv[s.token].selfie||"",assinatura:pv[s.token].assinatura||""}; }
   return out;
 }
+// Selfie ao vivo pela câmera (notebook ou celular) — não aceita imagem da galeria/arquivo
+function CameraSelfie({foto,onFoto}){
+  const vRef=useRef(null), sRef=useRef(null);
+  const [estado,setEstado]=useState(foto?"ok":"parado"); // parado | abrindo | ao_vivo | ok | erro
+  const [msg,setMsg]=useState("");
+  const parar=()=>{ try{ sRef.current&&sRef.current.getTracks().forEach(t=>t.stop()); }catch(e){} sRef.current=null; };
+  useEffect(()=>()=>parar(),[]);
+  const abrir=async()=>{ setMsg(""); onFoto(""); setEstado("abrindo");
+    if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){ setEstado("erro"); setMsg("Este navegador não permite usar a câmera. Abra o link no Chrome, Edge ou Safari atualizados."); return; }
+    try{ const st=await navigator.mediaDevices.getUserMedia({video:{facingMode:"user",width:{ideal:640},height:{ideal:480}},audio:false}); sRef.current=st; setEstado("ao_vivo");
+      setTimeout(()=>{ const v=vRef.current; if(v){ v.srcObject=st; v.play().catch(()=>{}); } },0); }
+    catch(e){ setEstado("erro"); const n=(e&&e.name)||"";
+      setMsg(n==="NotAllowedError"||n==="SecurityError" ? "A câmera foi bloqueada. Clique no cadeado ao lado do endereço do site, permita a Câmera e toque em “Abrir câmera” de novo."
+        : n==="NotFoundError"||n==="OverconstrainedError" ? "Nenhuma câmera encontrada neste aparelho. Use um aparelho com câmera (notebook com webcam ou celular)."
+        : n==="NotReadableError" ? "A câmera está sendo usada por outro programa (ex.: Zoom, Teams). Feche-o e tente de novo."
+        : "Não foi possível abrir a câmera: "+(e&&e.message||n)); } };
+  const tirar=()=>{ const v=vRef.current; if(!v||!v.videoWidth){ setMsg("Aguarde a imagem da câmera aparecer."); return; }
+    const max=360, esc=Math.min(1,max/Math.max(v.videoWidth,v.videoHeight)); const c=document.createElement("canvas"); c.width=Math.round(v.videoWidth*esc); c.height=Math.round(v.videoHeight*esc);
+    const ctx=c.getContext("2d"); ctx.translate(c.width,0); ctx.scale(-1,1); ctx.drawImage(v,0,0,c.width,c.height);
+    onFoto(c.toDataURL("image/jpeg",0.7)); parar(); setEstado("ok"); };
+  return <div>
+    {estado==="ao_vivo" ? <div className="relative rounded-xl overflow-hidden bg-black"><video ref={vRef} playsInline muted autoPlay className="w-full max-h-72 object-cover" style={{transform:"scaleX(-1)"}} aria-label="Câmera"/></div>
+      : foto ? <img src={foto} alt="Selfie" className="w-40 h-40 rounded-xl object-cover border border-slate-200"/>
+      : <div className="w-full h-32 rounded-xl bg-slate-100 grid place-items-center text-slate-400"><Icon d={I.camera} className="w-8 h-8"/></div>}
+    <div className="flex flex-wrap gap-2 mt-2">
+      {estado==="ao_vivo" ? <><Btn size="sm" icon={I.camera} onClick={tirar}>Tirar foto</Btn><Btn size="sm" variant="ghost" onClick={()=>{ parar(); setEstado(foto?"ok":"parado"); }}>Cancelar</Btn></>
+        : <Btn size="sm" icon={I.camera} disabled={estado==="abrindo"} onClick={abrir}>{estado==="abrindo"?"Abrindo câmera…":foto?"Tirar outra":"Abrir câmera"}</Btn>}
+    </div>
+    {msg && <p className="text-xs text-rose-600 mt-2">{msg}</p>}
+  </div>;
+}
 /* ---------- Página pública: #assinar/<envelope>.<token> ---------- */
 // Recria a página quando o link muda na mesma aba (outro assinante)
 function AssinarDocumento(props){
@@ -6074,6 +6105,9 @@ function AssinarDocumentoPagina({onClose}){
   const abrirOriginal=async()=>{ try{ const du=await arqConteudo(env.arquivo); const url=URL.createObjectURL(new Blob([b64ToBytes(du)],{type:"application/pdf"})); window.open(url,"_blank"); setAbriuDoc(true); }catch(e){ setErroDoc("Não foi possível abrir o documento. Verifique sua internet e recarregue a página."); } };
   const pegarProvas=()=>{ fetch("/api/ip").then(r=>r.ok?r.json():null).then(j=>setRede(j||{})).catch(()=>setRede({}));
     if(navigator.geolocation) navigator.geolocation.getCurrentPosition(p=>setGeo({lat:p.coords.latitude,lng:p.coords.longitude,precisao:p.coords.accuracy}),()=>setGeo(null),{enableHighAccuracy:true,timeout:8000}); };
+  const [fechou,setFechou]=useState(false);
+  // o navegador só deixa fechar abas abertas por link; se não fechar, mostra o aviso
+  const fecharAba=()=>{ setFechou(true); try{ window.close(); }catch(e){} setTimeout(()=>{ try{ if(!window.closed) window.location.replace("about:blank"); }catch(e){} },400); };
   const cpfConfere = cpfValido(cpf) && (!eu||!eu.cpf || soDigitos(eu.cpf)===soDigitos(cpf));
   const assinar=async()=>{ setEtapa("enviando"); setErro("");
     try{
@@ -6101,16 +6135,15 @@ function AssinarDocumentoPagina({onClose}){
   if(env===undefined) return casca(<div className="py-10 text-center"><div className="w-8 h-8 mx-auto rounded-full border-2 border-slate-200 border-t-brand-600 animate-spin"/></div>);
   if(!env||!eu||env.status==="cancelado") return casca(<div className="py-6 text-center"><h2 className="text-xl font-bold text-slate-900">Link indisponível</h2><p className="text-slate-500 text-sm mt-1">{erroCarga?"Não foi possível abrir o documento agora. Recarregue a página em instantes.":"Este link não é válido ou o documento foi cancelado. Fale com a empresa."}</p>{erroCarga&&<p className="text-[11px] text-slate-400 mt-2 break-all">{erroCarga}</p>}</div>);
   const prox=proximoAssinante(env);
-  if(etapa==="ok"||eu.status==="assinado") return casca(<div className="py-6 text-center">
+  // Fim para quem assinou: só a confirmação. O envio para o próximo é feito pela empresa (painel → Acompanhar).
+  if(etapa==="ok"||eu.status==="assinado") return casca(<div className="relative py-6 text-center">
+    <button onClick={fecharAba} aria-label="Fechar" title="Fechar" className="absolute -top-1 right-0 w-10 h-10 rounded-full grid place-items-center text-slate-400 hover:text-slate-700 hover:bg-slate-100"><Icon d={I.x} className="w-6 h-6"/></button>
     <div className="w-20 h-20 mx-auto rounded-full bg-emerald-500 grid place-items-center text-white mb-4 shadow-glow"><Icon d={I.check} className="w-10 h-10" stroke={3}/></div>
-    <h2 className="text-2xl font-extrabold text-slate-900">Documento assinado!</h2>
-    <p className="text-slate-500 mt-1">{env.status==="concluido"||finalOk?"Todos assinaram. A via final com o manifesto de assinaturas foi gerada.":"Obrigado. Sua assinatura foi registrada."}</p>
-    {prox && <div className="mt-5 p-4 rounded-2xl bg-slate-50 text-left">
-      <div className="text-sm text-slate-600 mb-2">Próximo a assinar: <b>{prox.nome}</b>{prox.papel?" ("+prox.papel+")":""}. Avise agora:</div>
-      <div className="flex flex-wrap gap-2">{prox.tel && <a href={whatsAssinante(env,prox)} target="_blank" rel="noopener" className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 text-white text-sm font-semibold"><Icon d={I.arrow} className="w-4 h-4"/>Enviar pelo WhatsApp</a>}
-        {prox.email && <><a href={emailAssinante(env,prox,"gmail")} target="_blank" rel="noopener" className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl border border-rose-200 bg-rose-50 text-rose-700 text-sm font-semibold">Enviar pelo Gmail</a>
-          <a href={emailAssinante(env,prox)} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl border border-slate-200 text-slate-700 text-sm font-semibold">Outro e-mail</a></>}</div>
-    </div>}
+    <h2 className="text-2xl font-extrabold text-slate-900">Concluído!</h2>
+    <p className="text-lg text-slate-700 mt-1">Muito obrigado, {String(eu.nome||"").split(" ")[0]}.</p>
+    <p className="text-slate-500 text-sm mt-1">Sua assinatura foi registrada com sucesso. Você já pode fechar esta página.</p>
+    {fechou && <p className="text-xs text-slate-400 mt-3">Se a aba não fechou sozinha, feche pelo navegador.</p>}
+    <Btn variant="ghost" className="mt-5" icon={I.x} onClick={fecharAba}>Fechar</Btn>
   </div>);
   if(antes.length) return casca(<div className="py-6 text-center"><h2 className="text-xl font-bold text-slate-900">Aguardando assinatura anterior</h2>
     <p className="text-slate-500 text-sm mt-1">Este documento é assinado em ordem. Antes de você, falta: <b>{antes.map(s=>s.nome).join(", ")}</b>. Você será avisado quando for a sua vez.</p></div>);
@@ -6131,11 +6164,10 @@ function AssinarDocumentoPagina({onClose}){
       <Field label="Seu CPF"><Input inputMode="numeric" value={cpf} onChange={e=>setCpf(e.target.value)} placeholder="000.000.000-00" aria-label="CPF"/></Field>
       {cpf && !cpfValido(cpf) && <p className="text-xs text-rose-500 mt-1">CPF inválido.</p>}
       {cpfValido(cpf) && !cpfConfere && <p className="text-xs text-rose-500 mt-1">Este CPF não confere com o cadastro deste assinante.</p>}
-      <div className="mt-4 p-3 rounded-2xl border border-slate-200 flex items-center gap-3">
-        {selfie ? <img src={selfie} className="w-16 h-16 rounded-xl object-cover" alt="Selfie"/> : <div className="w-16 h-16 rounded-xl bg-slate-100 grid place-items-center text-slate-400"><Icon d={I.camera}/></div>}
-        <div className="flex-1"><div className="text-sm font-semibold text-slate-800">Selfie de confirmação</div><div className="text-xs text-slate-500">Tire uma foto do seu rosto agora. Ela fica registrada como prova da assinatura.</div></div>
-        <label className="cursor-pointer"><span className="inline-flex items-center gap-1 text-xs font-semibold text-white grad-brand px-3 py-2 rounded-lg"><Icon d={I.camera} className="w-3.5 h-3.5"/>{selfie?"Refazer":"Tirar selfie"}</span>
-          <input type="file" accept="image/*" capture="user" className="hidden" onChange={async e=>{ const f=e.target.files&&e.target.files[0]; e.target.value=""; if(!f) return; try{ setSelfie(await fotoDeArquivo(f,360,0.6)); }catch(err){ setErro("Selfie: "+err.message); } }}/></label>
+      <div className="mt-4 p-3 rounded-2xl border border-slate-200">
+        <div className="text-sm font-semibold text-slate-800">Selfie de confirmação</div>
+        <div className="text-xs text-slate-500 mb-2">Tire uma foto do seu rosto agora pela câmera. Ela fica registrada como prova da assinatura.</div>
+        <CameraSelfie foto={selfie} onFoto={setSelfie}/>
       </div>
       {erro && <p className="text-sm text-rose-500 mt-2">{erro}</p>}
       <p className="text-[11px] text-slate-400 mt-3">Também registramos data e hora, IP, aparelho e — se você permitir — a localização, como prova da assinatura.</p>
