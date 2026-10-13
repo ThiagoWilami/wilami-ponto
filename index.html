@@ -634,6 +634,7 @@ function nCol(nome){
   const wrapQuery=(q)=>({
     where:(f,op,v)=>wrapQuery(q.where(f,op,v)),
     onSnapshot:(cb,err)=>q.onSnapshot(function(snap){ const docs=[]; snap.forEach(function(d){ const x=d.data()||{}; if(x._t===tipo && !x._excluido && d.id.indexOf(pre)===0) docs.push(snapDoc(d)); }); cb({ forEach:(fn)=>docs.forEach(fn), docs }); }, err),
+    get:()=>q.get().then(function(snap){ const docs=[]; snap.forEach(function(d){ const x=d.data()||{}; if(x._t===tipo && !x._excluido && d.id.indexOf(pre)===0) docs.push(snapDoc(d)); }); return { forEach:(fn)=>docs.forEach(fn), docs }; }),
   });
   const doc=(id)=>{ const ref=id ? host().doc(pre+id) : host().doc(); const vid=id || ref.id; const real=id?ref:host().doc(pre+vid);
     return { id:vid,
@@ -6002,15 +6003,22 @@ const detalheErro=(e)=> e ? String((e.code?e.code+": ":"")+(e.message||e)).slice
 // Quem assina pelo link não está logado: as regras do banco só deixam CRIAR documentos, não alterar.
 // Por isso cada assinante cria o próprio "comprovante" (assinaturas_provas) com status, evidências,
 // selfie e assinatura; o envelope é montado juntando esses comprovantes. O painel (logado) sincroniza.
-const idProva=(envId,tok)=> envId+"_"+tok;
+// id novo a cada gravação: quem não está logado só consegue CRIAR (nunca regravar um comprovante)
+const idProva=(envId,tok)=> envId+"_"+tok+"_"+Math.random().toString(36).slice(2,10);
 const CAMPOS_PROVA=["status","assinadoEm","cpfInformado","ip","ua","geo","prova"];
-async function envComProvas(env){
+// comprovantes do envelope, por token (fica o mais antigo que tem status "assinado")
+async function provasPorToken(envId){
+  const out={}; const snap=await nCol("assinaturas_provas").where("envId","==",envId).get();
+  snap.forEach(d=>{ const v=d.data(); if(!v||!v.token) return; const ok=v.token==="final"?!!v.finalArquivoId:v.status==="assinado"; if(!ok) return;
+    if(!out[v.token] || (v.em||0)<(out[v.token].em||0)) out[v.token]=v; });
+  return out;
+}
+async function envComProvas(env, pv){
   if(!env) return env;
-  const sigs=await Promise.all((env.signatarios||[]).map(async s=>{ if(s.status==="assinado") return s;
-    try{ const d=await nCol("assinaturas_provas").doc(idProva(env.id,s.token)).get(); if(d.exists){ const v=d.data(); const o={...s}; CAMPOS_PROVA.forEach(k=>{ if(v[k]!==undefined) o[k]=v[k]; }); return o; } }catch(e){}
-    return s; }));
+  if(!pv){ try{ pv=await provasPorToken(env.id); }catch(e){ pv={}; } }
+  const sigs=(env.signatarios||[]).map(s=>{ const v=pv[s.token]; if(s.status==="assinado"||!v) return s; const o={...s}; CAMPOS_PROVA.forEach(k=>{ if(v[k]!==undefined) o[k]=v[k]; }); return o; });
   let out={...env, signatarios:sigs};
-  if(out.status!=="concluido"){ try{ const f=await nCol("assinaturas_provas").doc(idProva(env.id,"final")).get(); if(f.exists&&f.data().finalArquivoId) out={...out,status:"concluido",finalArquivoId:f.data().finalArquivoId,concluidoEm:f.data().em}; }catch(e){} }
+  const f=pv.final; if(out.status!=="concluido" && f) out={...out,status:"concluido",finalArquivoId:f.finalArquivoId,concluidoEm:f.em};
   return out;
 }
 // Painel (logado): grava no envelope e no arquivo o que os assinantes registraram
@@ -6027,9 +6035,10 @@ async function sincronizarEnvelopeWilami(envId){
   return env;
 }
 async function provasDoEnvelope(env){
+  let pv={}; try{ pv=await provasPorToken(env.id); }catch(e){}
   const out={}; for(const s of (env.signatarios||[])){ if(s.status!=="assinado") continue;
-    if(s.selfie||s.assinatura){ out[s.token]={selfie:s.selfie||"",assinatura:s.assinatura||""}; continue; }
-    try{ const d=await nCol("assinaturas_provas").doc(idProva(env.id,s.token)).get(); if(d.exists) out[s.token]=d.data(); }catch(e){} }
+    if(s.selfie||s.assinatura) out[s.token]={selfie:s.selfie||"",assinatura:s.assinatura||""};
+    else if(pv[s.token]) out[s.token]={selfie:pv[s.token].selfie||"",assinatura:pv[s.token].assinatura||""}; }
   return out;
 }
 /* ---------- Página pública: #assinar/<envelope>.<token> ---------- */
