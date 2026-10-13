@@ -639,6 +639,7 @@ function nCol(nome){
     return { id:vid,
       set:(data,opts)=>real.set(_vEntrada(nome,data),opts),
       get:()=>real.get().then(snapDoc),
+      onSnapshot:(cb,err)=>real.onSnapshot(d=>cb(snapDoc(d)),err),
       // apaga de verdade; se as regras não deixarem apagar, marca como excluído (some do sistema)
       delete:()=>real.delete().catch(()=>real.set(nome==="arquivos_partes"?{d:"",_excluido:true}:{_excluido:true},{merge:true})),
     }; };
@@ -4259,6 +4260,17 @@ async function sincronizarAssinatura(arq){
 }
 const ehPdf=(a)=> /pdf/i.test(a.mime||"") || /\.pdf$/i.test(a.nome||"");
 const ehImg=(a)=> /^image\//i.test(a.mime||"");
+// Contrato enviado como foto/print: vira um PDF (uma imagem por página) salvo na mesma pasta, para poder ser assinado
+async function imagemParaPdfArquivo(arq){
+  const du=await arqConteudo(arq); const PDFLib=await carregarPdfLib(); const doc=await PDFLib.PDFDocument.create();
+  let jpg=du; if(!/^data:image\/(jpe?g|png)/i.test(du)){ const b=new Blob([b64ToBytes(du)],{type:arq.mime}); jpg=await fotoDeArquivo(b,2000,0.9); }
+  const img=/^data:image\/png/i.test(jpg) ? await doc.embedPng(b64ToBytes(jpg)) : await doc.embedJpg(b64ToBytes(jpg));
+  const W=595, H=842, esc=Math.min((W-40)/img.width,(H-40)/img.height); const pg=doc.addPage([W,H]);
+  pg.drawImage(img,{x:(W-img.width*esc)/2,y:(H-img.height*esc)/2,width:img.width*esc,height:img.height*esc});
+  const nome=String(arq.nome||"documento").replace(/\.[a-z0-9]+$/i,"")+".pdf";
+  const id=await arqSalvar({ nome, mime:"application/pdf", donoKey:arq.donoKey, donoTipo:arq.donoTipo, donoId:arq.donoId, donoNome:arq.donoNome, cpf:arq.cpf||"", pasta:arq.pasta, categoria:arq.categoria||"documento", visivelColab:!!arq.visivelColab, origemId:arq.id }, bytesParaDataUrl(await doc.save(),"application/pdf"));
+  const s=await nCol("arquivos").doc(id).get(); return {...s.data(), id};
+}
 
 function AssinaturaBadge({a}){
   if(!a) return null;
@@ -4277,6 +4289,12 @@ function PastasPessoa({tipo, pessoa}){
   const [nova,setNova]=useState(null);       // nome da nova pasta (null = fechado)
   const [assinar,setAssinar]=useState(null); // arquivo a enviar p/ assinatura
   const [envAberto,setEnvAberto]=useState(null); // envelope de assinatura Wilami aberto
+  // PDF vai direto; foto vira PDF; Word e outros formatos precisam ser salvos como PDF antes
+  const pedirAssinatura=async(a)=>{
+    if(ehPdf(a)) return setAssinar(a);
+    if(ehImg(a)){ try{ toast("Convertendo a imagem em PDF…"); setAssinar(await imagemParaPdfArquivo(a)); }catch(e){ toast("Não foi possível converter a imagem: "+erroBanco(e)); } return; }
+    toast("Para assinar, envie o contrato em PDF. No Word: Arquivo → Salvar como → PDF.");
+  };
   const [ocupado,setOcupado]=useState("");   // id do arquivo em operação
   const [drag,setDrag]=useState(false);
   const editavel=can("documentos"), podeExcluir=can("excluir");
@@ -4358,7 +4376,7 @@ function PastasPessoa({tipo, pessoa}){
             <button title="Baixar" onClick={()=>acao(a,()=>arqBaixar(a))} className="w-8 h-8 rounded-lg grid place-items-center text-slate-500 hover:bg-slate-100"><Icon d={I.download} className="w-4 h-4"/></button>
             {editavel && <button title={a.visivelColab?"Ocultar do app do colaborador":"Liberar no app do colaborador"} onClick={()=>acao(a,()=>arqAtualizar(a.id,{visivelColab:!a.visivelColab}),a.visivelColab?"Ocultado do app":"Liberado no app do colaborador")}
               className={cx("w-8 h-8 rounded-lg grid place-items-center hover:bg-slate-100", a.visivelColab?"text-emerald-600":"text-slate-400")}><Icon d={a.visivelColab?I.eye:I.eyeOff} className="w-4 h-4"/></button>}
-            {editavel && ehPdf(a) && !ass && a.categoria!=="contrato_assinado" && <Btn size="sm" variant="soft" icon={I.sign} onClick={()=>setAssinar(a)}>Assinar</Btn>}
+            {editavel && !ass && a.categoria!=="contrato_assinado" && <Btn size="sm" variant="soft" icon={I.sign} onClick={()=>pedirAssinatura(a)}>Assinar</Btn>}
             {editavel && ass && ass.provedor==="wilami" && ass.envId && <Btn size="sm" variant={ass.status==="completed"?"ghost":"soft"} icon={I.sign} onClick={()=>setEnvAberto(ass.envId)}>{ass.status==="completed"?"Detalhes":"Acompanhar"}</Btn>}
             {editavel && pend && ass.provedor!=="wilami" && <button title="Atualizar status da assinatura" onClick={()=>acao(a,()=>sincronizarAssinatura(a),"Status da assinatura atualizado")} className="w-8 h-8 rounded-lg grid place-items-center text-brand-600 hover:bg-brand-50"><Icon d={I.refresh} className="w-4 h-4"/></button>}
             {podeExcluir && <button title="Excluir" onClick={()=>excluir(a)} className="w-8 h-8 rounded-lg grid place-items-center text-slate-400 hover:text-rose-500 hover:bg-rose-50"><Icon d={I.trash} className="w-4 h-4"/></button>}
@@ -5903,7 +5921,9 @@ function EntregasPage(){
 // confirma CPF, tira selfie, dá o aceite e assina com o dedo. Registro: data/hora, IP, aparelho e localização.
 // Quando o último assina, gera a via final (original + "Manifesto de assinaturas" com as provas e o hash SHA-256).
 const BASE_LEGAL_ASSINATURA="Assinatura eletrônica realizada com o aceite das partes, nos termos do art. 10, § 2º, da Medida Provisória nº 2.200-2/2001 e da Lei nº 14.063/2020.";
-const linkAssinar=(envId,tok)=> comTenantUrl(location.origin+location.pathname, "assinar/"+envId+"."+tok);
+// O código vai no "?assinar=" (alguns apps/e-mails cortam o "#") e também no "#assinar/"
+const linkAssinar=(envId,tok)=> comTenantUrl(location.origin+location.pathname+"?assinar="+encodeURIComponent(envId+"."+tok), "assinar/"+envId+"."+tok);
+const codigoAssinarDaUrl=()=>{ const h=(location.hash||"").replace("#",""); if(h.indexOf("assinar/")===0) return h.split("/")[1]||""; try{ return (new URLSearchParams(location.search).get("assinar")||"").trim(); }catch(e){ return ""; } };
 async function sha256Hex(bytes){ const h=await crypto.subtle.digest("SHA-256", bytes); return Array.from(new Uint8Array(h)).map(b=>b.toString(16).padStart(2,"0")).join(""); }
 const cpfValido=(c)=>{ const d=soDigitos(c); if(d.length!==11||/^(\d)\1+$/.test(d)) return false; const calc=(n)=>{ let s=0; for(let i=0;i<n;i++) s+=Number(d[i])*(n+1-i); const r=(s*10)%11; return r===10?0:r; }; return calc(9)===Number(d[9]) && calc(10)===Number(d[10]); };
 const mascaraCpf=(c)=>{ const d=soDigitos(c); return d.length===11?("***."+d.slice(3,6)+"."+d.slice(6,9)+"-**"):"—"; };
@@ -5974,12 +5994,12 @@ async function concluirEnvelopeWilami(env){
 /* ---------- Página pública: #assinar/<envelope>.<token> ---------- */
 // Recria a página quando o link muda na mesma aba (outro assinante)
 function AssinarDocumento(props){
-  const [h,setH]=useState(location.hash);
-  useEffect(()=>{ const on=()=>setH(location.hash); window.addEventListener("hashchange",on); return ()=>window.removeEventListener("hashchange",on); },[]);
+  const [h,setH]=useState(codigoAssinarDaUrl());
+  useEffect(()=>{ const on=()=>setH(codigoAssinarDaUrl()); window.addEventListener("hashchange",on); return ()=>window.removeEventListener("hashchange",on); },[]);
   return <AssinarDocumentoPagina key={h} {...props}/>;
 }
 function AssinarDocumentoPagina({onClose}){
-  const par=(location.hash.replace("#","").split("/")[1]||"").trim(); const [envId,tok]=par.split(".");
+  const par=codigoAssinarDaUrl(); const [envId,tok]=par.split(".");
   const [env,setEnv]=useState(undefined);
   const [etapa,setEtapa]=useState("doc");   // doc | id | assinar | enviando | ok
   const [paginas,setPaginas]=useState(null); const [erroDoc,setErroDoc]=useState("");
@@ -6072,15 +6092,19 @@ function AssinarDocumentoPagina({onClose}){
 /* ---------- Painel: acompanhar envelope e avisar o próximo ---------- */
 function EnvelopeWilamiModal({envId,onClose}){
   const toast=useContext(ToastCtx);
-  const [env,setEnv]=useState(null);
-  useEffect(()=>{ try{ return nCol("assinaturas").doc(envId).onSnapshot(s=>setEnv(s.exists?{...s.data(),id:envId}:null),()=>{}); }catch(e){} },[envId]);
+  const [env,setEnv]=useState(null); const [erroEnv,setErroEnv]=useState("");
+  useEffect(()=>{ let off=null; const ref=nCol("assinaturas").doc(envId);
+    const recebe=(s)=>{ if(s.exists) setEnv({...s.data(),id:envId}); else setErroEnv("Solicitação de assinatura não encontrada. Cancele e crie de novo."); };
+    const busca=()=>ref.get().then(recebe).catch(e=>setErroEnv("Não foi possível abrir a solicitação: "+erroBanco(e)));
+    try{ off=ref.onSnapshot(recebe,()=>busca()); }catch(e){ busca(); }
+    return ()=>{ try{ off&&off(); }catch(e){} }; },[envId]);
   const prox=env&&proximoAssinante(env);
   const cancelar=async()=>{ if(!confirm("Cancelar esta solicitação de assinatura? Os links deixam de funcionar.")) return;
     await nCol("assinaturas").doc(envId).set({status:"cancelado"},{merge:true}); await arqAtualizar(env.arquivo.id,{assinatura:null}).catch(()=>{}); toast("Solicitação cancelada"); onClose(); };
   return <Modal open onClose={onClose} wide>
     <div className="p-6">
       <div className="flex items-start justify-between mb-3"><div><h3 className="text-lg font-bold text-slate-900">Assinatura Wilami</h3><p className="text-sm text-slate-500 break-all">{env?env.documento:"…"}</p></div><button onClick={onClose} className="text-slate-400 hover:text-slate-600"><Icon d={I.x}/></button></div>
-      {!env ? <div className="py-8 text-center text-sm text-slate-400">Carregando…</div> : <>
+      {!env ? (erroEnv ? <div className="py-6 text-center text-sm text-rose-600">{erroEnv}</div> : <div className="py-8 text-center text-sm text-slate-400">Carregando…</div>) : <>
         <div className="space-y-2">{[...env.signatarios].sort((a,b)=>(a.ordem||1)-(b.ordem||1)).map(s=>{ const vez=prox&&prox.token===s.token;
           return <div key={s.token} className={cx("p-3 rounded-xl border flex flex-wrap items-center gap-2", s.status==="assinado"?"border-emerald-200 bg-emerald-50/40":vez?"border-amber-300 bg-amber-50/40":"border-slate-200")}>
             <span className="w-7 h-7 rounded-full bg-white border border-slate-200 grid place-items-center text-xs font-bold text-slate-600">{s.ordem}º</span>
@@ -6089,7 +6113,8 @@ function EnvelopeWilamiModal({envId,onClose}){
               : <>{vez ? <Badge tone="amber">Vez dele(a)</Badge> : <Badge>Aguardando</Badge>}
                 {s.tel && <a href={whatsAssinante(env,s)} target="_blank" rel="noopener" className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold">WhatsApp</a>}
                 {s.email && <a href={emailAssinante(env,s)} className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-200 text-slate-700 text-xs font-semibold">E-mail</a>}
-                <button onClick={()=>{ copyText(msgAssinatura(env,s)); toast("Mensagem com o link copiada"); }} className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-200 text-slate-700 text-xs font-semibold">Copiar link</button></>}
+                <button onClick={()=>{ toast(copyText(linkAssinar(env.id,s.token))?"Link copiado":"Selecione e copie o link abaixo"); }} className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-200 text-slate-700 text-xs font-semibold">Copiar link</button>
+                <input readOnly value={linkAssinar(env.id,s.token)} onFocus={e=>e.target.select()} aria-label={"Link de "+s.nome} className="basis-full px-2 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-[11px] text-slate-500"/></>}
           </div>; })}</div>
         <p className="text-xs text-slate-400 mt-3">A assinatura segue a ordem. Cada um recebe o link na sua vez; quem assina pode avisar o próximo direto pela tela final. Hash SHA-256 do documento: <code className="break-all">{env.hash}</code></p>
         {env.status==="concluido" ? <div className="mt-3 p-3 rounded-xl bg-emerald-50 text-emerald-700 text-sm">Todos assinaram. A via final (com o manifesto de assinaturas) está na pasta.</div>
@@ -6911,10 +6936,11 @@ function Shell({ onLogout }) {
 // Roteamento por hash para os LINKS de cadastro/ponto (CLT e Freelancer).
 // Ex.: abrir  ...wilami-ponto-app.html#ponto-clt  já abre o quiosque CLT (público).
 function usePontoHash() {
-  const read=()=>{ const h=(window.location.hash||"").replace("#",""); return h==="ponto-clt"?"clt": h==="ponto-free"?"free": h==="meus-docs"?"docs": h.indexOf("convite/")===0?"convite": h.indexOf("termo/")===0?"termo": h.indexOf("assinar/")===0?"assinar": null; };
+  const read=()=>{ const h=(window.location.hash||"").replace("#",""); return h==="ponto-clt"?"clt": h==="ponto-free"?"free": h==="meus-docs"?"docs": h.indexOf("convite/")===0?"convite": h.indexOf("termo/")===0?"termo": h.indexOf("assinar/")===0?"assinar": (!h && /[?&]assinar=/.test(window.location.search))?"assinar": null; };
   const [mode,setMode]=useState(read());
   useEffect(()=>{ const on=()=>setMode(read()); window.addEventListener("hashchange",on); return ()=>window.removeEventListener("hashchange",on); },[]);
-  return [mode, ()=>{ if(window.location.hash){ window.history.replaceState(null,"",window.location.pathname+window.location.search); } setMode(null); }];
+  return [mode, ()=>{ let q=window.location.search; try{ const u=new URLSearchParams(q); if(u.has("assinar")){ u.delete("assinar"); q=u.toString()?"?"+u.toString():""; } }catch(e){}
+    if(window.location.hash||q!==window.location.search){ window.history.replaceState(null,"",window.location.pathname+q); } setMode(null); }];
 }
 // Instruções básicas no PRIMEIRO acesso
 function Onboarding({ onClose }){
