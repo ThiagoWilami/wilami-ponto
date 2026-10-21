@@ -499,6 +499,23 @@ const escalaVaziaUnidade = ()=>{ const o={}; for(let d=0;d<7;d++) o[d]=[]; retur
 // Vigência na escala: a pessoa só aparece a partir da data de início (admissão CLT / início PJ) e até a data
 // de validade (fim do contrato). Cadastro vindo do convite fica "aguardando admissão" até o RH definir o início.
 // O mapa é preenchido pelo StoreProvider a cada mudança de cadastro: { "p-<id>" | "pj-<id>": {ini,fim,pendente} }
+// ---- Grupos de folga (cor da escala) ----
+// Preta: 6x1 com folga todo domingo. Verde/Amarela/Salmão/Azul: 6x2 (6 dias de trabalho + 2 de folga = ciclo de 8 dias);
+// a folga "anda" um dia por semana (seg+ter → ter+qua → qua+qui…). A data de referência é a 1ª folga do grupo.
+const GRUPOS_FOLGA={
+  preto:  { cor:"#111827", nome:"Preta", desc:"6x1 · folga todo domingo", escala:"6x1", folgaDia:6 },
+  verde:  { cor:"#16A34A", nome:"Verde", desc:"6x2 · folgas 01 e 02/nov", escala:"6x2", ancora:"2026-11-01" },
+  amarelo:{ cor:"#FACC15", nome:"Amarela", desc:"6x2 · folgas 03 e 04/nov", escala:"6x2", ancora:"2026-11-03" },
+  salmao: { cor:"#FA8072", nome:"Salmão", desc:"6x2 · folgas 05 e 06/nov", escala:"6x2", ancora:"2026-11-05" },
+  azul:   { cor:"#2563EB", nome:"Azul", desc:"6x2 · folgas 07 e 08/nov", escala:"6x2", ancora:"2026-11-07" },
+};
+const GRUPO_FOLGA={ map:{}, turno:{} };   // "tipo-pid" → chave do grupo (preenchido pelo Store)
+const _diaNum=(ds)=>{ const [y,m,d]=String(ds).split("-").map(Number); return Math.round(Date.UTC(y,(m||1)-1,d||1)/864e5); };
+// grupo efetivo: o escolhido no cadastro; PJ e CLT 6x1 com folga no domingo ficam na Preta
+const grupoFolgaDe=(p,tipo)=>{ if(!p) return null; if(p.grupoFolga&&GRUPOS_FOLGA[p.grupoFolga]) return p.grupoFolga;
+  if(tipo==="pj") return "preto"; if(tipo==="clt" && (p.escala||"6x1")==="6x1" && (p.folgaDia==null||Number(p.folgaDia)===6)) return "preto"; return null; };
+// a pessoa (do grupo 6x2) está de folga nesta data?
+const folgaRodizioNaData=(g,ds)=>{ const G=GRUPOS_FOLGA[g]; if(!G||!G.ancora) return null; const r=(((_diaNum(ds)-_diaNum(G.ancora))%8)+8)%8; return r<2; };
 const VIGENCIA={ map:{} };
 const chaveVig=(tipo,pid)=> (tipo||"clt")+"-"+String(pid);
 const vigenciaDe=(p,tipo)=> tipo==="pj"
@@ -511,13 +528,21 @@ function vigenteNaData(a, ds){
   if(v.fim && ds>v.fim) return false;
   return true;
 }
+// Grupo 6x2 (rodízio): a folga vem da data, não do dia da semana. Quem está "folga" no padrão semanal
+// mas trabalha nesta data volta para o turno de trabalho (turnoBase guardado na alocação, ou o do dia).
+function aplicarRodizio(a, ds, weekday){
+  if(a.tipo==="free" || a.manualFolga) return a;
+  const g=GRUPO_FOLGA.map[chaveVig(a.tipo,a.pid)]; const f=folgaRodizioNaData(g,ds); if(f==null) return a;
+  if(f) return a.turno==="folga" ? a : {...a, turno:"folga", turnoBase:a.turno};
+  return a.turno==="folga" ? {...a, turno:a.turnoBase||GRUPO_FOLGA.turno[chaveVig(a.tipo,a.pid)]||turnoPorDia(weekday)} : a;
+}
 function diaEscala(escala, escalaOv, uid, dateStr, weekday){
   const ov = escalaOv && escalaOv[uid] && escalaOv[uid][dateStr];
-  if(ov) return ov.filter(a=>vigenteNaData(a,dateStr));
+  if(ov) return ov.filter(a=>vigenteNaData(a,dateStr)).map(a=>aplicarRodizio(a,dateStr,weekday));
   const base = (escala && escala[uid] && escala[uid][weekday]) || [];
   // O PADRÃO SEMANAL define só quem trabalha em cada turno — NUNCA carrega "faltou"/"atrasou".
   // Falta/atraso são eventos de UMA data (ficam no override da data), então nunca replicam nas outras semanas.
-  return base.filter(a=>a.tipo!=="free" && vigenteNaData(a,dateStr)).map(a=> a.marca ? {...a, marca:null} : a);
+  return base.filter(a=>a.tipo!=="free" && vigenteNaData(a,dateStr)).map(a=> aplicarRodizio(a.marca ? {...a, marca:null} : a, dateStr, weekday));
 }
 // ---- Faltas automáticas do CLT (escalado e não bateu ponto) ----
 // Datas AAAA-MM-DD entre ini e fim (inclusive)
@@ -1086,6 +1111,9 @@ function StoreProvider({children}) {
   const [arquivos]=useArquivosMeta(logado);                            // metadados dos arquivos (só no painel)
   const [acessosColab]=useAcessosColab(logado);                        // PINs do app do colaborador (hash)
   const pjsTodos=useMemo(()=>[...pjsBase, ...cadAuto.filter(c=>c.tipo==="pj")],[pjsBase,cadAuto]);
+  useMemo(()=>{ const cont={}; Object.values(escala||{}).forEach(dias=>Object.values(dias||{}).forEach(arr=>(arr||[]).forEach(a=>{ if(!a||a.turno==="folga"||a.tipo==="free") return; const k=chaveVig(a.tipo,a.pid); (cont[k]=cont[k]||{})[a.turno]=((cont[k]||{})[a.turno]||0)+1; })));
+    const t={}; Object.entries(cont).forEach(([k,c])=>{ t[k]=Object.entries(c).sort((x,y)=>y[1]-x[1])[0][0]; }); GRUPO_FOLGA.turno=t; },[escala]);
+  useMemo(()=>{ const m={}; clts.forEach(p=>{ const g=grupoFolgaDe(p,"clt"); if(g) m[chaveVig("clt",p.id)]=g; }); pjsTodos.forEach(p=>{ const g=grupoFolgaDe(p,"pj"); if(g) m[chaveVig("pj",p.id)]=g; }); GRUPO_FOLGA.map=m; },[clts,pjsTodos]);
   useMemo(()=>{ const m={}; clts.forEach(p=>{ m[chaveVig("clt",p.id)]=vigenciaDe(p,"clt"); }); freelas.forEach(p=>{ m[chaveVig("free",p.id)]=vigenciaDe(p,"free"); }); pjsTodos.forEach(p=>{ m[chaveVig("pj",p.id)]=vigenciaDe(p,"pj"); }); VIGENCIA.map=m; },[clts,freelas,pjsTodos]);
   const salvarPj=(pj)=> ehAuto(pj.id) ? cadOps.update(pj._docId||docIdDe(pj.id), pj) : setPjs(prev=> pj.id ? prev.map(x=>x.id===pj.id?{...x,...pj}:x) : [...prev,{...pj,id:(prev.reduce((m,x)=>Math.max(m,x.id),500))+1,status:pj.status||"ativo",criadoEm:Date.now()}]);
   const excluirPj=(id)=>{ if(ehAuto(id)) cadOps.remove(docIdDe(id)); else setPjs(prev=>prev.filter(x=>x.id!==id)); removerDaEscala(id,"pj"); };
@@ -1131,8 +1159,10 @@ function StoreProvider({children}) {
   const ehAuto=(id)=> typeof id==="string" && id.indexOf("auto_")===0;
   const docIdDe=(id)=> String(id).replace(/^auto_/,"");
   const salvarClt=(c)=>{
-    if(ehAuto(c.id)){ cadOps.update(c._docId||docIdDe(c.id), c); return; }
-    if(c.id){ setClts(prev=>prev.map(x=>x.id===c.id?{...x,...c}:x)); }
+    if(ehAuto(c.id)){ const ant=cadAuto.find(x=>x.id===c.id); cadOps.update(c._docId||docIdDe(c.id), c);
+      if(ant && (ant.grupoFolga||"")!==(c.grupoFolga||"") && c.unidade!=null && c.admissao){ const tu=GRUPO_FOLGA.turno[chaveVig("clt",c.id)]||null; gerarEscalaFixa(c.id, c.escala||"6x1", c.unidade, false, c.folgaDia, "clt", tu); } return; }
+    if(c.id){ const ant=cltsBase.find(x=>x.id===c.id); setClts(prev=>prev.map(x=>x.id===c.id?{...x,...c}:x));
+      if(ant && (ant.grupoFolga||"")!==(c.grupoFolga||"") && c.vinculo!=="confianca" && c.unidade!=null){ const tu=GRUPO_FOLGA.turno[chaveVig("clt",c.id)]||null; gerarEscalaFixa(c.id, c.escala||"6x1", c.unidade, false, c.folgaDia, "clt", tu); } }
     else { const novo={...c,id:nextId(cltsBase.length?cltsBase:[{id:0}]),banco:"+00h00",extras:"0h00",atrasos:"0h00",docs:c.docs||{contrato:false,exames:false,ctps:false,rg:false},status:"ativo"};
       setClts(prev=>[...prev,novo]);
       // Cargo de confiança NÃO entra na escala (não bate ponto). CLT/Freela Fixo entram normalmente.
@@ -1521,9 +1551,9 @@ function Dashboard({go}) {
 // ---- Grade semanal (conceito Sky Escala): cor por pessoa, folga colore o cabeçalho do dia ----
 const CORES_ESCALA=["#3B82F6","#22C55E","#8B5CF6","#EF4444","#FB923C","#EAB308","#14B8A6","#EC4899","#0EA5E9","#64748B","#A16207","#1E293B"];
 const hashStr=(s)=>{ let x=0; s=String(s); for(let i=0;i<s.length;i++){ x=((x<<5)-x+s.charCodeAt(i))|0; } return Math.abs(x); };
-const corPessoaEscala=(p,tipo,pid)=> (p&&p.cor) || CORES_ESCALA[hashStr((tipo||"clt")+"-"+pid)%CORES_ESCALA.length];
+const corPessoaEscala=(p,tipo,pid)=>{ const g=grupoFolgaDe(p,tipo); if(g) return GRUPOS_FOLGA[g].cor; return (p&&p.cor) || CORES_ESCALA[hashStr((tipo||"clt")+"-"+pid)%CORES_ESCALA.length]; };
 const textoSobreCor=(hex)=>{ const m=/^#?([0-9a-f]{6})$/i.exec(hex||""); if(!m) return "#fff"; const n=parseInt(m[1],16); const r=n>>16,g=(n>>8)&255,b=n&255; return (0.299*r+0.587*g+0.114*b)>165?"#1a1a1a":"#fff"; };
-const fundoFolga=(cores)=>{ if(!cores.length) return null; if(cores.length===1) return cores[0]; const st=cores.map((c,i)=>`${c} ${Math.round(i*100/cores.length)}% ${Math.round((i+1)*100/cores.length)}%`).join(","); return `linear-gradient(135deg,${st})`; };
+const fundoFolga=(cores)=>{ cores=[...new Set(cores)]; if(!cores.length) return null; if(cores.length===1) return cores[0]; const st=cores.map((c,i)=>`${c} ${Math.round(i*100/cores.length)}% ${Math.round((i+1)*100/cores.length)}%`).join(","); return `linear-gradient(135deg,${st})`; };
 const GRUPOS_TURNO=[["manha","Manhã","☀️"],["tarde","Tarde","🌤️"],["noite","Noite","🌙"]];
 // Selo de vigência: aguardando admissão · começa em dd/mm · contrato encerrado
 const BadgeVigencia=({p,tipo})=>{ const v=vigenciaDe(p,tipo); const hoje=hojeStr();
@@ -1732,7 +1762,7 @@ function EscalaVisual() {
                   <th className="sticky left-0 z-10 bg-slate-50 w-[130px] sm:w-[170px] text-left px-2.5 py-2 font-semibold text-slate-500 border-b border-r border-slate-200">Colaborador</th>
                   {[0,1,2,3,4,5,6].map(di=>{ const folgas=g.rows.filter(o=>alocsDe(o,di).some(a=>a.turno==="folga")).map(o=>corPessoaEscala(o.p,o.tipo,o.pid));
                     const bg=fundoFolga(folgas); const trab=g.rows.filter(o=>alocsDe(o,di).some(a=>a.turno!=="folga")).length; const d=datasSemana[di];
-                    const txt=bg?(folgas.length===1?textoSobreCor(folgas[0]):"#fff"):null;
+                    const txt=bg?(new Set(folgas).size===1?textoSobreCor(folgas[0]):"#fff"):null;
                     return <th key={di} className={cx("relative px-1 py-1.5 border-b border-slate-200 font-semibold align-top", ehHoje(di)&&"ring-2 ring-inset ring-amber-400")} style={bg?{background:bg,color:txt}:{background:ehHoje(di)?"#fffbeb":"#f8fafc"}} title={folgas.length?"Folga: "+g.rows.filter(o=>alocsDe(o,di).some(a=>a.turno==="folga")).map(o=>nome(o.pid,o.tipo)).join(", "):""}>
                       <div className={cx("text-base font-extrabold leading-tight", !bg&&"text-slate-800")}>{d.getDate()}/{String(d.getMonth()+1).padStart(2,"0")}</div>
                       <div className={cx("text-[10px] uppercase", !bg&&"text-slate-400")}>{DIAS[di]}{ehHoje(di)?" · hoje":""}</div>
@@ -1765,7 +1795,10 @@ function EscalaVisual() {
             </div>
           </div>; })}
       </div>)}
-      <p className="no-print text-xs text-slate-400">Cada pessoa tem uma cor. Quando alguém está de <b>folga</b>, o cabeçalho do dia fica com a cor dessa pessoa. Clique no nome para trocar turno, horário, marcar falta/atraso ou remover; clique no espaço vazio para escalar; <b>+FL</b> inclui um freelancer no turno.</p>
+      <div className="flex flex-wrap gap-x-4 gap-y-1.5 mb-2 text-xs text-slate-600" aria-label="Legenda das cores">
+        {Object.entries(GRUPOS_FOLGA).map(([k,g])=><span key={k} className="inline-flex items-center gap-1.5"><span className="w-3.5 h-3.5 rounded border border-black/10" style={{background:g.cor}}/><b>{g.nome}</b> {g.desc}</span>)}
+      </div>
+      <p className="no-print text-xs text-slate-400">A cor de cada pessoa é a do seu grupo de folga (definido no cadastro). O cabeçalho do dia fica com a cor do grupo que folga naquele dia; no 6x2 a folga anda um dia por semana. Clique no nome para trocar turno, horário, marcar falta/atraso ou remover; clique no espaço vazio para escalar; <b>+FL</b> inclui um freelancer no turno.</p>
       {alocMenu && ReactDOM.createPortal(menuDe(menu.di, alocMenu, "fixed z-[70]", {left:menu.x, top:menu.y}), document.body)}
     </div>}
 
@@ -2576,10 +2609,21 @@ function ColabForm({ tipo, inicial, onSalvar, onClose, vinculo }) {
         <Field label="Cargo / função"><Select value={f.cargo} onChange={e=>setCargoClt(e.target.value)}>{[...new Set([...cargosLista, f.cargo].filter(Boolean))].map(c=><option key={c}>{c}</option>)}</Select></Field>
         <Field label="Setor"><Select value={f.setor} onChange={e=>set("setor",e.target.value)}>{SETORES.map(([k,l])=><option key={k} value={k}>{l}</option>)}</Select></Field>
         <Field label="Unidade (casa)"><Select value={f.unidade} onChange={e=>set("unidade",Number(e.target.value))}>{unidades.map(u=><option key={u.id} value={u.id}>{u.nome}</option>)}</Select></Field>
+        <div className="sm:col-span-2"><div className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Cor da escala (grupo de folga)</div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            {Object.entries(GRUPOS_FOLGA).map(([k,g])=>{ const on=f.grupoFolga===k; return <button type="button" key={k} aria-pressed={on} onClick={()=>setF(p=>({...p, grupoFolga:k, escala:g.escala, folgaDia:g.folgaDia!=null?g.folgaDia:(p.folgaDia==null?6:p.folgaDia)}))}
+              className={cx("flex items-center gap-2 p-2 rounded-xl border text-left transition", on?"border-brand-500 ring-2 ring-brand-200 bg-brand-50/40":"border-slate-200 hover:border-slate-300")}>
+              <span className="w-7 h-7 rounded-lg shrink-0 border border-black/10" style={{background:g.cor}}/>
+              <span className="min-w-0"><span className="block text-sm font-semibold text-slate-800">{g.nome}</span><span className="block text-[11px] text-slate-500 leading-tight">{g.desc}</span></span></button>; })}
+            <button type="button" aria-pressed={!f.grupoFolga} onClick={()=>setF(p=>({...p, grupoFolga:""}))} className={cx("flex items-center gap-2 p-2 rounded-xl border text-left", !f.grupoFolga?"border-brand-500 ring-2 ring-brand-200":"border-slate-200 hover:border-slate-300")}>
+              <span className="w-7 h-7 rounded-lg shrink-0 border border-dashed border-slate-300 grid place-items-center text-slate-400 text-xs">—</span>
+              <span className="min-w-0"><span className="block text-sm font-semibold text-slate-800">Outra escala</span><span className="block text-[11px] text-slate-500 leading-tight">escolher escala e dia</span></span></button>
+          </div></div>
+        {!f.grupoFolga && <>
         <Field label="Escala fixa"><Select value={f.escala} onChange={e=>set("escala",e.target.value)}>{Object.entries(ESCALAS).map(([k,v])=><option key={k} value={k}>{v}</option>)}</Select></Field>
         <Field label="Dia da folga (referência)"><Select value={f.folgaDia==null?"":f.folgaDia} onChange={e=>set("folgaDia",e.target.value===""?null:Number(e.target.value))}>
           {DIAS.map((d,i)=><option key={i} value={i}>{["Segunda","Terça","Quarta","Quinta","Sexta","Sábado","Domingo"][i]}</option>)}
-        </Select></Field>
+        </Select></Field></>}
         <Field label="Admissão / início na escala"><Input type="date" value={f.admissao} onChange={e=>set("admissao",e.target.value)}/></Field>
         <Field label="Válido até (fim do contrato, opcional)"><Input type="date" value={f.fimContrato||""} onChange={e=>set("fimContrato",e.target.value)}/></Field>
         {f.origem==="convite" && !f.admissao && <div className="sm:col-span-2 p-3 rounded-xl bg-amber-50 text-amber-800 text-sm flex items-start gap-2"><Icon d={I.calendar} className="w-4 h-4 mt-0.5 shrink-0"/><span>Cadastro recebido pelo convite. <b>Defina a data de admissão</b>: a pessoa só entra na escala (e só consegue bater ponto) a partir dessa data.</span></div>}
