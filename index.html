@@ -596,10 +596,16 @@ function folgaPelaRegra(p,ds){ const wd=wdDe(ds); const g=grupoFolgaDe(p,"clt");
   if(esc==="5x2"||esc==="6x2") return wd===base||wd===(base+1)%7; if(esc==="12x36") return false; return wd===base; }
 function diasTrabalhoNoPeriodo(p,ini,fim,escala,escalaOv){
   const naEscala = p && p.id!=null && p.unidade!=null && Object.values((escala||{})[p.unidade]||{}).some(arr=>(arr||[]).some(a=>String(a.pid)===String(p.id)&&a.tipo==="clt"));
-  let n=0; datasEntre(ini,fim).forEach(ds=>{
+  // Vigência e grupo de folga vêm da própria pessoa (p), não do cadastro salvo: no formulário a data de admissão
+  // ou o grupo podem ter acabado de ser digitados, e quem veio pelo convite fica "pendente" até salvar a admissão.
+  const k=chaveVig("clt",p&&p.id); const vigAnt=VIGENCIA.map[k], grpAnt=GRUPO_FOLGA.map[k];
+  if(naEscala){ delete VIGENCIA.map[k]; const g=grupoFolgaDe(p,"clt"); if(g) GRUPO_FOLGA.map[k]=g; else delete GRUPO_FOLGA.map[k]; }
+  let n=0;
+  try{ datasEntre(ini,fim).forEach(ds=>{
     if(p.admissao && ds<p.admissao) return; if(p.fimContrato && ds>p.fimContrato) return;
     if(naEscala){ const a=diaEscala(escala,escalaOv,p.unidade,ds,wdDe(ds)).find(x=>String(x.pid)===String(p.id)&&x.tipo==="clt"); if(a && a.turno!=="folga") n++; }
-    else if(!folgaPelaRegra(p,ds)) n++; });
+    else if(!folgaPelaRegra(p,ds)) n++; }); }
+  finally{ if(naEscala){ if(vigAnt!==undefined) VIGENCIA.map[k]=vigAnt; if(grpAnt!==undefined) GRUPO_FOLGA.map[k]=grpAnt; else delete GRUPO_FOLGA.map[k]; } }
   return n; }
 function calcFolhaLinha(c, ctx){
   const {apurCLT, cltExtraAjuste, ymRef, getDossie, naData, faltasCtx}=ctx; const gorjetasCLT=ctx.gorjetasCLT||{};
