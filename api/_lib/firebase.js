@@ -69,3 +69,16 @@ function lerCorpo(req) {
 }
 
 module.exports = { PROJECT_ID, usuarioDoToken, verificarUsuario, lerDocFirestore, lerCorpo };
+
+// ---------- Acesso do app "Meus documentos" (CPF/CNPJ + PIN) ----------
+// O app guarda o hash do PIN conferido no login; aqui ele é comparado com o hash salvo pelo RH.
+async function portalValido(tenant, portal) {
+  const key = String((portal && portal.key) || "");
+  const hash = String((portal && portal.hash) || "");
+  if (!/^(clt|free|pj)-[A-Za-z0-9_-]{1,80}$/.test(key) || !/^[a-f0-9]{64}$/.test(hash)) return null;
+  if (tenant && !/^[A-Za-z0-9_-]{1,64}$/.test(tenant)) return null;
+  const pin = await lerDocFirestore((tenant ? `tenants/${tenant}/` : "") + `ajustes/pin_${key}`);
+  if (!pin || pin._t !== "pin" || pin._excluido || pin.hash !== hash) return null;
+  return key;
+}
+module.exports.portalValido = portalValido;

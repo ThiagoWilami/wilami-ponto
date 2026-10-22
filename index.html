@@ -689,7 +689,7 @@ const escalaInicial = () => {
 // Esses documentos não têm o campo "ts" (é guardado como "_ts"), então NÃO aparecem na lista de
 // ajustes de ponto, que é ordenada por "ts".
 const COL_HOSPEDEIRA="ajustes";
-const COL_VIRTUAL={ arquivos:["arq_","arquivo"], arquivos_partes:["arqp_","arquivo_parte"], acessosColab:["pin_","pin"], convites:["conv_","convite"], termos:["ter_","termo_pedido"], entregas:["ent_","entrega"], assinaturas:["ass_","assinatura_env"], assinaturas_provas:["assp_","assinatura_prova"] };
+const COL_VIRTUAL={ arquivos:["arq_","arquivo"], arquivos_partes:["arqp_","arquivo_parte"], acessosColab:["pin_","pin"], convites:["conv_","convite"], termos:["ter_","termo_pedido"], entregas:["ent_","entrega"], assinaturas:["ass_","assinatura_env"], assinaturas_provas:["assp_","assinatura_prova"], notas:["nf_","nota_fiscal"] };
 const _vEntrada=(nome,data)=>{ const o={...data, _t:COL_VIRTUAL[nome][1]}; if("ts" in o){ o._ts=o.ts; delete o.ts; } return o; };
 const _vSaida=(data)=>{ const o={...(data||{})}; if("_ts" in o){ o.ts=o._ts; delete o._ts; } delete o._t; return o; };
 function nCol(nome){
@@ -734,7 +734,7 @@ const ARQ_MAX_BYTES = 12*1024*1024;        // limite por arquivo
 const PASTAS_PADRAO = {
   clt:  ["Documentos pessoais","Holerites","Contratos","Termos assinados","Atestados","Advertências","Outros"],
   free: ["Documentos pessoais","Recibos","Contratos","Termos assinados","Outros"],
-  pj:   ["Contrato de prestação de serviço","Notas fiscais","Documentos da empresa","Termos assinados","Outros"],
+  pj:   ["Contrato de prestação de serviço","Notas fiscais","Comprovantes de pagamento","Documentos da empresa","Termos assinados","Outros"],
 };
 const TIPO_ROTULO = { clt:"CLT", free:"Freelancer", pj:"PJ" };
 const HOLERITE_TIPOS = [["mensal","Folha mensal"],["adiantamento","Adiantamento"],["ferias","Férias"],["13_1","13º — 1ª parcela"],["13_2","13º — 2ª parcela"],["plr","PLR"],["rescisao","Rescisão"]];
@@ -960,7 +960,7 @@ const PERMS_INIT = {
 };
 const CAPS = [["escala","Editar escala"],["colaboradores","Gerir colaboradores"],["financeiro","Relatórios financeiros"],["documentos","Documentos e dossiê"],["unidades","Gerir unidades"],["ajustes","Aprovar ajustes de ponto"],["equipe","Gerir equipe"],["excluir","Excluir/apagar dados"]];
 // "diretor" e "financeira" (Diretora Financeira) são os únicos que enxergam o pagamento SIGILOSO da diretoria.
-const PAPEIS = { proprietario:"Proprietário", gerente:"Gerente", rh_financeiro:"RH / Financeiro", diretor:"Diretor", financeira:"Diretora Financeira", contabilidade:"Contabilidade (só a aba Contabilidade)", pcmso:"PAROMED / PCMSO (só a aba PCMSO)" };
+const PAPEIS = { proprietario:"Proprietário", gerente:"Gerente", rh_financeiro:"RH / Financeiro", diretor:"Diretor", financeira:"Diretora Financeira", contabilidade:"Contabilidade (só a aba Contabilidade)", pcmso:"PAROMED / PCMSO (só a aba PCMSO)", financeiro:"Financeiro (só a aba Notas fiscais PJ)" };
 
 // Coleção PÚBLICA de auto-cadastros (feitos pelo celular, sem login).
 // Cada cadastro é um documento próprio → o celular só CRIA (não sobrescreve a base).
@@ -1120,7 +1120,7 @@ function StoreProvider({children}) {
   const _capitaliza=(s)=> s ? s.charAt(0).toUpperCase()+s.slice(1) : s;
   const _nomeLocal = meuEmail ? _capitaliza(meuEmail.split("@")[0]) : "";
   const meuNome = (meuBind&&meuBind.nome) || _nomeLocal || (semAuth?"Gestor":"Usuário");
-  const meuPapel = semAuth ? "Proprietário" : (ehDono ? "Administrador" : ({contabilidade:"Contabilidade",pcmso:"PAROMED / PCMSO"}[meuBind&&meuBind.papel] || "Gerente"));
+  const meuPapel = semAuth ? "Proprietário" : (ehDono ? "Administrador" : ({contabilidade:"Contabilidade",pcmso:"PAROMED / PCMSO",financeiro:"Financeiro"}[meuBind&&meuBind.papel] || "Gerente"));
   const casaRestrita = (!ehDono && meuBind && meuBind.unidade && meuBind.unidade!=="todas") ? meuBind.unidade : null;
   const papelKey = (meuBind&&meuBind.papel) || (semAuth?"proprietario":(ehDono?"proprietario":""));
   // Sigilo da diretoria: quem enxerga o valor do pagamento marcado como sigiloso.
@@ -1154,6 +1154,7 @@ function StoreProvider({children}) {
   const [modeloContratoPJ,setModeloContratoPJ]=usePersist("modeloContratoPJ",null);   // null = modelo padrão
   const [empresaContratante,setEmpresaContratante]=usePersist("empresaContratante",{});
   const [envContab,setEnvContab]=usePersist("envioContabilidade",{});   // admissões enviadas à contabilidade
+  const [finCfg,setFinCfg]=usePersist("financeiroCfg",{});             // e-mails do financeiro (aviso de nota fiscal PJ)
   const [contabCfg,setContabCfg]=usePersist("contabilidadeCfg",{});     // e-mail da contabilidade, empresa/CNPJ por unidade
   const [pcmso,setPcmso]=usePersist("pcmsoDados",{});                   // ajustes da planilha PCMSO
   const [termoImagemCfg,setTermoImagemCfg]=usePersist("termoImagemCfg",null);
@@ -1397,7 +1398,7 @@ function StoreProvider({children}) {
   const value={ unidades:unidadesVis,salvarUnidade,excluirUnidade, clts:cltsVis,freelas:freelasVis,freelasComPagamentos:freelasPagVis,salvarClt,salvarFreela,excluirColab,cadastrarPublico, anexarDoc,
     escala,setEscala, escalaOv,setEscalaOv, registros:registrosVis,addRegistro, pontoHist, freelancerEscaladoHoje, valorFreela, setFreelaAjuste, cltExtraAjuste,setCltExtra, gorjetasCLT,setGorjetaCLT, pagamentosFreela,addPagamentoFreela,removePagamentoFreela, pagamentosCLT,addPagamentoCLT,removePagamentoCLT, faltaDescontoDesde,setFaltaDescontoDesde, vtDiaPagamento,setVtDiaPagamento,
     cargosFreela,salvarCargoFreela,excluirCargoFreela, atestados,enviarAtestado, ajustes,enviarAjuste,resolverAjuste,
-    dossie,getDossie,addFalta,addFeedback,addAnexo, perfil,setPerfil, perms,setPerms, can, envContab,setEnvContab, contabCfg,setContabCfg, pcmso,setPcmso,
+    dossie,getDossie,addFalta,addFeedback,addAnexo, perfil,setPerfil, perms,setPerms, can, envContab,setEnvContab, contabCfg,setContabCfg, finCfg,setFinCfg, pcmso,setPcmso,
     clientes,clienteAtivo,tenantAtual,criarCliente,trocarCliente,
     acesso,donos,setDonos,acessos,acessosOps,
     marca,setMarca, pjs:(casaRestrita!=null?pjsTodos.filter(x=>x.unidade==null||x.unidade==="todas"||_mesmaCasa(x.unidade)):pjsTodos), salvarPj,excluirPj, pagamentosPJ,addPagamentoPJ,removePagamentoPJ,
@@ -4989,6 +4990,264 @@ function PrestadoresPJ(){
 }
 
 /* ============================ APP DO COLABORADOR — MEUS DOCUMENTOS (CPF/CNPJ + PIN) ============================ */
+/* ============================ NOTAS FISCAIS DOS PRESTADORES PJ ============================ */
+// O PJ envia a nota do mês pelo app "Meus documentos"; o sistema lê a nota (XML, texto do PDF ou, se preciso,
+// a leitura automática do Claude), confere com o valor do contrato e avisa o financeiro por e-mail.
+// O financeiro vê tudo em "Notas fiscais PJ" e anexa o comprovante de pagamento. Nota e comprovante ficam na pasta do PJ.
+const compDe=(d)=>{ d=d||new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0"); };
+const compMais=(c,n)=>{ const [y,m]=String(c).split("-").map(Number); return compDe(new Date(y,m-1+n,1)); };
+const numBR=(t)=>{ t=String(t==null?"":t).trim(); if(!t) return null; const n=Number(/,\d{1,2}$/.test(t)?t.replace(/\./g,"").replace(",","."):t.replace(/,/g,"")); return isFinite(n)?n:null; };
+const _semAcento=(s)=>String(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toUpperCase().replace(/\s+/g," ");
+const RE_REAIS=/(\d{1,3}(?:\.\d{3})+,\d{2}|\d+,\d{2})/;
+const ROT_BRUTO=["VALOR TOTAL DO SERVICO","VALOR TOTAL DOS SERVICOS","VALOR TOTAL DA NFS-E","VALOR TOTAL DA NOTA","VALOR DOS SERVICOS","VALOR DO SERVICO","VALOR BRUTO"];
+const ROT_LIQ=["VALOR LIQUIDO"];
+function valorAposRotulo(T,rotulos){
+  for(const r of rotulos){ let i=T.indexOf(r); while(i>=0){ const m=RE_REAIS.exec(T.slice(i+r.length,i+r.length+90)); if(m) return numBR(m[1]); i=T.indexOf(r,i+1); } }
+  return null; }
+// Texto de uma NFS-e em PDF → valores, número, emissão e CNPJs
+function lerTextoNota(txt){
+  const T=_semAcento(txt);
+  const r={ valor:valorAposRotulo(T,ROT_BRUTO), valorLiquido:valorAposRotulo(T,ROT_LIQ), numero:"", emissao:"",
+    valores:[...T.matchAll(/(\d{1,3}(?:\.\d{3})+,\d{2}|\d+,\d{2})/g)].map(m=>numBR(m[1])),
+    cnpjs:[...new Set([...T.matchAll(/\d{2}\.?\d{3}\.?\d{3}\/?\d{4}-?\d{2}/g)].map(m=>soDigitos(m[0])))] };
+  const n=/(?:NUMERO DA (?:NOTA|NFS-?E)|N[O°º]\.? DA (?:NOTA|NFS-?E)|NFS-?E N[O°º]?\.?)\s*:?\s*(\d{1,15})/.exec(T); if(n) r.numero=n[1].replace(/^0+(?=\d)/,"");
+  const e=/(?:DATA (?:E HORA )?(?:DA |DE )?EMISSAO|EMITIDA EM|EMISSAO)\s*:?\s*(\d{2})\/(\d{2})\/(\d{4})/.exec(T); if(e) r.emissao=e[3]+"-"+e[2]+"-"+e[1];
+  return r; }
+// XML da NFS-e (padrão ABRASF ou nacional)
+function lerXmlNota(xml){
+  const d=new DOMParser().parseFromString(xml,"application/xml"); if(d.getElementsByTagName("parsererror").length) return null;
+  const todos=[...d.getElementsByTagName("*")];
+  const tag=(...ns)=>{ for(const n of ns){ const el=todos.find(x=>x.localName===n && x.children.length===0 && x.textContent.trim()); if(el) return el.textContent.trim(); } return ""; };
+  const num=(...ns)=>{ const t=tag(...ns); return t?numBR(t):null; };
+  return { valor:num("ValorServicos","vServ","ValorTotalServicos","ValorTotal"), valorLiquido:num("ValorLiquidoNfse","vLiq","ValorLiquido"),
+    numero:tag("Numero","nNFSe","NumeroNfse"), emissao:tag("DataEmissao","dhEmi","DataEmissaoNfse","dhProc").slice(0,10), valores:[],
+    cnpjs:[...new Set(todos.filter(x=>/^cnpj$/i.test(x.localName)).map(x=>soDigitos(x.textContent)).filter(c=>c.length===14))] }; }
+async function lerNotaIA(arq, portal){
+  let du=arq.dados, mime=arq.mime;
+  if(/^image\//.test(mime)){ du=await compressImg(du,1800,0.85); mime="image/jpeg"; }
+  const user=window.__WPAUTH&&window.__WPAUTH.currentUser;
+  const token=user? await user.getIdToken().catch(()=>"") : "";
+  const r=await fetch("/api/nota",{ method:"POST", headers:{"Content-Type":"application/json", ...(token?{Authorization:"Bearer "+token}:{})},
+    body:JSON.stringify({ mime, base64:du.split(",")[1], tenant:WP_TENANT||"", portal:portal||null }) });
+  let j=null; try{ j=await r.json(); }catch(e){}
+  if(!r.ok){ const err=new Error((j&&j.erro)||("Erro "+r.status)); err.status=r.status; throw err; }
+  return { valor:j.valorServicos, valorLiquido:j.valorLiquido, numero:j.numero||"", emissao:j.emissao||"", valores:[],
+    cnpjs:[j.cnpjPrestador,j.cnpjTomador].map(soDigitos).filter(c=>c.length===14), naoEhNota:j.ehNotaFiscal===false, obs:j.observacao||"" }; }
+async function lerNotaFiscal(arq, portal){
+  let r=null, fonte="";
+  try{
+    if(arq.mime==="application/xml"){ r=lerXmlNota(new TextDecoder().decode(b64ToBytes(arq.dados))); fonte="xml"; }
+    else if(arq.mime==="application/pdf"){ const txt=(await textoPaginasPdf(b64ToBytes(arq.dados))).join(" "); if(txt.replace(/\s/g,"").length>40){ r=lerTextoNota(txt); fonte="pdf"; } }
+  }catch(e){ r=null; }
+  if(arq.mime!=="application/xml" && (!r || (r.valor==null && r.valorLiquido==null))){
+    try{ const ia=await lerNotaIA(arq,portal); r={...(r||{}), ...ia, cnpjs:[...new Set([...((r&&r.cnpjs)||[]),...ia.cnpjs])]}; fonte="ia"; }
+    catch(e){ /* sem leitura automática: o financeiro confere à mão */ }
+  }
+  return { valor:null, valorLiquido:null, numero:"", emissao:"", valores:[], cnpjs:[], ...(r||{}), fonte };
+}
+const cnpjsDaEmpresa=(empresaContratante,contabCfg)=>[...new Set([empresaEfetiva(empresaContratante).cnpj, ...Object.values((contabCfg&&contabCfg.empresas)||{}).map(e=>e&&e.cnpj)].map(soDigitos).filter(c=>c.length===14))];
+// Confere a nota com o contrato. confere: true (igual), false (diferente), null (valor não lido ou contrato sem valor)
+function conferirNota(r, pj, cnpjsEmpresa){
+  const contrato=Math.round((Number(pj&&pj.valor)||0)*100)/100;
+  const igual=(v)=>v!=null && Math.abs(Number(v)-contrato)<0.005;
+  let valor=r.valor!=null?Number(r.valor):(r.valorLiquido!=null?Number(r.valorLiquido):null);
+  if(valor==null && contrato>0 && (r.valores||[]).some(igual)) valor=contrato;   // sem rótulo, mas o valor do contrato aparece na nota
+  const cnpjPj=soDigitos(pj&&pj.cnpj), cnpjs=r.cnpjs||[];
+  return { valorNota:valor, valorLiquido:r.valorLiquido!=null?Number(r.valorLiquido):null, valorContrato:contrato,
+    confere: contrato>0 && valor!=null ? igual(valor) : null, diferenca: contrato>0 && valor!=null ? Math.round((valor-contrato)*100)/100 : null,
+    prestadorOk: cnpjPj.length===14 && cnpjs.length ? cnpjs.includes(cnpjPj) : null,
+    tomadorOk: (cnpjsEmpresa||[]).length && cnpjs.length ? cnpjsEmpresa.some(c=>cnpjs.includes(c)) : null }; }
+// Nota em XML não passa por prepararArquivo (que aceita só foto/PDF)
+async function prepararNota(file){
+  const ehXml=/\.xml$/i.test(file.name||"") || /xml/.test(String(file.type||""));
+  if(!ehXml) return prepararArquivo(file);
+  if(file.size>2*1024*1024) throw new Error("o XML passa de 2 MB");
+  const du=await lerArquivoDataUrl(file);
+  return { nome:file.name||"nota.xml", mime:"application/xml", dados:"data:application/xml;base64,"+String(du).split(",")[1] }; }
+function avisarFinanceiro(notaId){
+  return fetch("/api/notificar",{ method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ tenant:WP_TENANT||"", notaId }) }).catch(()=>{}); }
+const ultimaNota=(notas,pjKey,comp)=>(notas||[]).filter(n=>n.pjKey===pjKey && n.competencia===comp).sort((a,b)=>(b.enviadoEm||0)-(a.enviadoEm||0))[0]||null;
+function ConferenciaNota({c, curto}){
+  if(!c) return null;
+  const linhas=[];
+  if(c.confere===true) linhas.push(["green",I.check,"Valor confere com o contrato ("+fmtBRL(c.valorContrato)+")"]);
+  else if(c.confere===false) linhas.push(["red",I.x,"Valor da nota ("+fmtBRL(c.valorNota)+") diferente do contrato ("+fmtBRL(c.valorContrato)+")"]);
+  else linhas.push(["amber",I.help, c.valorContrato>0 ? "Valor não identificado automaticamente — conferir na nota" : "Contrato sem valor cadastrado — conferir na nota"]);
+  if(!curto && c.prestadorOk===false) linhas.push(["red",I.x,"O CNPJ do emitente não é o CNPJ cadastrado do prestador"]);
+  if(!curto && c.tomadorOk===false) linhas.push(["amber",I.help,"O CNPJ da empresa (tomador) não aparece na nota"]);
+  const cor={green:"text-emerald-700",red:"text-rose-600",amber:"text-amber-700"};
+  return <div className="space-y-0.5">{linhas.map(([t,ic,txt],i)=><div key={i} className={cx("flex items-start gap-1.5 text-xs font-semibold",cor[t])}><Icon d={ic} className="w-3.5 h-3.5 mt-0.5 shrink-0"/><span>{txt}</span></div>)}</div>;
+}
+
+/* ---------- App "Meus documentos": o PJ envia a nota fiscal do mês ---------- */
+function NotaFiscalPortal({pj, sessao, arqs}){
+  const { empresaContratante, contabCfg, finCfg } = useStore();
+  const key=sessao.key;
+  const [notas,setNotas]=useState(null);
+  useEffect(()=>{ if(!window.__WPDB){ setNotas([]); return; }
+    try{ return nCol("notas").where("pjKey","==",key).onSnapshot(function(s){ const a=[]; s.forEach(d=>a.push({...d.data(),id:d.id})); setNotas(a); }, function(){ setNotas([]); }); }catch(e){ setNotas([]); }
+  },[key]);
+  const atual=compDe();
+  const [comp,setComp]=useState(atual);
+  const [prev,setPrev]=useState(null);       // { arq, leitura, conf }
+  const [etapa,setEtapa]=useState("");       // lendo | enviando | ok
+  const [erro,setErro]=useState("");
+  const dia=Number((finCfg&&finCfg.diaNota)||1);
+  const nota=ultimaNota(notas,key,comp);
+  const podeEnviar=!nota || nota.status==="recusada";
+  const escolher=async(file)=>{ if(!file) return; setErro(""); setPrev(null); setEtapa("lendo");
+    try{ const arq=await prepararNota(file); const leitura=await lerNotaFiscal(arq,{key,hash:sessao.h||""});
+      setPrev({ arq, leitura, conf:conferirNota(leitura,pj,cnpjsDaEmpresa(empresaContratante,contabCfg)) }); }
+    catch(e){ setErro("Não foi possível usar este arquivo: "+e.message); }
+    setEtapa(""); };
+  const enviar=async()=>{ if(!prev) return; setEtapa("enviando"); setErro("");
+    try{ const {arq,leitura,conf}=prev; const ext=(arq.nome.match(/\.[a-z0-9]+$/i)||[".pdf"])[0];
+      const arquivoId=await arqSalvar({ nome:"Nota fiscal "+(leitura.numero?"nº "+leitura.numero+" - ":"")+fmtCompetencia(comp)+ext, donoKey:key, donoTipo:"pj", donoId:pj.id, donoNome:pj.nome, cpf:soDigitos(pj.cnpj||pj.cpf),
+        pasta:"Notas fiscais", categoria:"nota_fiscal", competencia:comp, visivelColab:true, origem:"portal" }, arq.dados);
+      const ref=nCol("notas").doc();
+      await ref.set({ pjKey:key, pjId:String(pj.id), pjNome:pj.nome||"", cnpj:pj.cnpj||"", competencia:comp, arquivoId, nomeArquivo:arq.nome,
+        numero:leitura.numero||"", emissao:leitura.emissao||"", fonte:leitura.fonte||"", ...conf, status:"enviada", enviadoEm:Date.now() });
+      avisarFinanceiro(ref.id);
+      setPrev(null); setEtapa("ok");
+    }catch(e){ setErro("Não foi possível enviar agora. Verifique sua internet e tente novamente."); setEtapa(""); } };
+  const abrirArq=(id)=>{ const a=(arqs||[]).find(x=>x.id===id); if(a) arqAbrir(a).catch(()=>alert("Não foi possível abrir o arquivo.")); };
+  const fmtDia=(t)=>new Date(t||0).toLocaleDateString("pt-BR");
+  const campoArquivo=(rotulo)=> <label className={cx("w-full inline-flex items-center justify-center gap-2 font-semibold rounded-xl px-5 py-3 text-white grad-brand shadow-glow cursor-pointer", etapa==="lendo"&&"opacity-60 pointer-events-none")}>
+    {etapa==="lendo" ? <><span className="w-4 h-4 rounded-full border-2 border-white/40 border-t-white animate-spin"/>Lendo a nota…</> : <><Icon d={I.upload||I.download} className="w-4 h-4"/>{rotulo}</>}
+    <input type="file" accept="application/pdf,image/*,.xml,text/xml,application/xml" className="hidden" aria-label="Arquivo da nota fiscal" onChange={e=>{ const f=e.target.files&&e.target.files[0]; e.target.value=""; escolher(f); }}/></label>;
+
+  return <div className="mb-5 p-4 rounded-2xl border-2 border-brand-100 bg-brand-50/40">
+    <div className="flex items-center gap-2 mb-1"><Icon d={I.receipt} className="w-5 h-5 text-brand-700"/><div className="font-extrabold text-slate-900">Nota fiscal do mês</div></div>
+    <p className="text-xs text-slate-500 mb-3">Envie a nota fiscal todo <b>dia {String(dia).padStart(2,"0")}</b>. O valor é conferido com o seu contrato{Number(pj.valor)>0?" ("+fmtBRL(pj.valor)+")":""} e o financeiro é avisado na hora.</p>
+    <Field label="Mês de referência"><Select value={comp} onChange={e=>{ setComp(e.target.value); setPrev(null); setEtapa(""); setErro(""); }} aria-label="Mês de referência da nota">
+      {[atual,compMais(atual,-1)].map(c=><option key={c} value={c}>{fmtCompetencia(c)}</option>)}</Select></Field>
+    <div className="mt-3">
+    {notas==null ? <div className="py-4 text-center"><div className="w-6 h-6 mx-auto rounded-full border-2 border-slate-200 border-t-brand-600 animate-spin"/></div>
+    : prev ? <div className="p-3 rounded-xl bg-white border border-slate-200 space-y-2">
+        <div className="text-sm font-bold text-slate-800 truncate">{prev.arq.nome}</div>
+        <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-sm">
+          <span className="text-slate-400">Valor da nota</span><span className="font-semibold text-slate-800 text-right">{prev.conf.valorNota!=null?fmtBRL(prev.conf.valorNota):"não identificado"}</span>
+          <span className="text-slate-400">Valor do contrato</span><span className="font-semibold text-slate-800 text-right">{prev.conf.valorContrato>0?fmtBRL(prev.conf.valorContrato):"—"}</span>
+          {prev.leitura.numero && <><span className="text-slate-400">Nº da nota</span><span className="text-right">{prev.leitura.numero}</span></>}
+        </div>
+        <ConferenciaNota c={prev.conf}/>
+        {prev.leitura.naoEhNota && <p className="text-xs font-semibold text-rose-600">Este arquivo não parece uma nota fiscal. Confira se escolheu o arquivo certo.</p>}
+        {prev.conf.confere===false && <p className="text-xs text-slate-500">Se o valor estiver certo, envie mesmo assim — o financeiro vai analisar. Se não, emita a nota corrigida e escolha o novo arquivo.</p>}
+        <div className="flex gap-2 pt-1">
+          <label className="flex-1 inline-flex items-center justify-center font-semibold rounded-xl px-3 py-3 text-sm text-slate-700 bg-slate-100 hover:bg-slate-200 cursor-pointer">Outro arquivo
+            <input type="file" accept="application/pdf,image/*,.xml,text/xml,application/xml" className="hidden" onChange={e=>{ const f=e.target.files&&e.target.files[0]; e.target.value=""; escolher(f); }}/></label>
+          <Btn className="flex-1" icon={etapa==="enviando"?null:I.check} disabled={etapa==="enviando"} onClick={enviar}>{etapa==="enviando"?"Enviando…":"Enviar nota"}</Btn>
+        </div></div>
+    : nota && !podeEnviar ? <div className="p-3 rounded-xl bg-white border border-slate-200 space-y-1.5">
+        {etapa==="ok" && <div className="text-sm font-bold text-emerald-700 flex items-center gap-1.5"><Icon d={I.check} className="w-4 h-4"/>Nota enviada! O financeiro já foi avisado.</div>}
+        <div className="flex items-center justify-between gap-2 text-sm"><span className="text-slate-500">Enviada em {fmtDia(nota.enviadoEm)}{nota.numero?" · nº "+nota.numero:""}</span>
+          <button className="text-brand-700 font-semibold text-xs" onClick={()=>abrirArq(nota.arquivoId)}>Ver nota</button></div>
+        <ConferenciaNota c={nota} curto/>
+        {nota.status==="paga" ? <div className="flex items-center justify-between gap-2 pt-1 text-sm"><span className="font-bold text-emerald-700 flex items-center gap-1.5"><Icon d={I.check} className="w-4 h-4"/>Pagamento realizado em {fmtDia(nota.pagoEm)}</span>
+            {nota.comprovanteId && <button className="text-brand-700 font-semibold text-xs" onClick={()=>abrirArq(nota.comprovanteId)}>Ver comprovante</button>}</div>
+          : <div className="text-xs text-slate-500 pt-1">Aguardando pagamento pelo financeiro.</div>}
+      </div>
+    : <div className="space-y-2">
+        {nota && nota.status==="recusada" && <div className="p-3 rounded-xl bg-rose-50 text-rose-700 text-sm"><b>O financeiro pediu correção da nota enviada.</b>{nota.motivo?" Motivo: "+nota.motivo:""} Envie a nota corrigida.</div>}
+        {campoArquivo("Enviar nota fiscal de "+fmtCompetencia(comp))}
+        <p className="text-[11px] text-slate-400 text-center">PDF da nota, XML ou foto</p>
+      </div>}
+    </div>
+    {erro && <p className="text-sm text-rose-500 mt-2">{erro}</p>}
+  </div>;
+}
+
+/* ---------- Painel: Notas fiscais PJ (financeiro) ---------- */
+function NotasPJPage(){
+  const { pjs, arquivos, finCfg, setFinCfg, acesso, addPagamentoPJ } = useStore();
+  const toast=useContext(ToastCtx);
+  const [notas,setNotas]=useState(null);
+  useEffect(()=>{ if(!window.__WPDB){ setNotas([]); return; }
+    try{ return nCol("notas").onSnapshot(function(s){ const a=[]; s.forEach(d=>a.push({...d.data(),id:d.id})); setNotas(a); }, function(){ setNotas([]); }); }catch(e){ setNotas([]); }
+  },[]);
+  const [comp,setComp]=useState(compDe());
+  const [filtro,setFiltro]=useState("todos");
+  const [enviando,setEnviando]=useState("");
+  const [testando,setTestando]=useState(false);
+  const cfg=finCfg||{}; const dia=Number(cfg.diaNota||1);
+  const vencida = ymd(new Date()) > comp+"-"+String(dia).padStart(2,"0");
+  const ativos=(pjs||[]).filter(p=>p.status!=="inativo" && !(p.fim && p.fim<comp+"-01") && !(p.inicio && p.inicio>comp+"-31"));
+  const linhas=ativos.map(p=>{ const k=donoKeyDe("pj",p.id); const n=ultimaNota(notas,k,comp);
+    const st = !n ? (vencida?"atrasada":"aguardando") : n.status==="paga" ? "paga" : n.status==="recusada" ? "recusada" : n.confere===false ? "divergente" : n.confere===true ? "confere" : "conferir";
+    return { p, k, n, st }; }).sort((a,b)=>String(a.p.nome).localeCompare(String(b.p.nome)));
+  const ST={ paga:["Paga","green"], confere:["Nota recebida · valor confere","brand"], conferir:["Nota recebida · conferir valor","amber"], divergente:["Valor divergente","red"],
+    recusada:["Correção pedida ao PJ","red"], atrasada:["Nota atrasada","red"], aguardando:["Aguardando nota","slate"] };
+  const cont=(...s)=>linhas.filter(l=>s.includes(l.st)).length;
+  const vis=linhas.filter(l=> filtro==="todos" || (filtro==="pagar" ? ["confere","conferir","divergente"].includes(l.st) : filtro==="pendentes" ? ["aguardando","atrasada","recusada"].includes(l.st) : l.st===filtro));
+  const arqMeta=(id)=>(arquivos||[]).find(a=>a.id===id);
+  const abrir=(id)=>{ const a=arqMeta(id); if(!a){ toast("Arquivo ainda carregando — tente de novo"); return; } arqAbrir(a).catch(e=>toast(e.message)); };
+  const anexarComprovante=async(l,file)=>{ if(!file) return; setEnviando(l.n.id);
+    try{ const arq=await prepararArquivo(file);
+      const comprovanteId=await arqSalvar({ nome:"Comprovante de pagamento - "+fmtCompetencia(comp)+(l.n.numero?" (NF nº "+l.n.numero+")":"")+(arq.mime==="application/pdf"?".pdf":".jpg"), donoKey:l.k, donoTipo:"pj", donoId:l.p.id, donoNome:l.p.nome, cpf:soDigitos(l.p.cnpj||l.p.cpf),
+        pasta:"Comprovantes de pagamento", categoria:"comprovante_pagamento", competencia:comp, visivelColab:true, origem:"financeiro" }, arq.dados);
+      await nCol("notas").doc(l.n.id).set({ status:"paga", pagoEm:Date.now(), comprovanteId, pagoPor:(acesso&&acesso.email)||"" },{merge:true});
+      if(cfg.registrarPagamento!==false && addPagamentoPJ) addPagamentoPJ(l.p.id,{ data:hojeStr(), ref:comp+"-01", valor:Number(l.n.valorNota!=null?l.n.valorNota:l.n.valorContrato)||0, obs:"NF "+(l.n.numero?"nº "+l.n.numero+" ":"")+fmtCompetencia(comp)+" — comprovante anexado" });
+      toast("Comprovante anexado na pasta de "+l.p.nome);
+    }catch(e){ toast("Não foi possível anexar: "+erroBanco(e)); }
+    setEnviando(""); };
+  const pedirCorrecao=async(l)=>{ const motivo=window.prompt("Motivo do pedido de correção (o PJ vai ver esta mensagem):", l.n.confere===false?"Valor da nota diferente do contrato ("+fmtBRL(l.n.valorContrato)+")":"");
+    if(motivo==null) return;
+    try{ await nCol("notas").doc(l.n.id).set({ status:"recusada", motivo:motivo.trim(), recusadaEm:Date.now(), recusadaPor:(acesso&&acesso.email)||"" },{merge:true}); toast("Pedido de correção registrado. O PJ verá no app."); }
+    catch(e){ toast(erroBanco(e)); } };
+  const testarEmail=async()=>{ setTestando(true);
+    try{ const user=window.__WPAUTH&&window.__WPAUTH.currentUser; const token=user? await user.getIdToken().catch(()=>""): "";
+      const r=await fetch("/api/notificar",{ method:"POST", headers:{"Content-Type":"application/json", ...(token?{Authorization:"Bearer "+token}:{})}, body:JSON.stringify({ tenant:WP_TENANT||"", teste:true }) });
+      let j=null; try{ j=await r.json(); }catch(e){}
+      toast(r.ok ? "E-mail de teste enviado" : ((j&&j.erro)||("Erro "+r.status))); }
+    catch(e){ toast("Não foi possível testar agora."); }
+    setTestando(false); };
+  const linkPortal=comTenantUrl(location.origin+location.pathname,"meus-docs");
+  const fmtDia=(t)=>t?new Date(t).toLocaleDateString("pt-BR"):"—";
+  return <div className="space-y-4 fade-in">
+    <PageHeader title="Notas fiscais PJ" sub="Os prestadores enviam a nota do mês pelo app; o sistema confere o valor com o contrato. Pague e anexe o comprovante."/>
+    <Card className="p-4 grid lg:grid-cols-3 gap-3 items-end">
+      <Field label="E-mails do financeiro (aviso de nota recebida)"><Input value={cfg.emails||""} onChange={e=>setFinCfg({...cfg,emails:e.target.value})} placeholder="financeiro@empresa.com.br, outro@empresa.com.br"/></Field>
+      <Field label="Dia de envio da nota"><Select value={String(dia)} onChange={e=>setFinCfg({...cfg,diaNota:Number(e.target.value)})}>{Array.from({length:28},(_,i)=>i+1).map(d=><option key={d} value={d}>Dia {String(d).padStart(2,"0")}</option>)}</Select></Field>
+      <div className="flex flex-wrap gap-2"><Btn size="sm" variant="ghost" icon={I.broadcast} disabled={testando||!String(cfg.emails||"").trim()} onClick={testarEmail}>{testando?"Enviando…":"Testar e-mail"}</Btn>
+        <Btn size="sm" variant="ghost" icon={I.copy} onClick={()=>{ copyText(linkPortal); toast("Link do app copiado"); }}>Copiar link do app do PJ</Btn></div>
+      <label className="lg:col-span-3 flex items-center gap-2 text-sm text-slate-600"><input type="checkbox" checked={cfg.registrarPagamento!==false} onChange={e=>setFinCfg({...cfg,registrarPagamento:e.target.checked})} className="w-4 h-4 accent-green-700"/>Ao anexar o comprovante, registrar também o pagamento em <b>Pagamentos</b></label>
+      <p className="lg:col-span-3 text-xs text-slate-500">O PJ entra no app com o CNPJ e o PIN (gerado em <b>Arquivos & pastas → Liberar acesso</b>). O financeiro pode ter login próprio que vê só esta aba: crie em <b>Gerentes & acessos</b> com o papel <b>Financeiro</b>.</p>
+    </Card>
+    <div className="flex flex-wrap items-center gap-2">
+      <div className="w-48"><Select value={comp} onChange={e=>setComp(e.target.value)} aria-label="Mês de referência">{Array.from({length:7},(_,i)=>compMais(compDe(),1-i)).map(c=><option key={c} value={c}>{fmtCompetencia(c)}</option>)}</Select></div>
+      {[["todos","Todos",linhas.length],["pagar","A pagar",cont("confere","conferir","divergente")],["divergente","Divergentes",cont("divergente")],["pendentes","Sem nota",cont("aguardando","atrasada","recusada")],["paga","Pagas",cont("paga")]].map(([k,l,n])=>
+        <button key={k} onClick={()=>setFiltro(k)} className={cx("px-3 py-1.5 rounded-full text-sm font-semibold", filtro===k?"bg-slate-900 text-white":"bg-white border border-slate-200 text-slate-600 hover:bg-slate-50")}>{l} <span className="opacity-60">{n}</span></button>)}
+    </div>
+    {notas==null ? <Card className="p-10 text-center"><div className="w-8 h-8 mx-auto rounded-full border-2 border-slate-200 border-t-brand-600 animate-spin"/></Card>
+    : vis.length===0 ? <Card className="p-8 text-center text-sm text-slate-400">{ativos.length?"Nenhum prestador neste filtro.":"Nenhum prestador PJ ativo."}</Card>
+    : <div className="space-y-2">{vis.map(l=>{ const [stl,stt]=ST[l.st];
+      return <Card key={l.k} className="p-4">
+        <div className="flex flex-wrap items-start gap-3">
+          <div className="flex-1 min-w-[200px]"><div className="font-bold text-slate-900">{l.p.nome}</div>
+            <div className="text-xs text-slate-400">{l.p.cnpj||"sem CNPJ"} · contrato {Number(l.p.valor)>0?fmtBRL(l.p.valor):"sem valor"}{l.p.diaPagamento?" · paga dia "+l.p.diaPagamento:""}</div></div>
+          <Badge tone={stt}>{stl}</Badge>
+        </div>
+        {l.n && <div className="mt-3 grid sm:grid-cols-[1fr_auto] gap-3 items-end">
+          <div className="text-sm space-y-1">
+            <div className="text-slate-600">Nota {l.n.numero?"nº "+l.n.numero+" · ":""}<b>{l.n.valorNota!=null?fmtBRL(l.n.valorNota):"valor não lido"}</b> · enviada em {fmtDia(l.n.enviadoEm)}{l.n.fonte==="ia"?" · lida pela IA":""}</div>
+            <ConferenciaNota c={l.n}/>
+            {l.n.status==="recusada" && <div className="text-xs text-rose-600">Correção pedida em {fmtDia(l.n.recusadaEm)}{l.n.motivo?": "+l.n.motivo:""}</div>}
+            {l.n.status==="paga" && <div className="text-xs text-emerald-700 font-semibold">Paga em {fmtDia(l.n.pagoEm)}{l.n.pagoPor?" por "+l.n.pagoPor:""}</div>}
+          </div>
+          <div className="flex flex-wrap gap-2 sm:justify-end">
+            <Btn size="sm" variant="ghost" icon={I.eye} onClick={()=>abrir(l.n.arquivoId)}>Ver nota</Btn>
+            {l.n.status==="paga" ? <Btn size="sm" variant="ghost" icon={I.receipt} onClick={()=>abrir(l.n.comprovanteId)}>Ver comprovante</Btn>
+            : l.n.status!=="recusada" && <>
+              <Btn size="sm" variant="ghost" className="text-rose-600" icon={I.x} onClick={()=>pedirCorrecao(l)}>Pedir correção</Btn>
+              <label className={cx("inline-flex items-center gap-1.5 text-sm font-semibold rounded-xl px-3 py-2 text-white grad-brand cursor-pointer", enviando===l.n.id&&"opacity-60 pointer-events-none")}>
+                <Icon d={I.check} className="w-4 h-4"/>{enviando===l.n.id?"Anexando…":"Pago — anexar comprovante"}
+                <input type="file" accept="application/pdf,image/*" className="hidden" aria-label={"Comprovante de "+l.p.nome} onChange={e=>{ const f=e.target.files&&e.target.files[0]; e.target.value=""; anexarComprovante(l,f); }}/></label></>}
+          </div>
+        </div>}
+      </Card>; })}</div>}
+  </div>;
+}
+
 function PortalColab({onClose}){
   const { clts, freelas, pjs } = useStore();
   const [doc,setDoc]=useState(""); const [pin,setPin]=useState("");
@@ -5020,7 +5279,7 @@ function PortalColab({onClose}){
         setErro("PIN incorreto."); setEntrando(false); return;
       }
       try{ localStorage.removeItem(bloqKey); }catch(e){}
-      const ss={key, doc:d}; setSessao(ss); try{ sessionStorage.setItem(tKey("portal"),JSON.stringify(ss)); }catch(e){}
+      const ss={key, doc:d, h}; setSessao(ss); try{ sessionStorage.setItem(tKey("portal"),JSON.stringify(ss)); }catch(e){}
       setPin("");
     }catch(e){ setErro("Não foi possível entrar agora. Tente novamente."); }
     setEntrando(false);
@@ -5061,6 +5320,7 @@ function PortalColab({onClose}){
             <div className="flex-1 min-w-0"><div className="text-xs text-slate-400">Olá,</div><div className="font-extrabold text-slate-900 truncate">{eu.p.nome}</div></div>
             <button onClick={sair} className="text-sm font-semibold text-slate-500 hover:text-slate-800 flex items-center gap-1"><Icon d={I.logout} className="w-4 h-4"/>Sair</button>
           </div>
+          {eu.tipo==="pj" && <NotaFiscalPortal pj={eu.p} sessao={sessao} arqs={arqs}/>}
           {arqs==null ? <div className="py-10 text-center"><div className="w-8 h-8 mx-auto rounded-full border-2 border-slate-200 border-t-brand-600 animate-spin"/></div> : <>
             {eu.tipo!=="pj" && <><div className="text-xs font-bold text-slate-400 uppercase tracking-wide mb-2">Holerites</div>
               <div className="space-y-2 mb-5">{hol.length===0 ? <p className="text-sm text-slate-400 text-center py-4 rounded-2xl bg-slate-50">Nenhum holerite disponível ainda.</p> : hol.map(a=><Linha key={a.id} a={a} destaque/>)}</div></>}
@@ -6357,7 +6617,7 @@ function EnvelopeWilamiModal({envId,onClose}){
 
 /* ============================ CONTABILIDADE (admissão) e PCMSO (medicina do trabalho) ============================ */
 // Papéis com acesso restrito: o login vê só a sua aba.
-const ABA_DO_PAPEL = { contabilidade:"contabilidade", pcmso:"pcmso" };
+const ABA_DO_PAPEL = { contabilidade:"contabilidade", pcmso:"pcmso", financeiro:"notasPJ" };
 const semAcento=(s)=> String(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"");
 const maiusc=(s)=> semAcento(s).toUpperCase().replace(/\s+/g," ").trim();
 const fmtCelular=(t)=>{ const d=soDigitos(t).replace(/^55(?=\d{10,11}$)/,""); if(d.length===11) return `(${d.slice(0,2)}) ${d.slice(2,7)}-${d.slice(7)}`; if(d.length===10) return `(${d.slice(0,2)}) ${d.slice(2,6)}-${d.slice(6)}`; return t||""; };
@@ -7275,6 +7535,7 @@ const NAV = [
   {sec:"Gestão", items:[
     {k:"relatorios",l:"Relatórios",d:I.chart},
     {k:"financeiro",l:"Financeiro",d:I.wallet},
+    {k:"notasPJ",l:"Notas fiscais PJ",d:I.receipt},
     {k:"pagamentos",l:"Pagamentos",d:I.pix},
     {k:"unidades",l:"Unidades",d:I.pin},
     {k:"links",l:"Links & QR",d:I.qr},
@@ -7285,7 +7546,7 @@ const NAV = [
     {k:"ajuda",l:"Ajuda",d:I.help},
   ]},
 ];
-const TITULOS={dashboard:"Painel",escala:"Escala por unidade",ponto:"Ponto ao vivo",ajustes:"Ajustes de ponto",clt:"Colaboradores CLT",freelas:"Freelancers",pjs:"Prestadores PJ",cargos:"Cargos & funções",convites:"Convites de cadastro",arquivos:"Arquivos & pastas",holerites:"Holerites",termos:"Termos e assinaturas",entregas:"Armário, uniformes & EPIs",modeloContrato:"Modelo de contrato PJ",dossie:"Dossiê do colaborador",equipe:"Equipe & permissões",relatorios:"Relatórios",financeiro:"Financeiro",pagamentos:"Pagamentos",unidades:"Unidades",links:"Links & QR",acessos:"Gerentes & acessos",config:"Configurações",ajuda:"Ajuda",contabilidade:"Contabilidade",pcmso:"PCMSO (Paromed)"};
+const TITULOS={dashboard:"Painel",escala:"Escala por unidade",ponto:"Ponto ao vivo",ajustes:"Ajustes de ponto",clt:"Colaboradores CLT",freelas:"Freelancers",pjs:"Prestadores PJ",cargos:"Cargos & funções",convites:"Convites de cadastro",arquivos:"Arquivos & pastas",holerites:"Holerites",termos:"Termos e assinaturas",entregas:"Armário, uniformes & EPIs",modeloContrato:"Modelo de contrato PJ",dossie:"Dossiê do colaborador",equipe:"Equipe & permissões",relatorios:"Relatórios",financeiro:"Financeiro",pagamentos:"Pagamentos",unidades:"Unidades",links:"Links & QR",acessos:"Gerentes & acessos",config:"Configurações",ajuda:"Ajuda",contabilidade:"Contabilidade",pcmso:"PCMSO (Paromed)",notasPJ:"Notas fiscais PJ"};
 
 // Seletor de cliente (multiempresa) — troca entre grupos de restaurantes e cria novo cliente.
 function ClienteSwitcher(){
@@ -7551,7 +7812,7 @@ function Shell({ onLogout }) {
   if(acesso && acesso.semAcesso) return <TelaBloqueio icone={I.shield} titulo="Sua conta ainda não tem acesso" texto="Peça ao administrador para vincular seu e-mail a um cliente. Assim que ele liberar, é só entrar novamente." onLogout={onLogout}/>;
   if(acesso && acesso.tenantBind!=null && acesso.tenantBind!==tenantAtual) return <TelaBloqueio spin titulo="Abrindo seu cliente…"/>;
   const views={ dashboard:<Dashboard go={setView}/>, escala:<EscalaVisual/>, ponto:<PontoLive/>, ajustes:<AjustesPonto/>, clt:<ColaboradoresCLT/>, freelas:<Freelancers/>,
-    dossie:<Dossie/>, pjs:<PrestadoresPJ/>, cargos:<CargosPage/>, convites:<ConvitesPage/>, arquivos:<ArquivosPage/>, holerites:<HoleritesPage/>, termos:<TermosPage/>, entregas:<EntregasPage/>, modeloContrato:<ModeloContratoPage/>, equipe:<Equipe/>, contabilidade:<ContabilidadePage/>, pcmso:<PcmsoPage/>, relatorios:<Relatorios/>, financeiro:<Financeiro/>, pagamentos:<Pagamentos/>, unidades:<Unidades/>, links:<LinksQR/>, acessos:<GerentesAcesso/>, config:<Configuracoes/>, ajuda:<Ajuda/> };
+    dossie:<Dossie/>, pjs:<PrestadoresPJ/>, cargos:<CargosPage/>, convites:<ConvitesPage/>, arquivos:<ArquivosPage/>, holerites:<HoleritesPage/>, termos:<TermosPage/>, entregas:<EntregasPage/>, modeloContrato:<ModeloContratoPage/>, equipe:<Equipe/>, contabilidade:<ContabilidadePage/>, pcmso:<PcmsoPage/>, relatorios:<Relatorios/>, financeiro:<Financeiro/>, notasPJ:<NotasPJPage/>, pagamentos:<Pagamentos/>, unidades:<Unidades/>, links:<LinksQR/>, acessos:<GerentesAcesso/>, config:<Configuracoes/>, ajuda:<Ajuda/> };
   return <ToastCtx.Provider value={pushToast}>
     <div className="flex min-h-screen">
       <Sidebar view={view} setView={setView} open={sbOpen} setOpen={setSbOpen} onLogout={onLogout}/>
