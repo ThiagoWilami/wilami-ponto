@@ -783,6 +783,15 @@ async function prepararArquivo(file,{max=2000,q=0.85,pdfMax=12*1024*1024}={}){
     catch(e2){ throw new Error("não foi possível abrir a foto (formato HEIC). Tente tirar a foto pela câmera do link ou enviar em JPG"); }
   }
 }
+// Rascunho local (IndexedDB) do link de cadastro: no celular, abrir a galeria/câmera pode fazer o navegador
+// descartar a página por falta de memória; ao voltar, a página recarrega. Com o rascunho, nada se perde.
+const rascunho=(()=>{
+  let dbp=null;
+  const abrir=()=> dbp || (dbp=new Promise((ok,er)=>{ try{ const r=indexedDB.open("wp_rascunhos",1);
+    r.onupgradeneeded=()=>r.result.createObjectStore("r"); r.onsuccess=()=>ok(r.result); r.onerror=()=>er(r.error); }catch(e){ er(e); } }).catch(e=>{ dbp=null; throw e; }));
+  const op=(modo,fn)=>abrir().then(db=>new Promise((ok,er)=>{ const tx=db.transaction("r",modo); const req=fn(tx.objectStore("r")); tx.oncomplete=()=>ok(req&&req.result); tx.onerror=()=>er(tx.error); }));
+  return { ler:k=>op("readonly",s=>s.get(k)).catch(()=>null), gravar:(k,v)=>op("readwrite",s=>s.put(v,k)).catch(()=>{}), apagar:k=>op("readwrite",s=>s.delete(k)).catch(()=>{}) };
+})();
 // Só a imagem (selfie/foto de perfil) → dataURL JPEG pequeno
 async function fotoDeArquivo(file,max=640,q=0.62){ const r=await prepararArquivo(file,{max,q}); if(r.mime!=="image/jpeg") throw new Error("envie uma foto"); return r.dados; }
 function bytesParaDataUrl(bytes, mime){
@@ -6939,6 +6948,31 @@ function ConviteCadastro({onClose}){
   const [prog,setProg]=useState({feito:0,total:0});
   const [erro,setErro]=useState("");
   const [aceite,setAceite]=useState(false);
+  // Rascunho: restaura o que a pessoa já tinha feito (a página pode recarregar ao voltar da galeria/câmera)
+  const chaveRasc="convite_"+token;
+  const [rascOk,setRascOk]=useState(false);
+  const [recuperado,setRecuperado]=useState(false);
+  useEffect(()=>{ let vivo=true;
+    rascunho.ler(chaveRasc).then(r=>{ if(!vivo) return;
+      if(r && Date.now()-(r.em||0)<14*864e5){
+        setEtapa(r.etapa||"inicio"); setAceiteFuncao(!!r.aceiteFn); setArqs(r.arqs||{}); setFoto(r.foto||""); setF(r.f||{}); setAuto(r.auto||{}); setAvisos(r.avisos||[]); setAceite(!!r.aceite);
+        if(Object.keys(r.arqs||{}).length || Object.keys(r.f||{}).length) setRecuperado(true);
+      }
+      setRascOk(true); });
+    return ()=>{ vivo=false; };
+  },[chaveRasc]);
+  const etapaRasc = etapa==="lendo" ? "docs" : etapa==="enviando" ? "termo" : etapa;
+  const rascAtual=useRef(null);
+  rascAtual.current={ etapa:etapaRasc, aceiteFn, arqs, foto, f, auto, avisos, aceite, em:Date.now() };
+  useEffect(()=>{ if(!rascOk || !token) return;
+    if(etapa==="ok"){ rascunho.apagar(chaveRasc); return; }
+    const t=setTimeout(()=>rascunho.gravar(chaveRasc,rascAtual.current),250); return ()=>clearTimeout(t);
+  },[rascOk,etapaRasc,aceiteFn,arqs,foto,f,auto,avisos,aceite]);
+  useEffect(()=>{ if(!rascOk || !token) return;   // ao sair para a galeria/câmera, grava na hora
+    const salvar=()=>{ if(document.visibilityState!=="visible" && rascAtual.current.etapa!=="ok") rascunho.gravar(chaveRasc,{...rascAtual.current,em:Date.now()}); };
+    document.addEventListener("visibilitychange",salvar); window.addEventListener("pagehide",salvar);
+    return ()=>{ document.removeEventListener("visibilitychange",salvar); window.removeEventListener("pagehide",salvar); };
+  },[rascOk,chaveRasc]);
   useEffect(()=>{ const db=window.__WPDB; if(!db||!token){ setConv(null); return; }
     nCol("convites").doc(token).get().then(s=>{ const d=s.exists?s.data():null; setConv(d && d.status==="aberto" && !(d.expira<Date.now()) ? d : (d?{...d,_fechado:true}:null)); }).catch(()=>setConv(null));
   },[token]);
@@ -6974,7 +7008,9 @@ function ConviteCadastro({onClose}){
     const dados=juntarLeituras(leituras);
     if(tipo==="pj"){ dados.responsavel=dados.nome||""; }
     const base={ ...dados, telefone:dados.telefone||"", email:dados.email||"", tipoPix:dados.pix?"Aleatória":"CPF" };
-    setF(base); setAuto(Object.fromEntries(Object.keys(dados).map(k=>[k,true])));
+    // o que a pessoa já digitou à mão (ex.: voltou para incluir mais um documento) não é apagado pela nova leitura
+    setF(prev=>{ const manual=Object.fromEntries(Object.entries(prev).filter(([k,v])=>!auto[k] && String(v||"").trim())); return {...base,...manual}; });
+    setAuto(Object.fromEntries(Object.keys(dados).filter(k=>!String(f[k]||"").trim()||auto[k]).map(k=>[k,true])));
     setAvisos(semIA?["A leitura automática ainda não está ativada — preencha os dados abaixo."]:av);
     setEtapa("form");
   };
@@ -7029,7 +7065,7 @@ function ConviteCadastro({onClose}){
     <Input type={tipoInput||"text"} value={f[k]||""} onChange={e=>set(k,e.target.value)} className={cx(col, auto[k]&&f[k]?"!border-brand-200 bg-brand-50/30":"")}/></Field>;
 
   const casca=(conteudo)=> <div className="min-h-screen grad-ink grad-hero flex items-start justify-center p-4 py-8"><div className="w-full max-w-2xl"><div className="flex justify-center mb-5"><Logo light/></div><Card className="p-6">{conteudo}</Card></div></div>;
-  if(conv===undefined) return casca(<div className="py-10 text-center"><div className="w-8 h-8 mx-auto rounded-full border-2 border-slate-200 border-t-brand-600 animate-spin"/></div>);
+  if(conv===undefined || !rascOk) return casca(<div className="py-10 text-center"><div className="w-8 h-8 mx-auto rounded-full border-2 border-slate-200 border-t-brand-600 animate-spin"/></div>);
   if(!conv || conv._fechado) return casca(<div className="py-6 text-center">
     <div className="w-14 h-14 mx-auto rounded-2xl bg-slate-100 text-slate-500 grid place-items-center mb-3"><Icon d={I.lock} className="w-7 h-7"/></div>
     <h2 className="text-xl font-bold text-slate-900">{conv&&conv.status==="preenchido"?"Cadastro já enviado":"Link indisponível"}</h2>
@@ -7078,6 +7114,7 @@ function ConviteCadastro({onClose}){
   </>);
 
   if(etapaVis==="docs") return casca(<>{cabec}
+    {recuperado && <div className="mb-4 p-3 rounded-xl bg-emerald-50 text-emerald-800 text-sm flex items-start gap-2"><Icon d={I.check} className="w-4 h-4 mt-0.5 shrink-0"/><span className="flex-1"><b>Recuperamos o que você já tinha preenchido.</b> Se o último documento escolhido não aparecer na lista, é só enviar de novo.</span><button onClick={()=>setRecuperado(false)} className="text-emerald-600" aria-label="Fechar aviso"><Icon d={I.x} className="w-4 h-4"/></button></div>}
     <p className="text-sm text-slate-500 mb-4">Tire foto ou envie o PDF de cada documento. Nós lemos os dados automaticamente — você não precisa digitar quase nada.</p>
     <div className="space-y-2.5">
       {slots.map(s=>{ const lst=arqs[s.k]||[];
@@ -7103,6 +7140,7 @@ function ConviteCadastro({onClose}){
 
   // etapa === "form"
   return casca(<>{cabec}
+    {recuperado && <div className="mb-4 p-3 rounded-xl bg-emerald-50 text-emerald-800 text-sm flex items-start gap-2"><Icon d={I.check} className="w-4 h-4 mt-0.5 shrink-0"/><span className="flex-1"><b>Recuperamos o que você já tinha preenchido.</b> Se o último documento escolhido não aparecer na lista, é só enviar de novo.</span><button onClick={()=>setRecuperado(false)} className="text-emerald-600" aria-label="Fechar aviso"><Icon d={I.x} className="w-4 h-4"/></button></div>}
     {avisos.length>0 && <div className="mb-4 p-3 rounded-xl bg-amber-50 text-amber-800 text-sm space-y-1">{avisos.map((a,i)=><div key={i}>• {a}</div>)}</div>}
     {Object.keys(auto).length>0 && <div className="mb-4 p-3 rounded-xl bg-brand-50 text-brand-800 text-sm flex items-start gap-2"><Icon d={I.check} className="w-4 h-4 mt-0.5 shrink-0"/>Preenchemos {Object.keys(auto).length} campo(s) a partir dos seus documentos. Confira e complete o que faltar.</div>}
     {tipo==="pj" ? <>
