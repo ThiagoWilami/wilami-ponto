@@ -31,7 +31,7 @@ Ponto digital, escala e RH para restaurantes. O app é um único `index.html` (R
 - **PJ:** no app "Meus documentos" (`#meus-docs`), entrando com CNPJ + PIN, aparece o quadro **Nota fiscal do mês**. O PJ escolhe o mês e envia o PDF, o XML ou uma foto da nota. O sistema lê a nota (XML ou texto do PDF; foto ou PDF escaneado pela leitura automática do Claude, `api/nota.js`) e confere o valor com o contrato, o CNPJ do emitente e o CNPJ da empresa. Se o valor divergir, o PJ vê o aviso antes de enviar.
 - **Financeiro** (*Gestão → Notas fiscais PJ*): lista os PJ do mês com a situação (aguardando, atrasada, valor confere, divergente, paga). **Pago — anexar comprovante** salva o comprovante na pasta do PJ (*Comprovantes de pagamento*), marca a nota como paga e, se marcado, registra o pagamento em *Pagamentos*. **Pedir correção** devolve a nota ao PJ com o motivo. A nota fica em *Notas fiscais* na pasta do PJ, e o PJ vê o comprovante no app.
 - **Login do financeiro:** em *Gerentes & acessos*, papel **Financeiro** (vê só esta aba).
-- **Aviso por e-mail** (`api/notificar.js`): quando o PJ envia a nota, os e-mails configurados na aba recebem o aviso com o valor e a conferência. Configure na Vercel `RESEND_API_KEY` (resend.com) e, de preferência, `EMAIL_REMETENTE` com um domínio verificado na Resend (ex.: `Wilami Ponto <notas@seudominio.com.br>`). Use **Testar e-mail** na aba para conferir.
+- **Aviso por e-mail:** depois de enviar a nota, o PJ toca em **Avisar o financeiro** e o e-mail abre já preenchido (como no envio para a contabilidade), para o endereço configurado na aba. O financeiro não responde por e-mail: só paga e anexa o comprovante no sistema.
 
 ## Assinatura eletrônica Wilami (padrão, sem custo)
 
