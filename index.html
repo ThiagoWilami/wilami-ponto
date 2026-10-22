@@ -587,6 +587,20 @@ function faltasAutoDe(pessoa, ctx){
   return dias;
 }
 // Calcula UMA linha da folha (salário + extras + adicional noturno − descontos, com falta automática e DSR)
+// ---- Vale-transporte por dia: dias de trabalho no mês (escala real; sem escala, pela regra do grupo de folga) ----
+const mesDe=(ano,mes)=>{ const ini=`${ano}-${String(mes).padStart(2,"0")}-01`; const fim=ymd(new Date(ano,mes,0)); return [ini,fim]; };
+const mesAnteriorDe=(ds)=>{ const [y,m]=String(ds).split("-").map(Number); return m===1?mesDe(y-1,12):mesDe(y,m-1); };
+function folgaPelaRegra(p,ds){ const wd=wdDe(ds); const g=grupoFolgaDe(p,"clt"); const r=folgaRodizioNaData(g,ds); if(r!=null) return r;
+  if(Array.isArray(p.folgaDias)&&p.folgaDias.length) return p.folgaDias.map(Number).includes(wd);
+  const base=p.folgaDia==null?6:Number(p.folgaDia); const esc=p.escala||"6x1";
+  if(esc==="5x2"||esc==="6x2") return wd===base||wd===(base+1)%7; if(esc==="12x36") return false; return wd===base; }
+function diasTrabalhoNoPeriodo(p,ini,fim,escala,escalaOv){
+  const naEscala = p && p.id!=null && p.unidade!=null && Object.values((escala||{})[p.unidade]||{}).some(arr=>(arr||[]).some(a=>String(a.pid)===String(p.id)&&a.tipo==="clt"));
+  let n=0; datasEntre(ini,fim).forEach(ds=>{
+    if(p.admissao && ds<p.admissao) return; if(p.fimContrato && ds>p.fimContrato) return;
+    if(naEscala){ const a=diaEscala(escala,escalaOv,p.unidade,ds,wdDe(ds)).find(x=>String(x.pid)===String(p.id)&&x.tipo==="clt"); if(a && a.turno!=="folga") n++; }
+    else if(!folgaPelaRegra(p,ds)) n++; });
+  return n; }
 function calcFolhaLinha(c, ctx){
   const {apurCLT, cltExtraAjuste, ymRef, getDossie, naData, faltasCtx}=ctx; const gorjetasCLT=ctx.gorjetasCLT||{};
   const meus=apurCLT.filter(x=>x.nome===c.nome);
@@ -612,15 +626,30 @@ function calcFolhaLinha(c, ctx){
   const nDSR=semanasFalta.size;                      // política escolhida: perde 1 DSR por semana com falta
   const descFaltas=nFaltas*vDia, descDSR=nDSR*vDia;
   const descAtrasos=atrasosD.reduce((s,x)=>s+vHora*(Number(x.horas)||0),0);
-  // Vale Transporte: benefício mensal fixo; desconto legal = menor entre 6% do salário base e o valor do VT (Lei 7.418/85).
-  const vt=Number(c.vt||0);
+  // Vale Transporte
+  //  • Cadastro com VALOR POR DIA (novo): VT do mês = valor do dia × dias de trabalho na escala do período (folgas fora).
+  //    As faltas de um mês são descontadas do VT no mês SEGUINTE (o VT é pago adiantado).
+  //  • Cadastro antigo com valor mensal fixo: desconta o valor diário × faltas do próprio mês.
+  //  Desconto legal = menor entre 6% do salário base e o valor do VT (Lei 7.418/85).
+  const vtDiaCad=Number(c.vtDia||0);
+  let vt=0, vtDia=0, vtDias=0, descVTFaltas=0, vtFaltasAnt=0, vtMesAnt="";
+  if(vtDiaCad>0){
+    vtDia=vtDiaCad;
+    vtDias = faltasCtx ? diasTrabalhoNoPeriodo(c,faltasCtx.ini,faltasCtx.fim,faltasCtx.escala,faltasCtx.escalaOv) : 0;
+    vt=Math.round(vtDia*vtDias*100)/100;
+    if(faltasCtx){ const [pi,pf]=mesAnteriorDe(faltasCtx.ini); vtMesAnt=pi.slice(0,7);
+      const manPrev=(dos.faltas||[]).filter(x=>x.tipo==="falta" && x.descontar && x.data>=pi && x.data<=pf).map(x=>x.data);
+      const autoPrev=faltasAutoDe(c,{...faltasCtx,ini:pi,fim:pf}).filter(d=>!dossieDatas.has(d));
+      vtFaltasAnt=new Set([...manPrev,...autoPrev]).size; }
+    descVTFaltas=Math.round(vtFaltasAnt*vtDia*100)/100;
+  } else {
+    vt=Number(c.vt||0);
+    let diasEscalados=0;
+    if(vt>0 && faltasCtx && c.unidade!=null){ datasEntre(faltasCtx.ini,faltasCtx.fim).forEach(ds=>{ const a=diaEscala(faltasCtx.escala,faltasCtx.escalaOv,c.unidade,ds,wdDe(ds)).find(x=>String(x.pid)===String(c.id)&&x.tipo==="clt"); if(a && a.turno!=="folga") diasEscalados++; }); }
+    vtDia = vt>0 ? vt/(diasEscalados||22) : 0;
+  }
   const vtDesconto = vt>0 ? Math.min(salario*0.06, vt) : 0;
-  // VT dos dias de FALTA: o VT é só para os dias trabalhados → desconta o valor diário × faltas.
-  // Valor diário = VT do mês ÷ dias escalados (sem folga) no período; sem escala, ÷ 22.
-  let diasEscalados=0;
-  if(vt>0 && faltasCtx && c.unidade!=null){ datasEntre(faltasCtx.ini,faltasCtx.fim).forEach(ds=>{ const a=diaEscala(faltasCtx.escala,faltasCtx.escalaOv,c.unidade,ds,wdDe(ds)).find(x=>String(x.pid)===String(c.id)&&x.tipo==="clt"); if(a && a.turno!=="folga") diasEscalados++; }); }
-  const vtDia = vt>0 ? vt/(diasEscalados||22) : 0;
-  const descVTFaltas = vt>0 ? Math.min(Math.max(0,vt-vtDesconto), nFaltas*vtDia) : 0;
+  if(!(vtDiaCad>0)) descVTFaltas = vt>0 ? Math.min(Math.max(0,vt-vtDesconto), nFaltas*vtDia) : 0;
   const descontos=descFaltas+descDSR+descAtrasos+vtDesconto+descVTFaltas;
   // Salário combinado com a Diretoria: se salário + extras + adicional noturno + gorjetas do mês não alcançarem o combinado, a diferença vira "reposição".
   const gorjeta=Number(gorjetasCLT[c.id+"|"+ymRef]||0);
@@ -631,7 +660,7 @@ function calcFolhaLinha(c, ctx){
   return { id:c.id, nome:c.nome, foto:c.foto, pix:c.pix, escala:c.escala, salario, vHora, gorjeta, combinado, recebido, reposicao,
     extrasMin, extras100Min, extrasHoras:extrasMin+extras100Min, extrasVal, extrasEditado, notMin, notVal,
     faltasQtd:nFaltas, dsrQtd:nDSR, faltaDatas, descFaltas, descDSR, atrasosQtd:atrasosD.length,
-    vt, vtDesconto, vtDia, descVTFaltas, descontos, liquido, semSalario:!salario };
+    vt, vtDesconto, vtDia, vtDias, vtPorDia:vtDiaCad>0, vtFaltasAnt, vtMesAnt, descVTFaltas, descontos, liquido, semSalario:!salario };
 }
 const escalaInicial = () => {
   const esc={};
@@ -2536,6 +2565,16 @@ function PontoKiosk({ mode, onClose }) {
 }
 
 /* ============================ FORM DE COLABORADOR ============================ */
+// Prévia do VT: dias de trabalho no mês atual e no próximo × valor do dia
+function PreviaVT({p}){
+  const { escala, escalaOv } = useStore();
+  const v=Number(p.vtDia||0);
+  if(!(v>0)){ return Number(p.vt||0)>0 ? <span className="block text-[11px] text-amber-600 mt-1 normal-case font-normal tracking-normal">Hoje está como valor fixo de {fmtBRL(p.vt)}/mês. Informe o valor por dia para o sistema calcular pelos dias da escala.</span> : null; }
+  const h=new Date(); const meses=[[h.getFullYear(),h.getMonth()+1],[h.getMonth()===11?h.getFullYear()+1:h.getFullYear(),h.getMonth()===11?1:h.getMonth()+2]];
+  return <span className="block text-[11px] text-slate-500 mt-1 normal-case font-normal tracking-normal space-y-0.5">{meses.map(([a,m])=>{ const [ini,fim]=mesDe(a,m); const d=diasTrabalhoNoPeriodo(p,ini,fim,escala,escalaOv);
+    return <span key={ini} className="block"><b className="text-slate-700">{MESES_LONGO[m-1]}/{a}:</b> {d} dias × {fmtBRL(v)} = <b className="text-brand-700">{fmtBRL(Math.round(d*v*100)/100)}</b></span>; })}
+    <span className="block">Folgas da escala já descontadas. Faltas do mês são descontadas do VT do mês seguinte.</span></span>;
+}
 function ColabForm({ tipo, inicial, onSalvar, onClose, vinculo }) {
   const ehFixo = vinculo==="fixo" || inicial?.vinculo==="fixo";
   const ehConf = vinculo==="confianca" || inicial?.vinculo==="confianca"; // cargo de confiança: NÃO bate ponto, só salário na folha
@@ -2642,7 +2681,8 @@ function ColabForm({ tipo, inicial, onSalvar, onClose, vinculo }) {
         <Field label="Salário mensal (R$)"><Input type="number" value={f.salario||0} onChange={e=>set("salario",Number(e.target.value))} placeholder="Ex.: 2200"/></Field>
         <Field label="Salário combinado c/ Diretoria (R$)"><Input type="number" value={f.salarioCombinado||""} onChange={e=>set("salarioCombinado",Number(e.target.value)||0)} placeholder="Ex.: 3500 (opcional)"/>
           <span className="block text-[11px] text-slate-400 mt-1 normal-case font-normal tracking-normal">Se salário + extras + gorjetas do mês não chegarem a esse valor, a folha mostra a reposição.</span></Field>
-        <Field label="Vale Transporte (R$/mês)"><Input type="number" value={f.vt||0} onChange={e=>set("vt",Number(e.target.value))} placeholder="Ex.: 220"/></Field>
+        <Field label="Vale-transporte por dia (R$)"><Input type="number" step="0.01" min="0" value={f.vtDia??""} onChange={e=>{ const v=e.target.value===""?"":Number(e.target.value); setF(p=>({...p, vtDia:v})); }} placeholder="Ex.: 10,60 (ida e volta)" aria-label="Vale-transporte por dia"/>
+          <PreviaVT p={f}/></Field>
       </> : <>
         <Field label={req("Cargo")}><Select value={f.cargo} onChange={e=>setCargoFree(e.target.value)}>{cargosFreela.map(c=><option key={c.id} value={c.nome}>{c.nome}</option>)}</Select></Field>
         <Field label="Valor por jornada"><div className="px-3.5 py-2.5 rounded-xl border border-slate-200 bg-slate-50 text-sm font-semibold text-slate-700">R$ {Number(f.valor||0).toLocaleString("pt-BR")} <span className="font-normal text-slate-400 text-xs">(do cargo)</span></div></Field>
@@ -3043,8 +3083,9 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
                     <div className="flex justify-between"><span className="text-slate-500">Salário base</span><span className="tabular-nums">{fmtBRL(l.det.salario)}</span></div>
                     <div className="flex justify-between"><span className="text-slate-500">Horas extras</span><span className="tabular-nums text-emerald-600">+{fmtBRL(l.det.extrasVal)}</span></div>
                     {l.det.notVal>0 && <div className="flex justify-between"><span className="text-slate-500">Adic. noturno</span><span className="tabular-nums text-emerald-600">+{fmtBRL(l.det.notVal)}</span></div>}
-                    {l.det.vt>0 && <div className="flex justify-between"><span className="text-slate-500">Vale Transporte ({fmtBRL(l.det.vt)}) − 6%</span><span className="tabular-nums text-rose-600">-{fmtBRL(l.det.vtDesconto)}</span></div>}
-                    {(l.det.descontos-l.det.vtDesconto)>0 && <div className="flex justify-between"><span className="text-slate-500">Descontos ({l.det.faltasQtd} falta{l.det.dsrQtd?` +${l.det.dsrQtd} DSR`:""})</span><span className="tabular-nums text-rose-600">-{fmtBRL(l.det.descontos-l.det.vtDesconto)}</span></div>}
+                    {l.det.vt>0 && <div className="flex justify-between"><span className="text-slate-500">Vale Transporte ({l.det.vtPorDia?`${l.det.vtDias} dias × ${fmtBRL(l.det.vtDia)} = `:""}{fmtBRL(l.det.vt)}) − 6%</span><span className="tabular-nums text-rose-600">-{fmtBRL(l.det.vtDesconto)}</span></div>}
+                    {l.det.vtPorDia && l.det.descVTFaltas>0 && <div className="flex justify-between"><span className="text-slate-500">VT de {l.det.vtFaltasAnt} falta(s) de {fmtCompetencia(l.det.vtMesAnt)}</span><span className="tabular-nums text-rose-600">-{fmtBRL(l.det.descVTFaltas)}</span></div>}
+                    {(l.det.descontos-l.det.vtDesconto-(l.det.vtPorDia?l.det.descVTFaltas:0))>0 && <div className="flex justify-between"><span className="text-slate-500">Descontos ({l.det.faltasQtd} falta{l.det.dsrQtd?` +${l.det.dsrQtd} DSR`:""})</span><span className="tabular-nums text-rose-600">-{fmtBRL(l.det.descontos-l.det.vtDesconto-(l.det.vtPorDia?l.det.descVTFaltas:0))}</span></div>}
                   </>}
                   {modo==="confianca" && <div className="flex justify-between"><span className="text-slate-500">Salário mensal</span><span className="tabular-nums">{fmtBRL(l.total)}</span></div>}
                   {ehPJ && l.det && <>
@@ -3748,8 +3789,8 @@ function Financeiro() {
             <td className="px-4 py-3 tabular-nums" title={l.combinado>0?`Combinado ${fmtBRL(l.combinado)} − recebido ${fmtBRL(l.recebido)} (salário + extras + noturno + gorjetas)`:""}>
               {l.combinado>0 ? (l.reposicao>0 ? <div><span className="font-bold text-amber-600 whitespace-nowrap">+{fmtBRL(l.reposicao)}</span><div className="text-[10px] text-slate-400">combinado {fmtBRL(l.combinado)}</div></div>
                 : <div><span className="text-emerald-600 text-xs font-semibold">atingiu</span><div className="text-[10px] text-slate-400">combinado {fmtBRL(l.combinado)}</div></div>) : <span className="text-slate-300">—</span>}</td>
-            <td className="px-4 py-3 tabular-nums text-slate-600">{l.vt>0?<div><span className="text-slate-700 font-semibold">{fmtBRL(l.vt)}</span><div className="text-[10px] font-normal text-slate-400">−6% = {fmtBRL(l.vtDesconto)}</div></div>:"—"}</td>
-            <td className={cx("px-4 py-3 tabular-nums",l.descontos>0?"text-rose-600 font-semibold":"text-slate-400")} title={l.descontos>0?`${l.faltasQtd} falta(s)=-${fmtBRL(l.descFaltas)} · DSR ${l.dsrQtd} sem.=-${fmtBRL(l.descDSR)}${l.vtDesconto>0?` · VT 6%=-${fmtBRL(l.vtDesconto)}`:""}${l.descVTFaltas>0?` · VT dos dias de falta=-${fmtBRL(l.descVTFaltas)}`:""}`:""}>
+            <td className="px-4 py-3 tabular-nums text-slate-600">{l.vt>0?<div><span className="text-slate-700 font-semibold">{fmtBRL(l.vt)}</span>{l.vtPorDia && <div className="text-[10px] font-normal text-slate-500">{l.vtDias} dias × {fmtBRL(l.vtDia)}</div>}<div className="text-[10px] font-normal text-slate-400">−6% = {fmtBRL(l.vtDesconto)}</div>{l.vtPorDia && l.vtFaltasAnt>0 && <div className="text-[10px] font-normal text-rose-500">−{l.vtFaltasAnt} falta(s) de {fmtCompetencia(l.vtMesAnt)} = {fmtBRL(l.descVTFaltas)}</div>}</div>:"—"}</td>
+            <td className={cx("px-4 py-3 tabular-nums",l.descontos>0?"text-rose-600 font-semibold":"text-slate-400")} title={l.descontos>0?`${l.faltasQtd} falta(s)=-${fmtBRL(l.descFaltas)} · DSR ${l.dsrQtd} sem.=-${fmtBRL(l.descDSR)}${l.vtDesconto>0?` · VT 6%=-${fmtBRL(l.vtDesconto)}`:""}${l.descVTFaltas>0?(l.vtPorDia?` · VT de ${l.vtFaltasAnt} falta(s) de ${fmtCompetencia(l.vtMesAnt)}=-${fmtBRL(l.descVTFaltas)}`:` · VT dos dias de falta=-${fmtBRL(l.descVTFaltas)}`):""}`:""}>
               {l.descontos>0?"-"+fmtBRL(l.descontos):"—"}
               {(l.faltasQtd>0||l.dsrQtd>0||l.vtDesconto>0) && <div className="text-[10px] font-normal text-rose-400">{l.faltasQtd>0?`${l.faltasQtd} falta`:""}{l.dsrQtd>0?` +${l.dsrQtd} DSR`:""}{l.vtDesconto>0?`${l.faltasQtd>0||l.dsrQtd>0?" +":""}VT`:""}</div>}
             </td>
@@ -6328,7 +6369,7 @@ function docsDaPessoa(p,arquivos){
 function dadosAdmissao(p,{unidades,cargoInfo,empresaPadrao,cfg}){
   const u=unidades.find(x=>x.id===p.unidade)||{}; const emp=empresaDaUnidade(cfg,p.unidade,empresaPadrao);
   return { empresa:[emp.razao, emp.cnpj?("CNPJ "+fmtCnpj(emp.cnpj)):"", u.nome?("Unidade "+u.nome):""].filter(Boolean).join(" · "),
-    nome:p.nome||"", funcao:p.cargo||"", salario:Number(p.salario)||0, horario:horarioDoCargo(p,cargoInfo), vt:Number(p.vt)>0, vtValor:Number(p.vt)||0,
+    nome:p.nome||"", funcao:p.cargo||"", salario:Number(p.salario)||0, horario:horarioDoCargo(p,cargoInfo), vt:Number(p.vtDia)>0||Number(p.vt)>0, vtValor:Number(p.vt)||0, vtDiaValor:Number(p.vtDia)||0,
     cpf:p.cpf||"", admissao:p.admissao||"", obs:"" };
 }
 // PDF da ficha no modelo da contabilidade
@@ -6344,7 +6385,7 @@ async function pdfFichaAdmissao(d){
     ls.slice(0,Math.max(1,Math.floor(h/13))).forEach((l,i)=>pg.drawText(l,{x:52+w,y:y-2-i*12,size:10,font:f})); y-=h+(h>28?10:0); };
   linha("EMPRESA:",d.empresa); y-=14; linha("NOME:",d.nome); linha("DATA DE ADMISSÃO:",d.admissao?ddmmaaaa(d.admissao):""); y-=14;
   linha("FUNÇÃO:",d.funcao); linha("SALÁRIO:",d.salario?fmtBRL(d.salario):""); linha("HORÁRIO DE TRABALHO:",d.horario);
-  linha("VALE-TRANSPORTE:", d.vt?("SIM (X)   NÃO ( )"+(d.vtValor?"   · "+fmtBRL(d.vtValor)+"/mês":"")):"SIM ( )   NÃO (X)"); y-=14;
+  linha("VALE-TRANSPORTE:", d.vt?("SIM (X)   NÃO ( )"+(d.vtDiaValor?"   · "+fmtBRL(d.vtDiaValor)+" por dia trabalhado":(d.vtValor?"   · "+fmtBRL(d.vtValor)+"/mês":""))):"SIM ( )   NÃO (X)"); y-=14;
   linha("OBSERVAÇÕES:", [d.obs, d.cpf?("CPF "+d.cpf):""].filter(Boolean).join(" · "), 70);
   y-=10; pg.drawText(limpo("Documentos anexos: "+(d.anexos||[]).join(", ")),{x:40,y,size:8.5,font:f,color:L.rgb(0.35,0.35,0.35)});
   pg.drawText(limpo("Enviado pelo Wilami Ponto & RH em "+new Date().toLocaleString("pt-BR")),{x:40,y:40,size:8,font:f,color:L.rgb(0.5,0.5,0.5)});
