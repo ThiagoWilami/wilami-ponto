@@ -481,6 +481,7 @@ const DOC_TIPOS = [
   ["diploma","Diploma"],
   ["comprovante_residencia","Comprovante de residência"],
   ["comprovante_bancario","Comprovante bancário / Pix"],
+  ["docs_filhos","Documentos dos filhos"],
 ];
 // "hoje" DINÂMICO = dia da semana REAL (0=Seg … 6=Dom). Usado no ponto, no painel ao vivo e na escala.
 const HOJE_IDX = (new Date().getDay()+6)%7;
@@ -915,7 +916,7 @@ const PERMS_INIT = {
 };
 const CAPS = [["escala","Editar escala"],["colaboradores","Gerir colaboradores"],["financeiro","Relatórios financeiros"],["documentos","Documentos e dossiê"],["unidades","Gerir unidades"],["ajustes","Aprovar ajustes de ponto"],["equipe","Gerir equipe"],["excluir","Excluir/apagar dados"]];
 // "diretor" e "financeira" (Diretora Financeira) são os únicos que enxergam o pagamento SIGILOSO da diretoria.
-const PAPEIS = { proprietario:"Proprietário", gerente:"Gerente", rh_financeiro:"RH / Financeiro", diretor:"Diretor", financeira:"Diretora Financeira" };
+const PAPEIS = { proprietario:"Proprietário", gerente:"Gerente", rh_financeiro:"RH / Financeiro", diretor:"Diretor", financeira:"Diretora Financeira", contabilidade:"Contabilidade (só a aba Contabilidade)", pcmso:"PAROMED / PCMSO (só a aba PCMSO)" };
 
 // Coleção PÚBLICA de auto-cadastros (feitos pelo celular, sem login).
 // Cada cadastro é um documento próprio → o celular só CRIA (não sobrescreve a base).
@@ -1075,7 +1076,7 @@ function StoreProvider({children}) {
   const _capitaliza=(s)=> s ? s.charAt(0).toUpperCase()+s.slice(1) : s;
   const _nomeLocal = meuEmail ? _capitaliza(meuEmail.split("@")[0]) : "";
   const meuNome = (meuBind&&meuBind.nome) || _nomeLocal || (semAuth?"Gestor":"Usuário");
-  const meuPapel = semAuth ? "Proprietário" : (ehDono ? "Administrador" : "Gerente");
+  const meuPapel = semAuth ? "Proprietário" : (ehDono ? "Administrador" : ({contabilidade:"Contabilidade",pcmso:"PAROMED / PCMSO"}[meuBind&&meuBind.papel] || "Gerente"));
   const casaRestrita = (!ehDono && meuBind && meuBind.unidade && meuBind.unidade!=="todas") ? meuBind.unidade : null;
   const papelKey = (meuBind&&meuBind.papel) || (semAuth?"proprietario":(ehDono?"proprietario":""));
   // Sigilo da diretoria: quem enxerga o valor do pagamento marcado como sigiloso.
@@ -1108,6 +1109,9 @@ function StoreProvider({children}) {
   const cargoInfo=(nome)=> cargosDesc.find(c=>c.nome===nome) || null;     // { "clt-1": ["Minha pasta", …] }
   const [modeloContratoPJ,setModeloContratoPJ]=usePersist("modeloContratoPJ",null);   // null = modelo padrão
   const [empresaContratante,setEmpresaContratante]=usePersist("empresaContratante",{});
+  const [envContab,setEnvContab]=usePersist("envioContabilidade",{});   // admissões enviadas à contabilidade
+  const [contabCfg,setContabCfg]=usePersist("contabilidadeCfg",{});     // e-mail da contabilidade, empresa/CNPJ por unidade
+  const [pcmso,setPcmso]=usePersist("pcmsoDados",{});                   // ajustes da planilha PCMSO
   const [termoImagemCfg,setTermoImagemCfg]=usePersist("termoImagemCfg",null);
   const [catalogoEntregas,setCatalogoEntregas]=usePersist("catalogoEntregas",null);   // null = itens/valores padrão         // null = termo padrão
   const [assinaturaCfg,setAssinaturaCfg]=usePersist("assinaturaCfg",{signatarios:[]}); // signatários padrão da empresa
@@ -1349,7 +1353,7 @@ function StoreProvider({children}) {
   const value={ unidades:unidadesVis,salvarUnidade,excluirUnidade, clts:cltsVis,freelas:freelasVis,freelasComPagamentos:freelasPagVis,salvarClt,salvarFreela,excluirColab,cadastrarPublico, anexarDoc,
     escala,setEscala, escalaOv,setEscalaOv, registros:registrosVis,addRegistro, pontoHist, freelancerEscaladoHoje, valorFreela, setFreelaAjuste, cltExtraAjuste,setCltExtra, gorjetasCLT,setGorjetaCLT, pagamentosFreela,addPagamentoFreela,removePagamentoFreela, pagamentosCLT,addPagamentoCLT,removePagamentoCLT, faltaDescontoDesde,setFaltaDescontoDesde, vtDiaPagamento,setVtDiaPagamento,
     cargosFreela,salvarCargoFreela,excluirCargoFreela, atestados,enviarAtestado, ajustes,enviarAjuste,resolverAjuste,
-    dossie,getDossie,addFalta,addFeedback,addAnexo, perfil,setPerfil, perms,setPerms, can,
+    dossie,getDossie,addFalta,addFeedback,addAnexo, perfil,setPerfil, perms,setPerms, can, envContab,setEnvContab, contabCfg,setContabCfg, pcmso,setPcmso,
     clientes,clienteAtivo,tenantAtual,criarCliente,trocarCliente,
     acesso,donos,setDonos,acessos,acessosOps,
     marca,setMarca, pjs:(casaRestrita!=null?pjsTodos.filter(x=>x.unidade==null||x.unidade==="todas"||_mesmaCasa(x.unidade)):pjsTodos), salvarPj,excluirPj, pagamentosPJ,addPagamentoPJ,removePagamentoPJ,
@@ -6295,6 +6299,289 @@ function EnvelopeWilamiModal({envId,onClose}){
   </Modal>;
 }
 
+/* ============================ CONTABILIDADE (admissão) e PCMSO (medicina do trabalho) ============================ */
+// Papéis com acesso restrito: o login vê só a sua aba.
+const ABA_DO_PAPEL = { contabilidade:"contabilidade", pcmso:"pcmso" };
+const semAcento=(s)=> String(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+const maiusc=(s)=> semAcento(s).toUpperCase().replace(/\s+/g," ").trim();
+const fmtCelular=(t)=>{ const d=soDigitos(t).replace(/^55(?=\d{10,11}$)/,""); if(d.length===11) return `(${d.slice(0,2)}) ${d.slice(2,7)}-${d.slice(7)}`; if(d.length===10) return `(${d.slice(0,2)}) ${d.slice(2,6)}-${d.slice(6)}`; return t||""; };
+const fmtCnpj=(c)=>{ const d=soDigitos(c); return d.length===14?`${d.slice(0,2)}.${d.slice(2,5)}.${d.slice(5,8)}/${d.slice(8,12)}-${d.slice(12)}`:(c||""); };
+const ddmmaaaa=(s)=>{ if(!s) return ""; const m=/^(\d{4})-(\d{2})-(\d{2})/.exec(String(s)); if(m) return `${m[3]}/${m[2]}/${m[1]}`; return String(s); };
+const sexoMF=(s)=>{ const x=maiusc(s); return x.startsWith("M")?"M":x.startsWith("F")?"F":""; };
+// Empresa empregadora de cada unidade (razão social + CNPJ). Sem cadastro, usa a empresa contratante.
+const empresaDaUnidade=(cfg,uid,empresaPadrao)=>{ const e=((cfg&&cfg.empresas)||{})[String(uid)]||{}; return { razao:e.razao||empresaPadrao.razao||"", cnpj:e.cnpj||empresaPadrao.cnpj||"" }; };
+const horarioDoCargo=(p,cargoInfo)=>{ if(p.horario) return p.horario; const c=cargoInfo(p.cargo); const ts=turnosDe(c); return ts.length? ts.map(t=>t.horario?((ts.length>1?t.nome+" ":"")+t.horario):"").filter(Boolean).join(" / ") : ""; };
+
+// ---- Documentos da admissão ----
+const DOCS_ADMISSAO=[
+  { k:"rgcpf", l:"RG / CPF", re:/(^|\b)(rg|cnh|cpf)(\b|$)|rg ou cnh|identidade/i, chaves:["cnh_rg","cpf","rg","cnh"], obrig:true },
+  { k:"endereco", l:"Comprovante de endereço", re:/comprovante de resid|comprovante de ender|endere[cç]o/i, chaves:["comprovante_residencia"], obrig:true },
+  { k:"filhos", l:"Documentos dos filhos (se tiver)", re:/filho|certid[aã]o de nasc/i, chaves:["docs_filhos","certidao_filhos"] },
+];
+function docsDaPessoa(p,arquivos){
+  const key=donoKeyDe("clt",p.id); const meus=(arquivos||[]).filter(a=>a.donoKey===key && a.categoria!=="contrato_assinado" && a.categoria!=="termo_funcao");
+  const out={}; DOCS_ADMISSAO.forEach(d=>{ const ids=new Set(); d.chaves.forEach(k=>{ const x=p.docs&&p.docs[k]; if(x&&x.arquivoId) ids.add(x.arquivoId); });
+    meus.forEach(a=>{ if(d.re.test(a.nome||"")) ids.add(a.id); }); out[d.k]=meus.filter(a=>ids.has(a.id)); });
+  return out;
+}
+// Dados do formulário "Dados para admissão de funcionário"
+function dadosAdmissao(p,{unidades,cargoInfo,empresaPadrao,cfg}){
+  const u=unidades.find(x=>x.id===p.unidade)||{}; const emp=empresaDaUnidade(cfg,p.unidade,empresaPadrao);
+  return { empresa:[emp.razao, emp.cnpj?("CNPJ "+fmtCnpj(emp.cnpj)):"", u.nome?("Unidade "+u.nome):""].filter(Boolean).join(" · "),
+    nome:p.nome||"", funcao:p.cargo||"", salario:Number(p.salario)||0, horario:horarioDoCargo(p,cargoInfo), vt:Number(p.vt)>0, vtValor:Number(p.vt)||0,
+    cpf:p.cpf||"", admissao:p.admissao||"", obs:"" };
+}
+// PDF da ficha no modelo da contabilidade
+async function pdfFichaAdmissao(d){
+  const L=await carregarPdfLib(); const doc=await L.PDFDocument.create(); const pg=doc.addPage([595,842]);
+  const f=await doc.embedFont(L.StandardFonts.Helvetica), b=await doc.embedFont(L.StandardFonts.HelveticaBold);
+  const limpo=(t)=>String(t||"").replace(/[^\x20-\x7E\u00A0-\u00FF]/g,"");
+  const azul=L.rgb(0.13,0.31,0.47), claro=L.rgb(0.86,0.92,0.97);
+  pg.drawRectangle({x:40,y:752,width:515,height:50,color:azul}); pg.drawText("DADOS PARA ADMISSÃO DE FUNCIONÁRIO",{x:118,y:771,size:16,font:b,color:L.rgb(1,1,1)});
+  let y=722; const linha=(rot,val,h=28)=>{ pg.drawRectangle({x:40,y:y-h+18,width:515,height:h,color:claro,borderColor:L.rgb(0.2,0.2,0.2),borderWidth:0.6});
+    pg.drawText(limpo(rot),{x:46,y:y-2,size:10,font:b}); const w=b.widthOfTextAtSize(limpo(rot),10);
+    const txt=limpo(val); const max=505-w; let a="", ls=[]; txt.split(/\s+/).forEach(t=>{ const s=a?a+" "+t:t; if(f.widthOfTextAtSize(s,10)>max&&a){ ls.push(a); a=t; } else a=s; }); if(a) ls.push(a);
+    ls.slice(0,Math.max(1,Math.floor(h/13))).forEach((l,i)=>pg.drawText(l,{x:52+w,y:y-2-i*12,size:10,font:f})); y-=h+(h>28?10:0); };
+  linha("EMPRESA:",d.empresa); y-=14; linha("NOME:",d.nome); y-=14;
+  linha("FUNÇÃO:",d.funcao); linha("SALÁRIO:",d.salario?fmtBRL(d.salario):""); linha("HORÁRIO DE TRABALHO:",d.horario);
+  linha("VALE-TRANSPORTE:", d.vt?("SIM (X)   NÃO ( )"+(d.vtValor?"   · "+fmtBRL(d.vtValor)+"/mês":"")):"SIM ( )   NÃO (X)"); y-=14;
+  linha("OBSERVAÇÕES:", [d.obs, d.cpf?("CPF "+d.cpf):"", d.admissao?("Admissão "+ddmmaaaa(d.admissao)):""].filter(Boolean).join(" · "), 70);
+  y-=10; pg.drawText(limpo("Documentos anexos: "+(d.anexos||[]).join(", ")),{x:40,y,size:8.5,font:f,color:L.rgb(0.35,0.35,0.35)});
+  pg.drawText(limpo("Enviado pelo Wilami Ponto & RH em "+new Date().toLocaleString("pt-BR")),{x:40,y:40,size:8,font:f,color:L.rgb(0.5,0.5,0.5)});
+  return await doc.save();
+}
+async function zipAdmissao(d,arqsSel){
+  const z=new JSZip(); const nome=String(d.nome||"colaborador").replace(/[\\/:*?"<>|]/g,"").trim();
+  z.file("Dados para admissao - "+nome+".pdf", await pdfFichaAdmissao(d));
+  const usados={}; for(const a of arqsSel){ const du=await arqConteudo(a); let n=String(a.nome||"documento").replace(/[\\/:*?"<>|]/g,"_"); if(usados[n]){ usados[n]++; n=n.replace(/(\.[a-z0-9]+)?$/i,` (${usados[n]})$1`); } else usados[n]=1; z.file("Documentos/"+n, b64ToBytes(du)); }
+  return await z.generateAsync({type:"blob"});
+}
+const baixarBlob=(blob,nome)=>{ const u=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=u; a.download=nome; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(u); a.remove(); },1500); };
+
+const STATUS_CONTAB={ enviado:["Enviado","blue"], recebido:["Recebido pela contabilidade","amber"], concluido:["Admissão concluída","green"] };
+function ContabilidadePage(){
+  const { clts, unidades, arquivos, cargoInfo, empresaContratante, contabCfg, setContabCfg, envContab, setEnvContab, acesso, can } = useStore();
+  const toast=useContext(ToastCtx);
+  const souContab = !!(acesso && !acesso.ehDono && acesso.papelKey==="contabilidade");
+  const empresaPadrao=empresaEfetiva(empresaContratante);
+  const ctx={unidades,cargoInfo,empresaPadrao,cfg:contabCfg};
+  const [aba,setAba]=useState(souContab?"enviados":"enviar");
+  const [sel,setSel]=useState(null); const [q,setQ]=useState("");
+  const corte=ymd(addDias(new Date(),-90));
+  const ativos=clts.filter(p=>p.status!=="inativo" && p.vinculo!=="confianca");
+  const chave=(p)=>donoKeyDe("clt",p.id);
+  const lista = (aba==="enviar" ? ativos.filter(p=>!envContab[chave(p)] && (!p.admissao || p.admissao>=corte)) : ativos.filter(p=>envContab[chave(p)]))
+    .filter(p=>normTxt(p.nome+" "+(p.cargo||"")).includes(normTxt(q)))
+    .sort((a,b)=>String(b.admissao||"").localeCompare(String(a.admissao||"")));
+  const docsResumo=(p)=>{ const d=docsDaPessoa(p,arquivos); return DOCS_ADMISSAO.map(x=>[x,d[x.k].length]); };
+  const pAberto=sel && clts.find(p=>chave(p)===sel);
+  return <div className="space-y-4 fade-in">
+    <PageHeader title="Contabilidade" sub={souContab?"Novos funcionários enviados para admissão — baixe os dados e os documentos":"Envie os dados e documentos dos novos CLT para a contabilidade fazer a admissão"}/>
+    {!souContab && <Card className="p-4 flex flex-wrap items-end gap-3">
+      <div className="flex-1 min-w-[220px]"><Field label="E-mail da contabilidade (para avisar quando enviar)"><Input value={contabCfg.email||""} onChange={e=>setContabCfg({...contabCfg,email:e.target.value.trim()})} placeholder="contabilidade@escritorio.com.br"/></Field></div>
+      <p className="text-xs text-slate-500 max-w-md">A contabilidade entra com login próprio e vê só esta aba: crie em <b>Gerentes & acessos</b> com o papel <b>Contabilidade</b>.</p>
+    </Card>}
+    <div className="flex flex-wrap items-center gap-2">
+      {!souContab && <div className="flex p-1 bg-slate-100 rounded-xl">{[["enviar","A enviar"],["enviados","Enviados"]].map(([k,l])=><button key={k} onClick={()=>setAba(k)} className={cx("px-4 py-1.5 rounded-lg text-sm font-semibold", aba===k?"bg-white shadow-soft text-brand-700":"text-slate-500")}>{l}</button>)}</div>}
+      <div className="flex-1 min-w-[200px]"><Input value={q} onChange={e=>setQ(e.target.value)} placeholder="Buscar por nome ou função"/></div>
+    </div>
+    <Card className="divide-y divide-slate-100">
+      {lista.length===0 && <p className="p-6 text-center text-sm text-slate-400">{aba==="enviar"?"Nenhum novo CLT pendente de envio (admitidos nos últimos 90 dias).":"Nenhuma admissão enviada ainda."}</p>}
+      {lista.map(p=>{ const env=envContab[chave(p)]; const st=env&&STATUS_CONTAB[env.status]; const u=unidades.find(x=>x.id===p.unidade);
+        return <div key={chave(p)} className="p-3 flex flex-wrap items-center gap-3">
+          <Avatar name={p.nome} src={p.foto} size="w-10 h-10"/>
+          <div className="flex-1 min-w-[180px]"><div className="text-sm font-semibold text-slate-800">{p.nome}</div>
+            <div className="text-xs text-slate-400">{p.cargo||"—"}{u?" · "+u.nome:""}{p.admissao?" · admissão "+fmtDataBR(p.admissao):" · sem data de admissão"}</div></div>
+          <div className="flex flex-wrap gap-1">{docsResumo(p).map(([d,n])=><span key={d.k} className={cx("text-[11px] px-2 py-0.5 rounded-full border", n?"bg-emerald-50 border-emerald-200 text-emerald-700":d.obrig?"bg-rose-50 border-rose-200 text-rose-600":"bg-slate-50 border-slate-200 text-slate-400")}>{n?"✓ ":d.obrig?"falta ":"— "}{d.l.replace(" (se tiver)","")}</span>)}</div>
+          {st && <Badge tone={st[1]}>{st[0]}{env.enviadoEm?" · "+new Date(env.enviadoEm).toLocaleDateString("pt-BR"):""}</Badge>}
+          <Btn size="sm" variant={env?"ghost":"soft"} icon={env?I.eye:I.arrow} onClick={()=>setSel(chave(p))}>{env?"Abrir":"Preparar envio"}</Btn>
+        </div>; })}
+    </Card>
+    {pAberto && <AdmissaoModal p={pAberto} ctx={ctx} souContab={souContab} onClose={()=>setSel(null)}/>}
+  </div>;
+}
+function AdmissaoModal({p,ctx,souContab,onClose}){
+  const { arquivos, envContab, setEnvContab, contabCfg, acesso, can } = useStore();
+  const toast=useContext(ToastCtx);
+  const key=donoKeyDe("clt",p.id); const env=envContab[key];
+  const base=dadosAdmissao(p,ctx);
+  const [d,setD]=useState(()=>env&&env.dados?{...base,...env.dados}:base);
+  const docs=docsDaPessoa(p,arquivos);
+  const [semFilhos,setSemFilhos]=useState(()=>!!(env&&env.semFilhos));
+  const [marc,setMarc]=useState(()=>{ const s={}; if(env&&env.docs) env.docs.forEach(id=>s[id]=true); else Object.values(docs).flat().forEach(a=>s[a.id]=true); return s; });
+  const [envDoc,setEnvDoc]=useState(""); const [ocupado,setOcupado]=useState("");
+  const [obsContab,setObsContab]=useState((env&&env.obsContab)||"");
+  const set=(k,v)=>setD(x=>({...x,[k]:v}));
+  const editavel=!souContab;
+  const selecionados=Object.values(docs).flat().filter(a=>marc[a.id]);
+  const faltando=DOCS_ADMISSAO.filter(x=>x.obrig && !docs[x.k].some(a=>marc[a.id])).map(x=>x.l);
+  const anexar=async(slot,file)=>{ if(!file) return; setEnvDoc(slot.k);
+    try{ const r=await prepararArquivo(file); const id=await arqSalvar({ nome:slot.l.replace(" (se tiver)","")+" - "+r.nome, donoKey:key, donoTipo:"clt", donoId:p.id, donoNome:p.nome, cpf:soDigitos(p.cpf), pasta:"Documentos pessoais", categoria:"documento", visivelColab:false }, r.dados);
+      setMarc(m=>({...m,[id]:true})); toast("Documento anexado"); }catch(e){ toast("Não foi possível anexar: "+(e.message||e)); } setEnvDoc(""); };
+  const dadosPdf=()=>({...d, anexos:selecionados.map(a=>a.nome)});
+  const baixar=async()=>{ setOcupado("zip"); try{ baixarBlob(await zipAdmissao(dadosPdf(),selecionados),"Admissao - "+String(d.nome).trim()+".zip"); }catch(e){ toast("Falha ao montar o pacote: "+(e.message||e)); } setOcupado(""); };
+  const enviar=async()=>{ setOcupado("env");
+    const reg={ status:"enviado", enviadoEm:Date.now(), enviadoPor:(acesso&&acesso.email)||"", dados:d, docs:selecionados.map(a=>a.id), semFilhos, historico:[...((env&&env.historico)||[]),{em:Date.now(),acao:"enviado",por:(acesso&&acesso.email)||""}] };
+    setEnvContab(prev=>({...prev,[key]:{...(prev[key]||{}),...reg}})); setOcupado("");
+    toast("Enviado — já aparece na aba da contabilidade");
+    if(contabCfg.email){ const corpo=`Olá! Novo funcionário para admissão:\n\nNome: ${d.nome}\nFunção: ${d.funcao}\nSalário: ${d.salario?fmtBRL(d.salario):"-"}\nHorário: ${d.horario||"-"}\nVale-transporte: ${d.vt?"Sim":"Não"}\n${d.obs?"Observações: "+d.obs+"\n":""}\nOs dados e os documentos (RG/CPF, comprovante de endereço${semFilhos?"":", documentos dos filhos"}) estão na aba Contabilidade do Wilami:\n${location.origin+location.pathname}${WP_TENANT?"?t="+encodeURIComponent(WP_TENANT):""}`;
+      window.open("https://mail.google.com/mail/?view=cm&fs=1&to="+encodeURIComponent(contabCfg.email)+"&su="+encodeURIComponent("Admissão: "+d.nome)+"&body="+encodeURIComponent(corpo),"_blank"); }
+    onClose(); };
+  const marcarStatus=(status)=>{ setEnvContab(prev=>({...prev,[key]:{...(prev[key]||{}), status, obsContab, [status+"Em"]:Date.now(), historico:[...(((prev[key]||{}).historico)||[]),{em:Date.now(),acao:status,por:(acesso&&acesso.email)||""}]}})); toast(STATUS_CONTAB[status][0]); onClose(); };
+  const linha=(rot,campo,tipo="text")=> <div className="grid grid-cols-[150px_1fr] items-center border border-slate-300 -mt-px bg-sky-50/60">
+    <div className="px-3 py-2 text-xs font-bold text-slate-700 uppercase">{rot}</div>
+    {editavel ? <input type={tipo} value={d[campo]??""} onChange={e=>set(campo,tipo==="number"?Number(e.target.value):e.target.value)} className="px-3 py-2 bg-white/70 text-sm outline-none border-l border-slate-200" aria-label={rot}/>
+      : <div className="px-3 py-2 text-sm bg-white/70 border-l border-slate-200">{campo==="salario"?(d.salario?fmtBRL(d.salario):"—"):(d[campo]||"—")}</div>}
+  </div>;
+  return <Modal open onClose={onClose} wide>
+    <div className="p-5 sm:p-6">
+      <div className="flex items-start justify-between mb-3"><div><h3 className="text-lg font-bold text-slate-900">{p.nome}</h3><p className="text-sm text-slate-500">{env?(STATUS_CONTAB[env.status]||[""])[0]+(env.enviadoEm?" em "+new Date(env.enviadoEm).toLocaleString("pt-BR"):""):"Ainda não enviado à contabilidade"}</p></div>
+        <button onClick={onClose} className="text-slate-400 hover:text-slate-600" aria-label="Fechar"><Icon d={I.x}/></button></div>
+      <div className="rounded-xl overflow-hidden border border-slate-300">
+        <div className="bg-[#1f4e79] text-white text-center font-bold py-3 tracking-wide">DADOS PARA ADMISSÃO DE FUNCIONÁRIO</div>
+        <div className="p-3 space-y-3 bg-white">
+          <div>{linha("Empresa","empresa")}</div>
+          <div>{linha("Nome","nome")}</div>
+          <div>{linha("Função","funcao")}{linha("Salário (R$)","salario","number")}{linha("Horário de trabalho","horario")}
+            <div className="grid grid-cols-[150px_1fr] items-center border border-slate-300 -mt-px bg-sky-50/60"><div className="px-3 py-2 text-xs font-bold text-slate-700 uppercase">Vale-transporte</div>
+              <div className="px-3 py-2 bg-white/70 border-l border-slate-200 flex gap-4 text-sm">{[[true,"Sim"],[false,"Não"]].map(([v,l])=><label key={l} className="inline-flex items-center gap-1.5"><input type="radio" disabled={!editavel} checked={!!d.vt===v} onChange={()=>set("vt",v)} className="accent-green-700"/>{l}</label>)}</div></div></div>
+          <div className="border border-slate-300 bg-sky-50/60"><div className="px-3 py-2 text-xs font-bold text-slate-700 uppercase">Observações</div>
+            {editavel ? <textarea value={d.obs||""} onChange={e=>set("obs",e.target.value)} rows={2} className="w-full px-3 py-2 text-sm bg-white/70 outline-none border-t border-slate-200" placeholder="Ex.: período de experiência 45+45 dias, insalubridade, adiantamento…" aria-label="Observações"/>
+              : <div className="px-3 py-2 text-sm bg-white/70 border-t border-slate-200 min-h-[40px]">{d.obs||"—"}</div>}</div>
+        </div>
+      </div>
+      <div className="mt-4"><div className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Documentos</div>
+        <div className="space-y-2">{DOCS_ADMISSAO.map(slot=>{ const fs=docs[slot.k]; const ehFilhos=slot.k==="filhos";
+          return <div key={slot.k} className="p-3 rounded-xl border border-slate-200">
+            <div className="flex flex-wrap items-center gap-2"><div className="text-sm font-semibold text-slate-800 flex-1">{slot.l}{slot.obrig&&<span className="text-rose-500"> *</span>}</div>
+              {ehFilhos && editavel && !fs.length && <label className="text-xs text-slate-500 inline-flex items-center gap-1"><input type="checkbox" checked={semFilhos} onChange={e=>setSemFilhos(e.target.checked)} className="accent-green-700"/>Não tem filhos</label>}
+              {editavel && <label className="cursor-pointer inline-flex items-center gap-1 text-xs font-semibold text-brand-700 border border-brand-200 bg-brand-50 px-2.5 py-1.5 rounded-lg"><Icon d={I.upload} className="w-3.5 h-3.5"/>{envDoc===slot.k?"Enviando…":"Anexar"}
+                <input type="file" accept="image/*,application/pdf" className="hidden" onChange={e=>{ const f=e.target.files&&e.target.files[0]; e.target.value=""; anexar(slot,f); }} aria-label={"Anexar "+slot.l}/></label>}</div>
+            {fs.length ? <div className="mt-2 space-y-1">{fs.map(a=><div key={a.id} className="flex items-center gap-2 text-sm">
+                {editavel ? <input type="checkbox" checked={!!marc[a.id]} onChange={e=>setMarc(m=>({...m,[a.id]:e.target.checked}))} className="accent-green-700" aria-label={"Incluir "+a.nome}/> : <Icon d={I.doc} className="w-4 h-4 text-slate-400"/>}
+                <span className="flex-1 truncate text-slate-700">{a.nome}</span>
+                <button onClick={()=>arqAbrir(a).catch(e=>toast(e.message))} className="text-xs text-brand-700 font-semibold hover:underline">Ver</button></div>)}</div>
+              : <p className="text-xs mt-1 text-slate-400">{ehFilhos&&(semFilhos||(env&&env.semFilhos))?"Não tem filhos.":"Nenhum arquivo na pasta da pessoa."}</p>}
+          </div>; })}</div>
+      </div>
+      {souContab && <div className="mt-4"><Field label="Observação da contabilidade (ex.: matrícula, pendências)"><textarea value={obsContab} onChange={e=>setObsContab(e.target.value)} rows={2} className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm"/></Field></div>}
+      {!souContab && env && env.obsContab && <div className="mt-3 p-3 rounded-xl bg-amber-50 text-amber-800 text-sm"><b>Contabilidade:</b> {env.obsContab}</div>}
+      {editavel && faltando.length>0 && <p className="text-xs text-rose-500 mt-3">Falta anexar: <b>{faltando.join(", ")}</b></p>}
+      <div className="flex flex-wrap gap-2 mt-4">
+        <Btn variant="ghost" icon={I.download} disabled={ocupado==="zip"} onClick={baixar}>{ocupado==="zip"?"Montando…":"Baixar dados + documentos (.zip)"}</Btn>
+        {editavel && <Btn className="flex-1" icon={I.arrow} disabled={!!ocupado || faltando.length>0 || !d.nome} onClick={enviar}>{env?"Reenviar para a contabilidade":"Enviar para a contabilidade"}</Btn>}
+        {souContab && env && env.status!=="concluido" && <>{env.status==="enviado" && <Btn variant="soft" icon={I.check} onClick={()=>marcarStatus("recebido")}>Marcar como recebido</Btn>}
+          <Btn className="flex-1" icon={I.check} onClick={()=>marcarStatus("concluido")}>Admissão concluída</Btn></>}
+      </div>
+    </div>
+  </Modal>;
+}
+
+// ---- PCMSO: planilha "cadastro de funcionários" (Modelo I) ----
+const PCMSO_COLS=[
+  ["unidade","Nome Unidade",1],["cnpj","CNPJ Unidade",1],["setor","Nome Setor",1],["cargo","Nome Cargo",1],["matricula","Matrícula",1],["nome","Nome Funcionário",1],
+  ["nascimento","Dt. Nascimento",1],["sexo","Sexo",1],["situacao","Situação",1],["admissao","Dt. Admissão",1],["contratacao","Contratação",1],["rg","RG",0],["cpf","CPF",1],
+  ["ctps","CTPS",1],["serie","SERIE",1],["cbo","CBO",1],["centroCusto","Centro Custo",0],["descricao","Descrição Detalhada do Cargo (até 999 caracteres)",1],
+  ["email","E-mail do colaborador",1],["celular","Telefone Celular do(a) colaborador(a)",1],["categoria","Código Categoria (eSocial)",1],
+];
+// CBO sugerido por função comum de restaurante (confira antes de enviar)
+const CBO_SUGERIDO=[[/chef|cozinheiro chefe/i,"271105"],[/pizzai/i,"513215"],[/cozinheir/i,"513205"],[/auxiliar de cozinha|ajudante de cozinha|aux\. cozinha/i,"513505"],
+  [/gar[cç]om|gar[cç]onete|atendente de sal/i,"513405"],[/barman|bartender|barista/i,"513420"],[/ma[iî]tre|chefe de fila|chefe de sal/i,"510135"],[/copeir/i,"513425"],
+  [/confeiteir/i,"848310"],[/padeir/i,"848305"],[/caixa/i,"421125"],[/limpeza|faxin|servi[cç]os gerais/i,"514320"],[/gerente/i,"141510"],[/recepcion|hostess/i,"422105"],[/atendente/i,"513435"],[/manobrista/i,"519110"]];
+const cboSugerido=(cargo)=>{ const r=CBO_SUGERIDO.find(([re])=>re.test(cargo||"")); return r?r[1]:""; };
+const limpaDescricao=(t)=> semAcento(String(t||"").replace(/[;\n\r\t]+/g," ").replace(/[^\w\s.,()\/-]/g,"").replace(/\s+/g," ")).trim().slice(0,999);
+function linhaPcmso(p,{unidades,cargoInfo,empresaPadrao,cfg,pcmso}){
+  const f=p.ficha||{}; const u=unidades.find(x=>x.id===p.unidade)||{}; const emp=empresaDaUnidade(cfg,p.unidade,empresaPadrao); const c=cargoInfo(p.cargo)||{};
+  const desc=c.descritivo ? DESCRITIVO_LINHAS(c.descritivo).join(". ") : "";
+  const inativo = p.status==="inativo" || (p.fimContrato && p.fimContrato<hojeStr());
+  const auto={ unidade:[emp.razao,u.nome].filter(Boolean).join(" - "), cnpj:soDigitos(emp.cnpj), setor:(SETOR_MAP[setorDe(p)]||{}).l||"", cargo:p.cargo||"", matricula:p.matricula||"", nome:p.nome||"",
+    nascimento:ddmmaaaa(f.nascimento||p.nascimento), sexo:sexoMF(f.sexo||p.sexo), situacao:inativo?"N":"S", admissao:ddmmaaaa(p.admissao), contratacao:"1", rg:soDigitos(f.rg||p.rg)||(f.rg||p.rg||""),
+    cpf:soDigitos(p.cpf), ctps:soDigitos(f.ctpsNumero||""), serie:soDigitos(f.ctpsSerie||""), cbo:soDigitos(((pcmso.cbo||{})[p.cargo])||c.cbo||cboSugerido(p.cargo)), centroCusto:"",
+    descricao:limpaDescricao(desc), email:String(p.email||f.email||"").toLowerCase(), celular:fmtCelular(p.tel||f.telefone), categoria:"101" };
+  const ov=((pcmso.linhas||{})[donoKeyDe("clt",p.id)])||{};
+  const out={}; PCMSO_COLS.forEach(([k])=>{ out[k]=ov[k]!=null&&ov[k]!==""?ov[k]:auto[k]; }); out._auto=auto; out._cboSug=!(((pcmso.cbo||{})[p.cargo])||c.cbo) && !!cboSugerido(p.cargo) && !ov.cbo;
+  return out;
+}
+async function xlsxPcmso(razao,linhas){
+  const wb=new ExcelJS.Workbook(); const ws=wb.addWorksheet("cadastro de funcionários");
+  ws.getCell("A1").value="Gerado pelo Wilami Ponto & RH em "+new Date().toLocaleDateString("pt-BR")+".";
+  ws.mergeCells("A2:J2"); ws.getCell("A2").value="OBSERVAÇÕES IMPORTANTES"; ws.getCell("A2").font={bold:true};
+  ws.mergeCells("A3:U3"); ws.getCell("A3").value="Dados em MAIÚSCULAS, sem acentos e sem abreviações, idênticos à folha de pagamento/eSocial."; ws.getRow(3).height=30; ws.getCell("A3").alignment={wrapText:true,vertical:"top"};
+  ws.mergeCells("A4:J4"); ws.getCell("A4").value="Obrigatório para o sistema."; ws.getCell("A4").fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFFFE699"}};
+  ws.mergeCells("A5:J5"); ws.getCell("A5").value="Opcional"; ws.getCell("A5").fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFDDEBF7"}};
+  ws.mergeCells("A7:B7"); ws.getCell("A7").value="LISTAGEM DE FUNCIONÁRIOS"; ws.getCell("A7").font={bold:true};
+  ws.mergeCells("C7:U7"); ws.getCell("C7").value=maiusc(razao)||"PREENCHA AQUI SUA RAZÃO SOCIAL"; ws.getCell("C7").font={bold:true};
+  const cab=ws.getRow(9); PCMSO_COLS.forEach(([k,l,ob],i)=>{ const c=cab.getCell(i+1); c.value=l; c.font={bold:true,color:{argb:"FF1F2937"}}; c.alignment={wrapText:true,vertical:"middle",horizontal:"center"};
+    c.fill={type:"pattern",pattern:"solid",fgColor:{argb:ob?"FFFFE699":"FFDDEBF7"}}; c.border={top:{style:"thin"},bottom:{style:"thin"},left:{style:"thin"},right:{style:"thin"}}; ws.getColumn(i+1).width=k==="descricao"?60:(k==="nome"||k==="unidade"||k==="email")?34:16; });
+  cab.height=42;
+  linhas.forEach((ln,r)=>{ const row=ws.getRow(10+r); PCMSO_COLS.forEach(([k],i)=>{ let v=ln[k]==null?"":String(ln[k]); if(k!=="email") v=maiusc(v); row.getCell(i+1).value=v; row.getCell(i+1).numFmt="@"; }); });
+  return new Blob([await wb.xlsx.writeBuffer()],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+}
+function PcmsoPage(){
+  const { clts, unidades, cargoInfo, empresaContratante, contabCfg, setContabCfg, pcmso, setPcmso } = useStore();
+  const toast=useContext(ToastCtx);
+  const empresaPadrao=empresaEfetiva(empresaContratante);
+  const ctx={unidades,cargoInfo,empresaPadrao,cfg:contabCfg,pcmso:pcmso||{}};
+  const [desde,setDesde]=useState(()=>ymd(addDias(new Date(),-30))); const [todos,setTodos]=useState(false); const [q,setQ]=useState("");
+  const [marc,setMarc]=useState({}); const [emp,setEmp]=useState(false);
+  const razao=(pcmso&&pcmso.razao)||empresaPadrao.razao||"";
+  const pessoas=clts.filter(p=>p.vinculo!=="confianca" && (todos ? p.status!=="inativo" : (p.admissao && p.admissao>=desde)))
+    .filter(p=>normTxt(p.nome+" "+(p.cargo||"")).includes(normTxt(q))).sort((a,b)=>String(b.admissao||"").localeCompare(String(a.admissao||"")));
+  const linhas=pessoas.map(p=>({p,k:donoKeyDe("clt",p.id),ln:linhaPcmso(p,ctx)}));
+  const incl=(k)=> marc[k]!==false;
+  const setCampo=(p,k,v)=>{ if(k==="cbo"){ setPcmso(prev=>({...(prev||{}), cbo:{...((prev||{}).cbo||{}), [p.cargo]:soDigitos(v)}})); return; }
+    const key=donoKeyDe("clt",p.id); setPcmso(prev=>({...(prev||{}), linhas:{...((prev||{}).linhas||{}), [key]:{...(((prev||{}).linhas||{})[key]||{}), [k]:v}}})); };
+  const faltasDe=(ln)=>PCMSO_COLS.filter(([k,,ob])=>ob && !String(ln[k]||"").trim()).map(([,l])=>l);
+  const sel=linhas.filter(x=>incl(x.k)); const comFalta=sel.filter(x=>faltasDe(x.ln).length);
+  const baixar=async()=>{ if(!window.ExcelJS){ toast("Biblioteca Excel não carregada — verifique a conexão"); return; }
+    if(!sel.length){ toast("Selecione ao menos um funcionário"); return; }
+    try{ baixarBlob(await xlsxPcmso(razao,sel.map(x=>x.ln)),"PCMSO - cadastro de funcionarios - "+hojeStr()+".xlsx");
+      setPcmso(prev=>({...(prev||{}), exportados:{...((prev||{}).exportados||{}), ...Object.fromEntries(sel.map(x=>[x.k,Date.now()]))}})); toast("Planilha baixada"); }
+    catch(e){ toast("Não foi possível gerar a planilha: "+(e.message||e)); } };
+  return <div className="space-y-4 fade-in">
+    <PageHeader title="PCMSO" sub="Planilha de cadastro de funcionários (Modelo I) preenchida a partir do cadastro — complete o que faltar e baixe"/>
+    <Card className="p-4 space-y-3">
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="flex-1 min-w-[240px]"><Field label="Razão social (cabeçalho da planilha)"><Input value={razao} onChange={e=>setPcmso(prev=>({...(prev||{}),razao:e.target.value}))}/></Field></div>
+        <button onClick={()=>setEmp(v=>!v)} className="text-sm font-semibold text-brand-700 hover:underline">{emp?"Fechar":"Empresa e CNPJ por unidade"}</button>
+      </div>
+      {emp && <div className="grid sm:grid-cols-2 gap-2">{unidades.map(u=>{ const e=((contabCfg.empresas||{})[String(u.id)])||{}; const up=(k,v)=>setContabCfg({...contabCfg, empresas:{...(contabCfg.empresas||{}), [String(u.id)]:{...e,[k]:v}}});
+        return <div key={u.id} className="p-2.5 rounded-xl border border-slate-200"><div className="text-sm font-semibold text-slate-700 mb-1">{u.nome}</div>
+          <div className="grid grid-cols-2 gap-2"><Input value={e.razao||""} onChange={ev=>up("razao",ev.target.value)} placeholder={empresaPadrao.razao||"Razão social"} aria-label={"Razão social "+u.nome}/><Input value={e.cnpj||""} onChange={ev=>up("cnpj",ev.target.value)} placeholder={empresaPadrao.cnpj||"CNPJ"} aria-label={"CNPJ "+u.nome}/></div></div>; })}
+        <p className="sm:col-span-2 text-[11px] text-slate-400">Vale também para a ficha da contabilidade. Em branco = usa a empresa de Configurações.</p></div>}
+    </Card>
+    <div className="flex flex-wrap items-center gap-3">
+      <label className="inline-flex items-center gap-2 text-sm text-slate-600"><input type="checkbox" checked={todos} onChange={e=>setTodos(e.target.checked)} className="accent-green-700"/>Todos os ativos</label>
+      {!todos && <label className="inline-flex items-center gap-2 text-sm text-slate-600">Admitidos desde <input type="date" value={desde} onChange={e=>setDesde(e.target.value)} className="px-2 py-1.5 rounded-lg border border-slate-200 text-sm"/></label>}
+      <div className="flex-1 min-w-[180px]"><Input value={q} onChange={e=>setQ(e.target.value)} placeholder="Buscar"/></div>
+      <Btn icon={I.download} onClick={baixar}>Baixar planilha ({sel.length})</Btn>
+    </div>
+    {comFalta.length>0 && <div className="p-3 rounded-xl bg-amber-50 text-amber-800 text-sm">{comFalta.length} funcionário(s) com campo obrigatório em branco (em vermelho). Dá para baixar mesmo assim, mas a clínica pode devolver.</div>}
+    <Card className="overflow-x-auto">
+      <table className="min-w-[2400px] w-full text-xs border-collapse">
+        <thead><tr className="bg-slate-50">
+          <th className="sticky left-0 bg-slate-50 z-10 p-2 border-b border-slate-200 w-8"><input type="checkbox" aria-label="Selecionar todos" checked={linhas.length>0&&linhas.every(x=>incl(x.k))} onChange={e=>setMarc(Object.fromEntries(linhas.map(x=>[x.k,e.target.checked])))} className="accent-green-700"/></th>
+          {PCMSO_COLS.map(([k,l,ob])=><th key={k} className={cx("p-2 border-b border-slate-200 text-left font-semibold whitespace-nowrap", ob?"text-slate-700":"text-slate-400")}>{l.replace(" (até 999 caracteres)","")}{ob?" *":""}</th>)}
+        </tr></thead>
+        <tbody>
+          {linhas.length===0 && <tr><td colSpan={PCMSO_COLS.length+1} className="p-6 text-center text-slate-400 text-sm">Nenhum funcionário {todos?"ativo":"admitido nesse período"}.</td></tr>}
+          {linhas.map(({p,k,ln})=><tr key={k} className="border-b border-slate-100 align-top">
+            <td className="sticky left-0 bg-white z-10 p-2"><input type="checkbox" checked={incl(k)} onChange={e=>setMarc(m=>({...m,[k]:e.target.checked}))} aria-label={"Incluir "+p.nome} className="accent-green-700"/>
+              {(pcmso&&pcmso.exportados&&pcmso.exportados[k]) && <div title={"Baixado em "+new Date(pcmso.exportados[k]).toLocaleString("pt-BR")} className="text-emerald-600 mt-1">✓</div>}</td>
+            {PCMSO_COLS.map(([c,l,ob])=>{ const v=ln[c]||""; const vazio=ob&&!String(v).trim(); const longo=c==="descricao";
+              return <td key={c} className="p-1">
+                {longo ? <textarea value={v} onChange={e=>setCampo(p,c,e.target.value)} rows={2} className={cx("w-full min-w-[320px] px-2 py-1 rounded-md border text-xs", vazio?"border-rose-300 bg-rose-50":"border-slate-200")} aria-label={l+" de "+p.nome}/>
+                  : <input value={v} onChange={e=>setCampo(p,c,e.target.value)} className={cx("w-full px-2 py-1 rounded-md border text-xs", c==="nome"||c==="unidade"||c==="email"?"min-w-[200px]":"min-w-[90px]", vazio?"border-rose-300 bg-rose-50":"border-slate-200")} aria-label={l+" de "+p.nome} title={c==="cbo"?"O CBO vale para todos com o cargo "+p.cargo:""}/>}
+                {c==="cbo" && ln._cboSug && <div className="text-[10px] text-amber-600 mt-0.5">sugerido — confira</div>}
+              </td>; })}
+          </tr>)}
+        </tbody>
+      </table>
+    </Card>
+    <p className="text-[11px] text-slate-400">Preenchido automaticamente com o cadastro e os documentos lidos no convite (nascimento, sexo, RG, CTPS). O que você digitar aqui fica salvo só para o PCMSO; o CBO vale para todos do mesmo cargo. Na planilha, os textos saem em MAIÚSCULAS e sem acentos, como o modelo pede.</p>
+  </div>;
+}
+
 /* ============================ CONVITES DE CADASTRO (link + leitura automática dos documentos) ============================ */
 // Documentos pedidos no link, por tipo de vínculo. "chave" casa com DOC_TIPOS (pasta do colaborador) quando existir.
 const CONVITE_DOCS = {
@@ -6306,6 +6593,7 @@ const CONVITE_DOCS = {
     { k:"titulo_eleitor", l:"Título de eleitor" },
     { k:"reservista", l:"Certificado de reservista (homens)" },
     { k:"comprovante_bancario", l:"Comprovante bancário ou Pix" },
+    { k:"docs_filhos", l:"Documentos dos filhos (certidão/CPF — se tiver)", naoLer:true },
   ],
   free: [
     { k:"cnh_rg", l:"RG ou CNH (frente e verso)", obrig:true },
@@ -6541,7 +6829,7 @@ function ConviteCadastro({onClose}){
   const rmArq=(slot,i)=>setArqs(p=>({...p,[slot]:(p[slot]||[]).filter((_,j)=>j!==i)}));
   const faltaObrig=slots.filter(s=>s.obrig && !(arqs[s.k]||[]).length);
   const lerTudo=async()=>{
-    setErro(""); const fila=[]; slots.forEach(s=>(arqs[s.k]||[]).forEach(a=>fila.push({a,esperado:s.l})));
+    setErro(""); const fila=[]; slots.filter(s=>!s.naoLer).forEach(s=>(arqs[s.k]||[]).forEach(a=>fila.push({a,esperado:s.l})));   // docs dos filhos não entram na leitura (não misturar dados)
     setEtapa("lendo"); setProg({feito:0,total:fila.length});
     const leituras=[], av=[]; let semIA=false, i=0;
     const worker=async()=>{ while(i<fila.length){ const it=fila[i++];
@@ -6794,6 +7082,8 @@ const NAV = [
     {k:"pjs",l:"Prestadores PJ",d:I.briefcase},
     {k:"cargos",l:"Cargos & funções",d:I.doc},
     {k:"convites",l:"Convites de cadastro",d:I.link},
+    {k:"contabilidade",l:"Contabilidade",d:I.briefcase},
+    {k:"pcmso",l:"PCMSO (Paromed)",d:I.shield},
     {k:"equipe",l:"Equipe & permissões",d:I.team,dono:true},
   ]},
   {sec:"Documentos", items:[
@@ -6817,14 +7107,19 @@ const NAV = [
     {k:"ajuda",l:"Ajuda",d:I.help},
   ]},
 ];
-const TITULOS={dashboard:"Painel",escala:"Escala por unidade",ponto:"Ponto ao vivo",ajustes:"Ajustes de ponto",clt:"Colaboradores CLT",freelas:"Freelancers",pjs:"Prestadores PJ",cargos:"Cargos & funções",convites:"Convites de cadastro",arquivos:"Arquivos & pastas",holerites:"Holerites",termos:"Termos e assinaturas",entregas:"Armário, uniformes & EPIs",modeloContrato:"Modelo de contrato PJ",dossie:"Dossiê do colaborador",equipe:"Equipe & permissões",relatorios:"Relatórios",financeiro:"Financeiro",pagamentos:"Pagamentos",unidades:"Unidades",links:"Links & QR",acessos:"Gerentes & acessos",config:"Configurações",ajuda:"Ajuda"};
+const TITULOS={dashboard:"Painel",escala:"Escala por unidade",ponto:"Ponto ao vivo",ajustes:"Ajustes de ponto",clt:"Colaboradores CLT",freelas:"Freelancers",pjs:"Prestadores PJ",cargos:"Cargos & funções",convites:"Convites de cadastro",arquivos:"Arquivos & pastas",holerites:"Holerites",termos:"Termos e assinaturas",entregas:"Armário, uniformes & EPIs",modeloContrato:"Modelo de contrato PJ",dossie:"Dossiê do colaborador",equipe:"Equipe & permissões",relatorios:"Relatórios",financeiro:"Financeiro",pagamentos:"Pagamentos",unidades:"Unidades",links:"Links & QR",acessos:"Gerentes & acessos",config:"Configurações",ajuda:"Ajuda",contabilidade:"Contabilidade",pcmso:"PCMSO (Paromed)"};
 
 // Seletor de cliente (multiempresa) — troca entre grupos de restaurantes e cria novo cliente.
 function ClienteSwitcher(){
   const { clientes, clienteAtivo, criarCliente, trocarCliente, acesso } = useStore();
   const toast=useContext(ToastCtx);
   const [openList,setOpenList]=useState(false);
+  const [novo,setNovo]=useState(false);
+  const [nome,setNome]=useState("");
+  const [cor,setCor]=useState("#6366f1");
+  const [salvando,setSalvando]=useState(false);
   // Gerente vinculado a um cliente: vê apenas o seu espaço (rótulo fixo, sem troca).
+  // (os hooks ficam todos ACIMA deste retorno — senão a tela quebra quando o acesso muda de dono para gerente)
   if(acesso && acesso.pronto && !acesso.ehDono){
     return <div className="mb-2 flex items-center gap-2 px-2 py-2 rounded-xl bg-white/5">
       <span className="w-6 h-6 rounded-lg shrink-0" style={{background:clienteAtivo?.cor||"#6366f1"}}/>
@@ -6832,10 +7127,6 @@ function ClienteSwitcher(){
         <div className="text-sm font-semibold truncate">{clienteAtivo?.nome||"Cliente"}</div></div>
     </div>;
   }
-  const [novo,setNovo]=useState(false);
-  const [nome,setNome]=useState("");
-  const [cor,setCor]=useState("#6366f1");
-  const [salvando,setSalvando]=useState(false);
   const cores=["#6366f1","#f97316","#10b981","#0ea5e9","#e11d48","#a855f7","#f59e0b"];
   const criar=()=>{
     if(!nome.trim()){ toast("Dê um nome ao cliente (grupo de restaurantes)."); return; }
@@ -7023,12 +7314,13 @@ function GerentesAcesso(){
 function Sidebar({view,setView,open,setOpen,onLogout}) {
   const { acesso } = useStore();
   const ehDono = !acesso || acesso.ehDono; // sem contexto (offline) → mostra tudo
+  const abaRestrita = acesso && !acesso.ehDono ? ABA_DO_PAPEL[acesso.papelKey]||null : null;
   return <>
     {open && <div className="fixed inset-0 bg-black/30 z-30 lg:hidden" onClick={()=>setOpen(false)}/>}
     <aside className={cx("fixed lg:sticky top-0 z-40 h-screen w-64 shrink-0 grad-ink text-white flex flex-col transition-transform lg:translate-x-0", open?"translate-x-0":"-translate-x-full")}>
       <div className="p-5"><Logo light/></div>
       <div className="px-3 flex-1 overflow-y-auto">
-        {NAV.map(g=>({...g, items:g.items.filter(it=>!it.dono||ehDono)})).filter(g=>g.items.length).map(g=>
+        {NAV.map(g=>({...g, items:g.items.filter(it=> abaRestrita ? it.k===abaRestrita : (!it.dono||ehDono))})).filter(g=>g.items.length).map(g=>
           <div key={g.sec} className="mb-4">
             <div className="px-3 text-[11px] uppercase tracking-wider text-white/35 font-bold mb-1">{g.sec}</div>
             {g.items.map(it=>
@@ -7074,12 +7366,14 @@ function Shell({ onLogout }) {
     if(acesso && acesso.pronto && acesso.tenantBind!=null && acesso.tenantBind!==tenantAtual){ trocarCliente(acesso.tenantBind); }
   },[acesso&&acesso.pronto, acesso&&acesso.tenantBind, tenantAtual]);
   const pushToast=(msg)=>{ const id=Math.random(); setToasts(t=>[...t,{id,msg}]); setTimeout(()=>setToasts(t=>t.filter(x=>x.id!==id)),2600); };
+  const abaRestrita = acesso && acesso.pronto && !acesso.ehDono ? ABA_DO_PAPEL[acesso.papelKey]||null : null;
+  useEffect(()=>{ if(abaRestrita && view!==abaRestrita) setView(abaRestrita); },[abaRestrita,view]);
   // Portões de acesso (login independente por cliente)
   if(acesso && !acesso.pronto) return <TelaBloqueio spin titulo="Carregando seu acesso…"/>;
   if(acesso && acesso.semAcesso) return <TelaBloqueio icone={I.shield} titulo="Sua conta ainda não tem acesso" texto="Peça ao administrador para vincular seu e-mail a um cliente. Assim que ele liberar, é só entrar novamente." onLogout={onLogout}/>;
   if(acesso && acesso.tenantBind!=null && acesso.tenantBind!==tenantAtual) return <TelaBloqueio spin titulo="Abrindo seu cliente…"/>;
   const views={ dashboard:<Dashboard go={setView}/>, escala:<EscalaVisual/>, ponto:<PontoLive/>, ajustes:<AjustesPonto/>, clt:<ColaboradoresCLT/>, freelas:<Freelancers/>,
-    dossie:<Dossie/>, pjs:<PrestadoresPJ/>, cargos:<CargosPage/>, convites:<ConvitesPage/>, arquivos:<ArquivosPage/>, holerites:<HoleritesPage/>, termos:<TermosPage/>, entregas:<EntregasPage/>, modeloContrato:<ModeloContratoPage/>, equipe:<Equipe/>, relatorios:<Relatorios/>, financeiro:<Financeiro/>, pagamentos:<Pagamentos/>, unidades:<Unidades/>, links:<LinksQR/>, acessos:<GerentesAcesso/>, config:<Configuracoes/>, ajuda:<Ajuda/> };
+    dossie:<Dossie/>, pjs:<PrestadoresPJ/>, cargos:<CargosPage/>, convites:<ConvitesPage/>, arquivos:<ArquivosPage/>, holerites:<HoleritesPage/>, termos:<TermosPage/>, entregas:<EntregasPage/>, modeloContrato:<ModeloContratoPage/>, equipe:<Equipe/>, contabilidade:<ContabilidadePage/>, pcmso:<PcmsoPage/>, relatorios:<Relatorios/>, financeiro:<Financeiro/>, pagamentos:<Pagamentos/>, unidades:<Unidades/>, links:<LinksQR/>, acessos:<GerentesAcesso/>, config:<Configuracoes/>, ajuda:<Ajuda/> };
   return <ToastCtx.Provider value={pushToast}>
     <div className="flex min-h-screen">
       <Sidebar view={view} setView={setView} open={sbOpen} setOpen={setSbOpen} onLogout={onLogout}/>
@@ -7089,7 +7383,7 @@ function Shell({ onLogout }) {
           <div className="lg:hidden"><Logo size="text-base"/></div>
           <div className="hidden lg:flex items-center gap-2 text-sm text-slate-400"><Icon d={(NAV.flatMap(g=>g.items).find(it=>it.k===view)||{}).d||I.grid} className="w-4 h-4 text-brand-600"/><span>{(NAV.find(g=>g.items.some(it=>it.k===view))||{}).sec}</span><span>/</span><span className="text-slate-700 font-semibold">{TITULOS[view]}</span></div>
           <div className="ml-auto flex items-center gap-2">
-            <button onClick={()=>setView("ajustes")} title={ajustesPend?ajustesPend+" ajuste(s) de ponto aguardando aprovação":"Sem pendências"} className="relative w-9 h-9 rounded-xl bg-white border border-slate-200 grid place-items-center text-slate-500 hover:bg-slate-50"><Icon d={I.bell} className="w-4 h-4"/>{ajustesPend>0 && <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold grid place-items-center">{ajustesPend}</span>}</button>
+            {!abaRestrita && <button onClick={()=>setView("ajustes")} title={ajustesPend?ajustesPend+" ajuste(s) de ponto aguardando aprovação":"Sem pendências"} className="relative w-9 h-9 rounded-xl bg-white border border-slate-200 grid place-items-center text-slate-500 hover:bg-slate-50"><Icon d={I.bell} className="w-4 h-4"/>{ajustesPend>0 && <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold grid place-items-center">{ajustesPend}</span>}</button>}
           </div>
         </header>
         <main className="flex-1 px-4 lg:px-8 py-5"><ErroTela chave={view} onVoltar={()=>setView("dashboard")}>{views[view]}</ErroTela></main>

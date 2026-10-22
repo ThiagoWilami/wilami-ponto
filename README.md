@@ -20,6 +20,12 @@ Ponto digital, escala e RH para restaurantes. O app é um único `index.html` (R
 - **Convites de cadastro:** gere um link (CLT ou PJ) e envie pelo WhatsApp. O candidato manda fotos ou PDFs dos documentos, a leitura automática (Claude) preenche o cadastro, ele confere e envia. O cadastro entra direto em Colaboradores CLT ou Prestadores PJ, com os documentos guardados na pasta da pessoa.
 - **App "Meus documentos"** (`#meus-docs`): o colaborador ou PJ entra com CPF/CNPJ + PIN e vê os holerites e contratos liberados. O RH gera o PIN em *Arquivos & pastas → Liberar acesso*.
 
+## Contabilidade e PCMSO (Paromed)
+
+- **Contabilidade** (*Pessoas → Contabilidade*): para cada novo CLT, a ficha **Dados para admissão de funcionário** (empresa, nome, função, salário, horário, vale-transporte, observações) com os documentos da pasta da pessoa (RG/CPF, comprovante de endereço, documentos dos filhos). Dá para anexar o que faltar. **Enviar para a contabilidade** registra o envio e, se houver e-mail configurado, abre o Gmail com o aviso. A contabilidade baixa um .zip com a ficha em PDF e os documentos, e marca "Recebido" ou "Admissão concluída".
+- **PCMSO** (*Pessoas → PCMSO*): planilha "cadastro de funcionários" (Modelo I) preenchida a partir do cadastro e da leitura dos documentos (unidade, CNPJ, setor, cargo, nascimento, sexo, admissão, RG, CPF, CTPS, CBO sugerido, descrição do cargo, e-mail, celular). Os campos obrigatórios em branco ficam em vermelho e podem ser completados na própria tabela. **Baixar planilha** gera o .xlsx no layout do modelo, em MAIÚSCULAS e sem acentos.
+- **Logins restritos**: em *Gerentes & acessos*, crie o usuário com o papel **Contabilidade** ou **PAROMED / PCMSO**. Esse login vê só a sua aba.
+
 ## Assinatura eletrônica Wilami (padrão, sem custo)
 
 Na pasta da pessoa, **Assinar → Assinatura Wilami** cria um link individual para cada signatário (`#assinar/<envelope>.<token>`), na ordem de *Configurações → Assinatura eletrônica* (ex.: 1º representante legal, 2º testemunha, por último o colaborador ou PJ). Os links vão por WhatsApp ou e-mail; **Acompanhar** mostra quem já assinou. Quem assina não precisa de conta.
