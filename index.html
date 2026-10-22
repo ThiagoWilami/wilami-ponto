@@ -518,7 +518,7 @@ const GRUPO_FOLGA={ map:{}, turno:{} };   // "tipo-pid" → chave do grupo (pree
 const _diaNum=(ds)=>{ const [y,m,d]=String(ds).split("-").map(Number); return Math.round(Date.UTC(y,(m||1)-1,d||1)/864e5); };
 // grupo efetivo: o escolhido no cadastro; PJ e CLT 6x1 com folga no domingo ficam na Preta
 const grupoFolgaDe=(p,tipo)=>{ if(!p) return null; if(p.grupoFolga&&GRUPOS_FOLGA[p.grupoFolga]) return p.grupoFolga;
-  if(tipo==="pj") return "preto"; if(tipo==="clt" && (p.escala||"6x1")==="6x1" && (p.folgaDia==null||Number(p.folgaDia)===6)) return "preto"; return null; };
+  if((tipo==="clt"||tipo==="pj") && (p.escala||"6x1")==="6x1" && (p.folgaDia==null||Number(p.folgaDia)===6)) return "preto"; return null; };
 // a pessoa (do grupo 6x2) está de folga nesta data?
 const folgaRodizioNaData=(g,ds)=>{ const G=GRUPOS_FOLGA[g]; if(!G||!G.ancora) return null; const r=(((_diaNum(ds)-_diaNum(G.ancora))%8)+8)%8; return r<2; };
 const VIGENCIA={ map:{} };
@@ -1168,7 +1168,16 @@ function StoreProvider({children}) {
     const t={}; Object.entries(cont).forEach(([k,c])=>{ t[k]=Object.entries(c).sort((x,y)=>y[1]-x[1])[0][0]; }); GRUPO_FOLGA.turno=t; },[escala]);
   useMemo(()=>{ const m={}; clts.forEach(p=>{ const g=grupoFolgaDe(p,"clt"); if(g) m[chaveVig("clt",p.id)]=g; }); pjsTodos.forEach(p=>{ const g=grupoFolgaDe(p,"pj"); if(g) m[chaveVig("pj",p.id)]=g; }); GRUPO_FOLGA.map=m; },[clts,pjsTodos]);
   useMemo(()=>{ const m={}; clts.forEach(p=>{ m[chaveVig("clt",p.id)]=vigenciaDe(p,"clt"); }); freelas.forEach(p=>{ m[chaveVig("free",p.id)]=vigenciaDe(p,"free"); }); pjsTodos.forEach(p=>{ m[chaveVig("pj",p.id)]=vigenciaDe(p,"pj"); }); VIGENCIA.map=m; },[clts,freelas,pjsTodos]);
-  const salvarPj=(pj)=> ehAuto(pj.id) ? cadOps.update(pj._docId||docIdDe(pj.id), pj) : setPjs(prev=> pj.id ? prev.map(x=>x.id===pj.id?{...x,...pj}:x) : [...prev,{...pj,id:(prev.reduce((m,x)=>Math.max(m,x.id),500))+1,status:pj.status||"ativo",criadoEm:Date.now()}]);
+  const salvarPj=(pj)=>{
+    const ant=pj.id!=null ? pjsTodos.find(x=>String(x.id)===String(pj.id)) : null;
+    if(ehAuto(pj.id)) cadOps.update(pj._docId||docIdDe(pj.id), pj);
+    else setPjs(prev=> pj.id ? prev.map(x=>x.id===pj.id?{...x,...pj}:x) : [...prev,{...pj,id:(prev.reduce((m,x)=>Math.max(m,x.id),500))+1,status:pj.status||"ativo",criadoEm:Date.now()}]);
+    // mudou a cor/escala/folga/turno → refaz o padrão semanal nas casas onde o PJ já está na escala
+    const mudou=ant && (["grupoFolga","escala","folgaDia","turnoEscala"].some(k=>String(ant[k]??"")!==String(pj[k]??"")) || String(ant.folgaDias||"")!==String(pj.folgaDias||""));
+    if(mudou && pj.escala!=="nao") Object.keys(escala||{}).forEach(uid=>{
+      const tem=Object.values(escala[uid]||{}).some(arr=>(arr||[]).some(a=>String(a.pid)===String(pj.id)&&a.tipo==="pj"));
+      if(tem) gerarEscalaFixa(pj.id, pj.escala||"6x1", uid, false, folgaRefDe(pj)==null?6:folgaRefDe(pj), "pj", pj.turnoEscala||"noite"); });
+  };
   const excluirPj=(id)=>{ if(ehAuto(id)) cadOps.remove(docIdDe(id)); else setPjs(prev=>prev.filter(x=>x.id!==id)); removerDaEscala(id,"pj"); };
   // Pagamentos dos prestadores PJ (parcelas/adiantamentos), chaveados pelo id do PJ.
   const [pagamentosPJ,setPagPJ]=usePersist("pagamentosPJ",{});
@@ -1334,7 +1343,7 @@ function StoreProvider({children}) {
     }catch(e){}
   },[cadAuto]); // eslint-disable-line
   // ---- PJ aprovado entra na escala fixa (uma vez): precisa de início definido, casa específica e escala ≠ "não entra" ----
-  const incluirPjNaEscala=(pj,uid)=>{ gerarEscalaFixa(pj.id, pj.escala||"6x1", uid, true, pj.folgaDia==null?6:pj.folgaDia, "pj", pj.turnoEscala||"noite"); setEscalaSeed(prev=>({...prev,["pj-"+pj.id]:1})); };
+  const incluirPjNaEscala=(pj,uid)=>{ gerarEscalaFixa(pj.id, pj.escala||"6x1", uid, true, folgaRefDe(pj)==null?6:folgaRefDe(pj), "pj", pj.turnoEscala||"noite"); setEscalaSeed(prev=>({...prev,["pj-"+pj.id]:1})); };
   useEffect(()=>{
     try{
       if(!escalaPronta || !pjsPronto || !cadPronto) return;
@@ -2671,21 +2680,7 @@ function ColabForm({ tipo, inicial, onSalvar, onClose, vinculo }) {
         <Field label="Cargo / função"><Select value={f.cargo} onChange={e=>setCargoClt(e.target.value)}>{[...new Set([...cargosLista, f.cargo].filter(Boolean))].map(c=><option key={c}>{c}</option>)}</Select></Field>
         <Field label="Setor"><Select value={f.setor} onChange={e=>set("setor",e.target.value)}>{SETORES.map(([k,l])=><option key={k} value={k}>{l}</option>)}</Select></Field>
         <Field label="Unidade (casa)"><Select value={f.unidade} onChange={e=>set("unidade",Number(e.target.value))}>{unidades.map(u=><option key={u.id} value={u.id}>{u.nome}</option>)}</Select></Field>
-        <div className="sm:col-span-2"><div className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Cor da escala (grupo de folga)</div>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-            {Object.entries(GRUPOS_FOLGA).map(([k,g])=>{ const on=f.grupoFolga===k; return <button type="button" key={k} aria-pressed={on} onClick={()=>setF(p=>({...p, grupoFolga:k, escala:g.escala, folgaDia:g.folgaDia!=null?g.folgaDia:(p.folgaDia==null?6:p.folgaDia), folgaDias:g.escolheDias?(p.folgaDias||[]):null}))}
-              className={cx("flex items-center gap-2 p-2 rounded-xl border text-left transition", on?"border-brand-500 ring-2 ring-brand-200 bg-brand-50/40":"border-slate-200 hover:border-slate-300")}>
-              <span className="w-7 h-7 rounded-lg shrink-0 border border-black/10" style={{background:g.cor}}/>
-              <span className="min-w-0"><span className="block text-sm font-semibold text-slate-800">{g.nome}</span><span className="block text-[11px] text-slate-500 leading-tight">{g.desc}</span></span></button>; })}
-            <button type="button" aria-pressed={!f.grupoFolga} onClick={()=>setF(p=>({...p, grupoFolga:"", folgaDias:null}))} className={cx("flex items-center gap-2 p-2 rounded-xl border text-left", !f.grupoFolga?"border-brand-500 ring-2 ring-brand-200":"border-slate-200 hover:border-slate-300")}>
-              <span className="w-7 h-7 rounded-lg shrink-0 border border-dashed border-slate-300 grid place-items-center text-slate-400 text-xs">—</span>
-              <span className="min-w-0"><span className="block text-sm font-semibold text-slate-800">Outra escala</span><span className="block text-[11px] text-slate-500 leading-tight">escolher escala e dia</span></span></button>
-          </div>
-          {f.grupoFolga==="cinco" && <div className="mt-3 p-3 rounded-xl bg-violet-50 border border-violet-100">
-            <div className="text-xs font-semibold text-violet-800 mb-2">Escolha os 2 dias de folga da semana {(f.folgaDias||[]).length!==2 && <span className="text-rose-600 font-normal">· faltam {2-(f.folgaDias||[]).length}</span>}</div>
-            <div className="flex flex-wrap gap-1.5">{NOMES_DIAS.map((d,i)=>{ const on=(f.folgaDias||[]).includes(i); return <button type="button" key={i} aria-pressed={on} onClick={()=>setF(p=>{ let ds=[...(p.folgaDias||[])]; if(ds.includes(i)) ds=ds.filter(x=>x!==i); else { ds=[...ds,i]; if(ds.length>2) ds=ds.slice(-2); } ds.sort((a,b)=>a-b); return {...p, folgaDias:ds, folgaDia:ds.length?ds[0]:p.folgaDia}; })}
-              className={cx("px-3 py-1.5 rounded-lg text-sm font-semibold border", on?"bg-violet-600 text-white border-violet-600":"bg-white text-slate-600 border-slate-200 hover:border-violet-300")}>{d}</button>; })}</div>
-          </div>}</div>
+        <SeletorGrupoFolga f={f} setF={setF}/>
         {!f.grupoFolga && <>
         <Field label="Escala fixa"><Select value={f.escala} onChange={e=>set("escala",e.target.value)}>{Object.entries(ESCALAS).map(([k,v])=><option key={k} value={k}>{v}</option>)}</Select></Field>
         <Field label="Dia da folga (referência)"><Select value={f.folgaDia==null?"":f.folgaDia} onChange={e=>set("folgaDia",e.target.value===""?null:Number(e.target.value))}>
@@ -4862,11 +4857,31 @@ function pjVencimento(pj, ym){
 }
 const pjAtivoNoPeriodo=(pj,ini,fim)=> pj.status!=="encerrado" || pjMesesNoPeriodo(pj,ini,fim).length>0;
 
+// Cor da escala (grupo de folga) — usado no cadastro CLT e no do prestador PJ
+function SeletorGrupoFolga({f,setF}){
+  return <>
+  <div className="sm:col-span-2"><div className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Cor da escala (grupo de folga)</div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            {Object.entries(GRUPOS_FOLGA).map(([k,g])=>{ const on=f.grupoFolga===k; return <button type="button" key={k} aria-pressed={on} onClick={()=>setF(p=>({...p, grupoFolga:k, escala:g.escala, folgaDia:g.folgaDia!=null?g.folgaDia:(p.folgaDia==null?6:p.folgaDia), folgaDias:g.escolheDias?(p.folgaDias||[]):null}))}
+              className={cx("flex items-center gap-2 p-2 rounded-xl border text-left transition", on?"border-brand-500 ring-2 ring-brand-200 bg-brand-50/40":"border-slate-200 hover:border-slate-300")}>
+              <span className="w-7 h-7 rounded-lg shrink-0 border border-black/10" style={{background:g.cor}}/>
+              <span className="min-w-0"><span className="block text-sm font-semibold text-slate-800">{g.nome}</span><span className="block text-[11px] text-slate-500 leading-tight">{g.desc}</span></span></button>; })}
+            <button type="button" aria-pressed={!f.grupoFolga} onClick={()=>setF(p=>({...p, grupoFolga:"", folgaDias:null}))} className={cx("flex items-center gap-2 p-2 rounded-xl border text-left", !f.grupoFolga?"border-brand-500 ring-2 ring-brand-200":"border-slate-200 hover:border-slate-300")}>
+              <span className="w-7 h-7 rounded-lg shrink-0 border border-dashed border-slate-300 grid place-items-center text-slate-400 text-xs">—</span>
+              <span className="min-w-0"><span className="block text-sm font-semibold text-slate-800">Outra escala</span><span className="block text-[11px] text-slate-500 leading-tight">escolher escala e dia</span></span></button>
+          </div>
+          {f.grupoFolga==="cinco" && <div className="mt-3 p-3 rounded-xl bg-violet-50 border border-violet-100">
+            <div className="text-xs font-semibold text-violet-800 mb-2">Escolha os 2 dias de folga da semana {(f.folgaDias||[]).length!==2 && <span className="text-rose-600 font-normal">· faltam {2-(f.folgaDias||[]).length}</span>}</div>
+            <div className="flex flex-wrap gap-1.5">{NOMES_DIAS.map((d,i)=>{ const on=(f.folgaDias||[]).includes(i); return <button type="button" key={i} aria-pressed={on} onClick={()=>setF(p=>{ let ds=[...(p.folgaDias||[])]; if(ds.includes(i)) ds=ds.filter(x=>x!==i); else { ds=[...ds,i]; if(ds.length>2) ds=ds.slice(-2); } ds.sort((a,b)=>a-b); return {...p, folgaDias:ds, folgaDia:ds.length?ds[0]:p.folgaDia}; })}
+              className={cx("px-3 py-1.5 rounded-lg text-sm font-semibold border", on?"bg-violet-600 text-white border-violet-600":"bg-white text-slate-600 border-slate-200 hover:border-violet-300")}>{d}</button>; })}</div>
+          </div>}</div>
+  </>;
+}
 function PjForm({inicial,onSalvar,onClose}){
   const { unidades, cargosDesc } = useStore();
   const [f,setF]=useState(()=>({ nome:"", cnpj:"", responsavel:"", cpf:"", email:"", tel:"", servico:"", valor:0, diaPagamento:5, formaPagamento:"Pix", unidade:"todas", inicio:"", fim:"", tipoPix:"CNPJ", pix:"", banco:"", obs:"", ...(inicial||{}) }));
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
-  const falta=[]; if(!f.nome.trim()) falta.push("razão social / nome"); if(soDigitos(f.cnpj).length!==14) falta.push("CNPJ (14 dígitos)"); if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email||"")) falta.push("e-mail"); if(!(Number(f.valor)>0)) falta.push("valor mensal"); if(!(Number(f.diaPagamento)>=1&&Number(f.diaPagamento)<=31)) falta.push("dia de pagamento");
+  const falta=[]; if(!f.nome.trim()) falta.push("razão social / nome"); if(soDigitos(f.cnpj).length!==14) falta.push("CNPJ (14 dígitos)"); if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email||"")) falta.push("e-mail"); if(!(Number(f.valor)>0)) falta.push("valor mensal"); if(!(Number(f.diaPagamento)>=1&&Number(f.diaPagamento)<=31)) falta.push("dia de pagamento"); if(f.grupoFolga==="cinco" && (f.folgaDias||[]).length!==2) falta.push("os 2 dias de folga (5x2)");
   return <div className="p-6">
     <div className="flex items-center gap-2 mb-4"><button onClick={onClose} className="flex items-center gap-1 text-sm font-semibold text-slate-600 hover:text-slate-900"><Icon d={I.arrow} className="w-4 h-4 rotate-180"/>Voltar</button>
       <h3 className="text-base font-bold text-slate-900 ml-1">{inicial?"Editar prestador PJ":"Novo prestador PJ"}</h3></div>
@@ -4882,9 +4897,10 @@ function PjForm({inicial,onSalvar,onClose}){
       <Field label="Telefone"><Input value={f.tel} onChange={e=>set("tel",e.target.value)}/></Field>
       <Field label="Serviço prestado / cargo PJ"><Input value={f.servico} onChange={e=>set("servico",e.target.value)} list="cargos-pj-lista" placeholder="Ex.: Gestão e Operação de Bar"/><datalist id="cargos-pj-lista">{(cargosDesc||[]).filter(c=>c.tipo==="pj").map(c=><option key={c.nome} value={c.nome}/>)}</datalist></Field>
       <Field label="Setor (escala)"><Select value={f.setor||"salao"} onChange={e=>set("setor",e.target.value)}>{SETORES.map(([k,l])=><option key={k} value={k}>{l}</option>)}</Select></Field>
-      <Field label="Escala"><Select value={f.escala||"6x1"} onChange={e=>set("escala",e.target.value)}>{Object.entries(ESCALAS).map(([k,v])=><option key={k} value={k}>{v}</option>)}<option value="nao">Não entra na escala fixa</option></Select></Field>
+      {f.escala!=="nao" && <SeletorGrupoFolga f={f} setF={setF}/>}
+      {!f.grupoFolga && <Field label="Escala"><Select value={f.escala||"6x1"} onChange={e=>set("escala",e.target.value)}>{Object.entries(ESCALAS).map(([k,v])=><option key={k} value={k}>{v}</option>)}<option value="nao">Não entra na escala fixa</option></Select></Field>}
       {f.escala!=="nao" && <div className="grid grid-cols-2 gap-3">
-        <Field label="Dia da folga"><Select value={f.folgaDia==null?6:f.folgaDia} onChange={e=>set("folgaDia",Number(e.target.value))}>{["Segunda","Terça","Quarta","Quinta","Sexta","Sábado","Domingo"].map((d,i)=><option key={i} value={i}>{d}</option>)}</Select></Field>
+        {!f.grupoFolga && <Field label="Dia da folga"><Select value={f.folgaDia==null?6:f.folgaDia} onChange={e=>set("folgaDia",Number(e.target.value))}>{["Segunda","Terça","Quarta","Quinta","Sexta","Sábado","Domingo"].map((d,i)=><option key={i} value={i}>{d}</option>)}</Select></Field>}
         <Field label="Turno"><Select value={f.turnoEscala||"noite"} onChange={e=>set("turnoEscala",e.target.value)}><option value="manha">Manhã</option><option value="tarde">Tarde</option><option value="noite">Noite</option></Select></Field>
       </div>}
     </div>
