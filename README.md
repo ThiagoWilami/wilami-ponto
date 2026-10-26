@@ -30,9 +30,10 @@ Ponto digital, escala e RH para restaurantes. O app é um único `index.html` (R
 
 *Pessoas → Recrutamento & Seleção* (só administradores e logins com o papel **R&S**):
 
-1. **Registrar entrevista:** candidato, WhatsApp, cargo, horário (turno do cargo), unidade/endereço, como conheceu a vaga, pretensão e avaliação por estrelas (comunicação, experiência, postura, atitude, disponibilidade), com nota geral.
-2. **Link de cadastro:** gerado ao salvar, para enviar pelo WhatsApp. É o mesmo cadastro dos convites (documentos, leitura automática, selfie, termo), mas o cadastro fica **oculto em Colaboradores** até a aprovação.
-3. **Teste → Aprovar ou Declinar:** aprovar envia a pessoa para *Colaboradores CLT* (com cargo, unidade, horário, salário e, se informada, a data de admissão). Declinar registra o motivo. Cada candidato tem histórico das etapas.
+1. **Candidatura simples** (`#trabalhe-conosco`): nome, CPF (validado), WhatsApp, e-mail, cargo que procura, unidade e horários de preferência, fins de semana, pretensão salarial, experiência e como soube da vaga. Não pede documentos. O link geral fica em **Link de candidatura**; para quem já foi entrevistado, há o link individual no próprio candidato (os dados entram nele, sem duplicar).
+2. **Entrevista:** avaliação por estrelas (comunicação, experiência, postura, atitude, disponibilidade), cargo, horário e unidade oferecidos e observações (só o R&S vê). Dá para registrar uma entrevista sem candidatura.
+3. **Teste → Aprovar ou Declinar** (motivos padronizados). Selos de "Já trabalhou conosco" e "Candidatura repetida" pelo CPF.
+4. **Aprovado → documentos:** a aprovação gera o link de documentos (o mesmo dos convites), já preenchido com nome, CPF, telefone e e-mail da candidatura, com cargo, horário, unidade, salário e admissão prevista. Quando a pessoa envia, ela entra em *Colaboradores CLT* e aparece na aba *Contabilidade*; o R&S vê "Documentos recebidos".
 
 ## Notas fiscais dos PJ e Financeiro
 

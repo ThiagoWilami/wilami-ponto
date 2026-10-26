@@ -5010,20 +5010,74 @@ function PrestadoresPJ(){
 
 /* ============================ APP DO COLABORADOR — MEUS DOCUMENTOS (CPF/CNPJ + PIN) ============================ */
 /* ============================ RECRUTAMENTO & SELEÇÃO ============================ */
-// Funil: entrevista (com notas) → link de cadastro → cadastro recebido (+ consulta de processos) → teste → aprovado/declinado.
-// O cadastro feito pelo link fica oculto em Colaboradores até a aprovação (rsPendente); ao aprovar, vira CLT "aguardando admissão".
-const RS_ETAPAS=[["entrevistado","Entrevistado","slate"],["cadastro","Cadastro recebido","blue"],["teste","Em teste","amber"],["aprovado","Aprovado","green"],["declinado","Declinado","red"]];
+// Funil: candidatura simples (link "Trabalhe conosco", sem documentos) → entrevista (notas) → teste → aprovação.
+// Só depois de aprovado o candidato recebe o link de documentos (o mesmo dos convites, já preenchido com os dados
+// da candidatura). Ao enviar os documentos ele entra em Colaboradores CLT e aparece na aba Contabilidade para o registro.
+const RS_ETAPAS=[["inscrito","Candidaturas","slate"],["entrevistado","Entrevistados","blue"],["teste","Em teste","amber"],["aprovado","Aprovados","green"],["declinado","Declinados","red"]];
 const RS_CRITERIOS=[["comunicacao","Comunicação"],["experiencia","Experiência na função"],["postura","Postura e apresentação"],["atitude","Atitude e proatividade"],["disponibilidade","Disponibilidade de horário"]];
-const RS_MOTIVOS=["Reprovado no teste","Não compareceu ao teste","Desistiu da vaga","Aceitou outra proposta","Pretensão salarial acima da vaga","Horário incompatível","Distância / deslocamento","Perfil não aderente à vaga","Documentação incompleta","Vaga preenchida ou cancelada","Outro"];
-const RS_FONTES=["Indicação","Instagram","Facebook","Sites de vagas (Indeed, InfoJobs…)","WhatsApp","Placa na loja","Banco de talentos","Outro"];
+const RS_MOTIVOS=["Reprovado no teste","Não compareceu à entrevista","Não compareceu ao teste","Desistiu da vaga","Aceitou outra proposta","Pretensão salarial acima da vaga","Horário incompatível","Distância / deslocamento","Perfil não aderente à vaga","Vaga preenchida ou cancelada","Outro"];
+const RS_FONTES=["Indicação","Instagram","Facebook","Sites de vagas (Indeed, InfoJobs…)","WhatsApp","Placa na loja","Outro"];
+const RS_HORARIOS=["Manhã","Tarde","Noite","Madrugada"];
 const rsNotaMedia=(c)=>{ const v=RS_CRITERIOS.map(([k])=>Number((c.notas||{})[k])||0).filter(Boolean); return v.length? Math.round(v.reduce((a,b)=>a+b,0)/v.length*10)/10 : null; };
+const linkCandidatura=(ref)=> comTenantUrl(location.origin+location.pathname, "trabalhe-conosco"+(ref?"/"+ref:""));
 function Estrelas({v,onChange,label}){
   return <div className="flex items-center gap-0.5" role="radiogroup" aria-label={label}>{[1,2,3,4,5].map(n=>
     <button type="button" key={n} role="radio" aria-checked={Number(v)===n} aria-label={label+" "+n} disabled={!onChange} onClick={()=>onChange&&onChange(Number(v)===n?0:n)}
       className={cx("text-xl leading-none px-0.5", n<=Number(v||0)?"text-amber-400":"text-slate-200", onChange&&"hover:scale-110 transition")}>★</button>)}</div>;
 }
+
+/* ---------- Página pública: candidatura simples (sem documentos) ---------- */
+function Candidatura({onClose}){
+  const { cargosLista, unidades } = useStore();
+  const ref=((location.hash||"").replace("#","").split("/")[1]||"").trim();   // candidato já registrado pelo recrutador
+  const [f,setF]=useState({ nome:"", cpf:"", tel:"", email:"", cargo:"", unidade:"", horarios:[], fimSemana:"", pretensao:"", experiencia:"", fonte:"" });
+  const [aceite,setAceite]=useState(false);
+  const [etapa,setEtapa]=useState("form"); const [erro,setErro]=useState("");
+  const set=(k,v)=>setF(p=>({...p,[k]:v}));
+  const falta=[]; if(String(f.nome).trim().split(/\s+/).length<2) falta.push("nome completo"); if(!cpfValido(f.cpf)) falta.push("CPF válido"); if(soDigitos(f.tel).length<10) falta.push("WhatsApp com DDD");
+  if(!f.cargo) falta.push("cargo"); if(!f.horarios.length) falta.push("preferência de horário"); if(!aceite) falta.push("autorização LGPD");
+  const enviar=async()=>{ setEtapa("enviando"); setErro("");
+    try{ await nCol("candidatos").doc().set({ nome:f.nome.trim(), cpf:f.cpf, tel:f.tel, email:f.email.trim().toLowerCase(), cargoPretendido:f.cargo, unidadePref:f.unidade, horarios:f.horarios, fimSemana:f.fimSemana,
+        pretensao:f.pretensao, experiencia:f.experiencia.trim(), fonte:f.fonte, etapa:"inscrito", origem:"link", vinculoCandidato:ref||null, inscritoEm:Date.now(), criadoEm:Date.now(),
+        historico:[{em:Date.now(),txt:"Candidatura enviada pelo link"}] });
+      setEtapa("ok"); }
+    catch(e){ setErro("Não foi possível enviar agora. Verifique sua internet e tente novamente."); setEtapa("form"); } };
+  const casca=(c)=> <div className="min-h-screen grad-ink grad-hero flex items-start justify-center p-4 py-8"><div className="w-full max-w-xl"><div className="flex justify-center mb-5"><Logo light/></div><Card className="p-6">{c}</Card></div></div>;
+  if(etapa==="ok") return casca(<div className="py-8 text-center">
+    <div className="w-20 h-20 mx-auto rounded-full bg-emerald-500 grid place-items-center text-white mb-4 shadow-glow"><Icon d={I.check} className="w-10 h-10" stroke={3}/></div>
+    <h2 className="text-2xl font-extrabold text-slate-900">Candidatura enviada!</h2>
+    <p className="text-slate-500 mt-1">Obrigado, {f.nome.split(" ")[0]}. Nosso time de Recrutamento vai analisar e falar com você pelo WhatsApp.</p></div>);
+  const chip=(on)=>cx("px-3 py-2 rounded-xl text-sm font-semibold border transition", on?"bg-brand-600 text-white border-brand-600":"bg-white text-slate-600 border-slate-200 hover:border-brand-300");
+  return casca(<>
+    <div className="text-xs font-bold uppercase tracking-wide text-free-600">Trabalhe conosco</div>
+    <h2 className="text-xl font-extrabold text-slate-900 mt-1 mb-1">Cadastro de candidato</h2>
+    <p className="text-sm text-slate-500 mb-4">Leva 2 minutos e não precisa de documentos agora. Se você for aprovado, pediremos os documentos depois.</p>
+    <div className="grid sm:grid-cols-2 gap-3">
+      <div className="sm:col-span-2"><Field label="Nome completo *"><Input value={f.nome} onChange={e=>set("nome",e.target.value)} autoComplete="name"/></Field></div>
+      <Field label="CPF *"><Input inputMode="numeric" value={f.cpf} onChange={e=>set("cpf",e.target.value)} placeholder="000.000.000-00"/>{f.cpf&&soDigitos(f.cpf).length===11&&!cpfValido(f.cpf)&&<span className="block text-xs text-rose-500 mt-1 normal-case font-normal tracking-normal">CPF inválido</span>}</Field>
+      <Field label="WhatsApp *"><Input inputMode="tel" value={f.tel} onChange={e=>set("tel",e.target.value)} placeholder="(11) 90000-0000" autoComplete="tel"/></Field>
+      <div className="sm:col-span-2"><Field label="E-mail"><Input type="email" value={f.email} onChange={e=>set("email",e.target.value)} autoComplete="email"/></Field></div>
+      <Field label="Cargo que procura *"><Select value={f.cargo} onChange={e=>set("cargo",e.target.value)} aria-label="Cargo que procura"><option value="">Escolha…</option>{cargosLista.map(c=><option key={c}>{c}</option>)}<option>Outro</option></Select></Field>
+      <Field label="Unidade de preferência"><Select value={f.unidade} onChange={e=>set("unidade",e.target.value)} aria-label="Unidade de preferência"><option value="">Qualquer unidade</option>{unidades.map(u=><option key={u.id} value={u.id}>{u.nome}</option>)}</Select></Field>
+      <div className="sm:col-span-2"><div className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Horário que prefere trabalhar *</div>
+        <div className="flex flex-wrap gap-2">{RS_HORARIOS.map(h=>{ const on=f.horarios.includes(h); return <button type="button" key={h} aria-pressed={on} className={chip(on)} onClick={()=>set("horarios",on?f.horarios.filter(x=>x!==h):[...f.horarios,h])}>{h}</button>; })}
+          <button type="button" aria-pressed={f.horarios.length===RS_HORARIOS.length} className={chip(f.horarios.length===RS_HORARIOS.length)} onClick={()=>set("horarios",f.horarios.length===RS_HORARIOS.length?[]:[...RS_HORARIOS])}>Qualquer horário</button></div></div>
+      <Field label="Trabalha aos fins de semana?"><Select value={f.fimSemana} onChange={e=>set("fimSemana",e.target.value)}><option value="">—</option><option>Sim</option><option>Não</option><option>Às vezes</option></Select></Field>
+      <Field label="Pretensão salarial (R$)"><Input type="number" inputMode="decimal" value={f.pretensao} onChange={e=>set("pretensao",e.target.value)} placeholder="Ex.: 2200"/></Field>
+      <div className="sm:col-span-2"><Field label="Experiência (resumo)"><textarea className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm" rows={3} maxLength={600} value={f.experiencia} onChange={e=>set("experiencia",e.target.value)} placeholder="Onde trabalhou, quanto tempo, o que fazia…"/></Field></div>
+      <div className="sm:col-span-2"><Field label="Como soube da vaga?"><Select value={f.fonte} onChange={e=>set("fonte",e.target.value)}><option value="">—</option>{RS_FONTES.map(x=><option key={x}>{x}</option>)}</Select></Field></div>
+    </div>
+    <label className="flex items-start gap-2 text-sm text-slate-600 mt-4"><input type="checkbox" checked={aceite} onChange={e=>setAceite(e.target.checked)} className="mt-0.5 w-4 h-4 accent-green-700"/>
+      <span>Autorizo o uso destes dados para este processo seletivo (LGPD).</span></label>
+    {erro && <p className="text-sm text-rose-500 mt-3">{erro}</p>}
+    {falta.length>0 && <p className="text-xs text-slate-400 mt-3">Falta: {falta.join(", ")}</p>}
+    <Btn className="w-full mt-4" size="lg" icon={etapa==="enviando"?null:I.check} disabled={falta.length>0||etapa==="enviando"} onClick={enviar}>{etapa==="enviando"?"Enviando…":"Enviar candidatura"}</Btn>
+  </>);
+}
+
+/* ---------- Painel: Recrutamento & Seleção ---------- */
 function RSPage(){
-  const { unidades, cargosLista, cargoInfo, cadastrosRS, cadOpsRS, acesso, marca } = useStore();
+  const { unidades, cargosLista, cargoInfo, cadastrosRS, cadOpsRS, clts, acesso, marca } = useStore();
   const toast=useContext(ToastCtx);
   const pode = !acesso || acesso.ehDono || acesso.papelKey==="rs";
   const [cands,setCands]=useState(null);
@@ -5031,113 +5085,128 @@ function RSPage(){
     try{ return nCol("candidatos").onSnapshot(function(s){ const a=[]; s.forEach(d=>a.push({...d.data(),id:d.id})); a.sort((x,y)=>(y.criadoEm||0)-(x.criadoEm||0)); setCands(a); }, function(){ setCands([]); }); }catch(e){ setCands([]); }
   },[pode]);
   const [filtro,setFiltro]=useState("andamento"); const [q,setQ]=useState("");
-  const [form,setForm]=useState(null);       // novo/editar candidato
-  const [abertoId,setAbertoId]=useState(null);
-  const [linkPronto,setLinkPronto]=useState(null);
-  const [verCad,setVerCad]=useState(null);
-  const [acao,setAcao]=useState(null);       // { tipo:"teste"|"aprovar"|"declinar", c, ... }
+  const [form,setForm]=useState(null); const [abertoId,setAbertoId]=useState(null);
+  const [linkModal,setLinkModal]=useState(null);   // { titulo, texto, link, tel, msg }
+  const [acao,setAcao]=useState(null);
   const eu=(acesso&&acesso.email)||(((window.__WPAUTH&&window.__WPAUTH.currentUser)||{}).email)||"";
-  const cadDe=(c)=> c ? (cadastrosRS.find(x=>x.rsCandidato===c.id) || (c.conviteId && cadastrosRS.find(x=>x.conviteId===c.conviteId)) || null) : null;
-  const etapaDe=(c)=> (c.etapa||"entrevistado")==="entrevistado" && cadDe(c) ? "cadastro" : (c.etapa||"entrevistado");
-  const salvarCand=async(id,patch,txt)=>{ const atual=(cands||[]).find(x=>x.id===id)||{};
+  if(!pode) return <Card className="p-10 text-center text-slate-500">A aba Recrutamento & Seleção é exclusiva do time de R&S.</Card>;
+  const brutos=cands||[];
+  const anexada=(c)=>brutos.find(x=>x.vinculoCandidato===c.id && x.id!==c.id);     // candidatura enviada pelo link individual
+  const lista=brutos.filter(x=>!(x.vinculoCandidato && brutos.some(y=>y.id===x.vinculoCandidato)));
+  const dadosDe=(c)=>{ const a=anexada(c); if(!a) return c; const o={...c}; ["cpf","email","cargoPretendido","unidadePref","horarios","fimSemana","pretensao","experiencia","fonte","inscritoEm"].forEach(k=>{ if(a[k]!=null&&a[k]!==""&&!(Array.isArray(a[k])&&!a[k].length)) o[k]=a[k]; }); if(!o.tel) o.tel=a.tel; return o; };
+  const colabDe=(c)=> c.conviteDocs ? clts.find(p=>p.conviteId===c.conviteDocs) : null;
+  const legadoDe=(c)=> cadastrosRS.find(x=>x.rsCandidato===c.id && x.rsPendente);      // links antigos do R&S (cadastro completo antes da aprovação)
+  const salvarCand=async(id,patch,txt)=>{ const atual=brutos.find(x=>x.id===id)||{};
     const hist=txt?[...(atual.historico||[]),{em:Date.now(),por:eu,txt}]:atual.historico;
     try{ await nCol("candidatos").doc(id).set({...patch, ...(hist?{historico:hist}:{}), atualizadoEm:Date.now()},{merge:true}); return true; }
     catch(e){ toast("Não foi possível salvar: "+erroBanco(e)); return false; } };
   const turnoDe=(cargo,idx)=>{ const tns=turnosDe(cargoInfo(cargo)); return tns[Number(idx)||0]||null; };
-  // ---------- link de cadastro (mesmo fluxo dos convites, marcado como R&S) ----------
-  const gerarLink=async(c)=>{
+  const whats=(tel,msg)=>{ const t=soDigitos(tel); window.open("https://wa.me/"+(t?(t.length<=11?"55"+t:t):"")+"?text="+encodeURIComponent(msg),"_blank"); };
+  const primeiro=(n)=>String(n||"").split(" ")[0];
+  // ---------- links ----------
+  const abrirLinkGeral=()=>{ const l=linkCandidatura(); setLinkModal({ titulo:"Link de candidatura (Trabalhe conosco)", texto:"Divulgue no Instagram, WhatsApp ou numa placa com QR code. Quem preencher aparece aqui em Candidaturas.", link:l,
+    msg:"Estamos contratando! Faça seu cadastro de candidato (leva 2 minutos, sem documentos):\n"+l }); };
+  const abrirLinkIndividual=(c)=>{ const l=linkCandidatura(c.id); setLinkModal({ titulo:"Link de candidatura para "+primeiro(c.nome), texto:"Os dados que a pessoa preencher (CPF, horários, pretensão…) aparecem neste candidato.", link:l, tel:c.tel,
+    msg:`Olá, ${primeiro(c.nome)}! Obrigado pela entrevista. Complete seu cadastro de candidato por este link (leva 2 minutos, sem documentos):\n${l}` }); };
+  const enviarDocs=async(c,{salario,admissao})=>{
     const ci=cargoInfo(c.cargo); const tns=turnosDe(ci); const tn=tns[Number(c.turnoIdx)||0]||{};
-    const vaga = ci ? { cargo:ci.nome, setorNome:(SETOR_MAP[ci.setor]||{}).l||"", turno:tns.length>1||tn.nome!=="Padrão"?(tn.nome||""):"", escala:tn.escala?ESCALAS[tn.escala]||tn.escala:"", horario:tn.horario||"",
+    const vaga = ci ? { cargo:ci.nome, setorNome:(SETOR_MAP[ci.setor]||{}).l||"", turno:tns.length>1||tn.nome!=="Padrão"?(tn.nome||""):"", escala:tn.escala?ESCALAS[tn.escala]||tn.escala:"", horario:tn.horario||(c.turno&&c.turno.horario)||"",
       beneficios:ci.beneficios||"", requisitos:ci.requisitos||"", descritivo:ci.descritivo||"", unidadeNome:unidadeNome(c.unidade,unidades), salario:0, empresa:(marca&&marca.nome)||"WILAMI" } : null;
-    const token=gerarTokenConvite();
-    const doc={ vaga, tipo:"clt", nome:c.nome||"", tel:soDigitos(c.tel), unidade:c.unidade, cargo:c.cargo, servico:"", salario:Number(c.salario)||0, valor:0, status:"aberto",
-      criadoEm:Date.now(), expira:Date.now()+30*864e5, criadoPor:eu, rs:true, candidatoId:c.id };
-    try{ await nCol("convites").doc(token).set(doc); await salvarCand(c.id,{conviteId:token, linkEm:Date.now()},"Link de cadastro gerado"); setLinkPronto({...c, conviteId:token}); }
-    catch(e){ toast("Não foi possível gerar o link: "+erroBanco(e)); } };
-  const msgLink=(c)=>`Olá${c.nome?", "+String(c.nome).split(" ")[0]:""}! Obrigado pela entrevista. Para seguir no processo seletivo, faça seu cadastro pelo link abaixo (envie fotos ou PDFs dos documentos — o sistema preenche os dados):\n${linkConvite(c.conviteId)}`;
-  const whats=(c)=>{ const tel=soDigitos(c.tel); window.open("https://wa.me/"+(tel?(tel.length<=11?"55"+tel:tel):"")+"?text="+encodeURIComponent(msgLink(c)),"_blank"); };
+    const d=dadosDe(c); const token=gerarTokenConvite();
+    const doc={ vaga, tipo:"clt", nome:c.nome||"", tel:soDigitos(c.tel), unidade:c.unidade, cargo:c.cargo, servico:"", salario:Number(salario)||0, valor:0, admissao:admissao||"", status:"aberto",
+      criadoEm:Date.now(), expira:Date.now()+30*864e5, criadoPor:eu, candidatoId:c.id, pre:{ nome:d.nome||"", cpf:d.cpf||"", telefone:d.tel||"", email:d.email||"" } };
+    try{ await nCol("convites").doc(token).set(doc); }catch(e){ toast("Não foi possível gerar o link de documentos: "+erroBanco(e)); return null; }
+    return token; };
+  const linkDocsModal=(c,token)=>{ const l=linkConvite(token); setLinkModal({ titulo:"Link de documentos para "+primeiro(c.nome), texto:"Quando a pessoa enviar os documentos, ela entra em Colaboradores CLT e aparece na aba Contabilidade para o registro.", link:l, tel:c.tel,
+    msg:`Parabéns, ${primeiro(c.nome)}! Você foi aprovado(a) para ${c.cargo}. Para o registro, envie seus documentos por este link (fotos ou PDF pelo celular):\n${l}` }); };
   // ---------- decisões ----------
   const agendarTeste=async({c,data,unidade,obs})=>{ if(await salvarCand(c.id,{etapa:"teste", teste:{data,unidade,obs:obs||""}},"Teste agendado para "+(data?new Date(data).toLocaleString("pt-BR"):"—")+" em "+unidadeNome(unidade,unidades))){ toast("Teste agendado"); setAcao(null); setAbertoId(null); } };
-  const aprovar=async({c,admissao,salario})=>{ const cad=cadDe(c); if(!cad){ toast("O candidato ainda não preencheu o cadastro pelo link."); return; }
-    const tn=c.turno||{}; const ci=cargoInfo(c.cargo)||{};
-    try{ await cadOpsRS.update(cad._docId, { rsPendente:false, rsAprovadoEm:Date.now(), cargo:c.cargo, setor:ci.setor||SETOR_POR_CARGO[c.cargo]||cad.setor||"salao", unidade:c.unidade,
-        ...(tn.nome?{turno:tn.nome}:{}), ...(tn.horario?{horario:tn.horario}:{}), ...(Number(salario)>0?{salario:Number(salario)}:{}), admissao:admissao||"" }); }
-    catch(e){ toast("Não foi possível liberar o cadastro: "+erroBanco(e)); return; }
-    if(await salvarCand(c.id,{etapa:"aprovado", aprovadoEm:Date.now(), decisao:{em:Date.now(),por:eu}},"Aprovado — enviado para Colaboradores CLT"+(admissao?" (admissão "+fmtDataBR(admissao)+")":""))){ toast(c.nome+" aprovado(a) e enviado(a) para Colaboradores CLT"); setAcao(null); setAbertoId(null); } };
+  const aprovar=async({c,admissao,salario})=>{
+    const leg=legadoDe(c);
+    if(leg){ const tn=c.turno||{}; const ci=cargoInfo(c.cargo)||{};   // link antigo: o cadastro completo já existe, só libera
+      cadOpsRS.update(leg._docId,{ rsPendente:false, rsAprovadoEm:Date.now(), cargo:c.cargo, setor:ci.setor||SETOR_POR_CARGO[c.cargo]||"salao", unidade:c.unidade, ...(tn.nome?{turno:tn.nome}:{}), ...(tn.horario?{horario:tn.horario}:{}), ...(Number(salario)>0?{salario:Number(salario)}:{}), admissao:admissao||"" });
+      if(await salvarCand(c.id,{etapa:"aprovado",aprovadoEm:Date.now(),decisao:{em:Date.now(),por:eu}},"Aprovado — enviado para Colaboradores CLT")){ toast("Aprovado e enviado para Colaboradores"); setAcao(null); setAbertoId(null); } return; }
+    const token=await enviarDocs(c,{salario,admissao}); if(!token) return;
+    if(await salvarCand(c.id,{etapa:"aprovado", aprovadoEm:Date.now(), salario:salario||"", admissaoPrevista:admissao||"", conviteDocs:token, docsLinkEm:Date.now(), decisao:{em:Date.now(),por:eu}},"Aprovado — link de documentos gerado"+(admissao?" (admissão prevista "+fmtDataBR(admissao)+")":""))){
+      setAcao(null); setAbertoId(null); linkDocsModal(c,token); } };
   const declinar=async({c,motivo,obs})=>{ if(!motivo){ toast("Escolha o motivo"); return; }
     if(await salvarCand(c.id,{etapa:"declinado", decisao:{motivo,obs:obs||"",em:Date.now(),por:eu}},"Declinado: "+motivo+(obs?" — "+obs:""))){ toast("Candidato declinado"); setAcao(null); setAbertoId(null); } };
-  const reabrir=async(c)=>{ await salvarCand(c.id,{etapa:c.teste?"teste":"entrevistado", decisao:null},"Processo reaberto"); };
-  const excluir=async(c)=>{ if(!confirm("Excluir "+(c.nome||"o candidato")+" e os dados do cadastro? Esta ação não pode ser desfeita.")) return;
-    const cad=cadDe(c);
-    try{ if(cad && cad.rsPendente!==false) cadOpsRS.remove(cad._docId); await nCol("candidatos").doc(c.id).delete(); if(c.conviteId) nCol("convites").doc(c.conviteId).set({status:"cancelado"},{merge:true}).catch(()=>{}); setAbertoId(null); toast("Candidato excluído"); }
+  const reabrir=async(c)=>{ await salvarCand(c.id,{etapa:c.teste?"teste":(c.notas&&Object.keys(c.notas).length?"entrevistado":"inscrito"), decisao:null},"Processo reaberto"); };
+  const excluir=async(c)=>{ if(!confirm("Excluir "+(c.nome||"o candidato")+"? Esta ação não pode ser desfeita.")) return;
+    try{ const a=anexada(c); if(a) await nCol("candidatos").doc(a.id).delete(); const leg=legadoDe(c); if(leg) cadOpsRS.remove(leg._docId); await nCol("candidatos").doc(c.id).delete(); setAbertoId(null); toast("Candidato excluído"); }
     catch(e){ toast(erroBanco(e)); } };
+  // ---------- entrevista (registrar ou avaliar uma candidatura) ----------
+  const abrirEntrevista=(c)=>{ const d=c?dadosDe(c):{}; const cg=c&&c.cargo ? c.cargo : (d.cargoPretendido&&cargosLista.includes(d.cargoPretendido)?d.cargoPretendido:cargosLista[0]); const ci=cargoInfo(cg);
+    const uPref=d.unidadePref?Number(d.unidadePref):null;
+    setForm({ id:c?c.id:null, nome:d.nome||"", tel:d.tel||"", cargo:cg, turnoIdx:c&&c.turnoIdx!=null?c.turnoIdx:0, horario:(c&&c.turno&&c.turno.horario)||"", unidade:c&&c.unidade!=null?c.unidade:(uPref||unidades[0]?.id),
+      entrevistaEm:(c&&c.entrevistaEm)||hojeStr(), notas:(c&&c.notas)||{}, salario:(c&&c.salario)||(ci&&ci.salarioBase?ci.salarioBase:""), obs:(c&&c.obs)||"", etapaAtual:c?c.etapa:null }); };
+  const salvarForm=async()=>{ const f=form; if(!String(f.nome||"").trim()){ toast("Informe o nome"); return; } if(soDigitos(f.tel).length<10){ toast("Informe o WhatsApp com DDD"); return; }
+    const dados={ nome:f.nome.trim(), tel:f.tel, cargo:f.cargo, turnoIdx:Number(f.turnoIdx)||0, turno:turnoDe(f.cargo,f.turnoIdx)||(String(f.horario||"").trim()?{nome:"",horario:String(f.horario).trim()}:null),
+      unidade:f.unidade, entrevistaEm:f.entrevistaEm||"", entrevistador:eu, notas:f.notas||{}, salario:f.salario||"", obs:f.obs||"" };
+    if(f.id){ const novaEtapa=(!f.etapaAtual||f.etapaAtual==="inscrito")?"entrevistado":f.etapaAtual;
+      if(await salvarCand(f.id,{...dados, etapa:novaEtapa}, f.etapaAtual==="inscrito"?"Entrevista avaliada":"Entrevista atualizada")){ toast("Entrevista salva"); setForm(null); } return; }
+    try{ await nCol("candidatos").doc().set({...dados, etapa:"entrevistado", origem:"recrutador", criadoEm:Date.now(), criadoPor:eu, historico:[{em:Date.now(),por:eu,txt:"Entrevista registrada"}]}); setForm(null); toast("Candidato registrado"); }
+    catch(e){ toast("Não foi possível salvar: "+erroBanco(e)); } };
 
-  if(!pode) return <Card className="p-10 text-center text-slate-500">A aba Recrutamento & Seleção é exclusiva do time de R&S.</Card>;
-  const todos=(cands||[]).map(c=>({...c, _etapa:etapaDe(c), _nota:rsNotaMedia(c)}));
+  const todos=lista.map(c=>{ const d=dadosDe(c); return {...d, _etapa:c.etapa||"inscrito", _nota:rsNotaMedia(c), _colab:colabDe(c)}; });
+  const porCpf={}; todos.forEach(c=>{ const k=soDigitos(c.cpf); if(k.length===11) porCpf[k]=(porCpf[k]||0)+1; });
+  const exColab=(c)=>{ const k=soDigitos(c.cpf); return k.length===11 && clts.some(p=>soDigitos(p.cpf)===k && p.conviteId!==c.conviteDocs); };
   const cont=(e)=>todos.filter(c=>c._etapa===e).length;
-  const vis=todos.filter(c=> (filtro==="andamento" ? ["entrevistado","cadastro","teste"].includes(c._etapa) : filtro==="todos" ? true : c._etapa===filtro) && normTxt(c.nome+" "+(c.cargo||"")+" "+(c.tel||"")).includes(normTxt(q)));
+  const vis=todos.filter(c=> (filtro==="andamento" ? ["inscrito","entrevistado","teste"].includes(c._etapa) || (c._etapa==="aprovado" && !c._colab && c.conviteDocs) : filtro==="todos" ? true : c._etapa===filtro)
+    && normTxt([c.nome,c.cargo,c.cargoPretendido,c.tel,c.cpf].filter(Boolean).join(" ")).includes(normTxt(q)));
   const aberto=abertoId && todos.find(c=>c.id===abertoId);
   const ETAPA=Object.fromEntries(RS_ETAPAS.map(([k,l,t])=>[k,[l,t]]));
-  const proxAcao=(c)=>{
-    if(c._etapa==="entrevistado") return c.conviteId ? <Btn size="sm" variant="soft" icon={I.arrow} onClick={()=>whats(c)}>Reenviar link</Btn> : <Btn size="sm" icon={I.link} onClick={()=>gerarLink(c)}>Enviar link de cadastro</Btn>;
-    if(c._etapa==="cadastro") return <Btn size="sm" icon={I.calendar} onClick={()=>setAcao({tipo:"teste",c,data:"",unidade:c.unidade,obs:""})}>Agendar teste</Btn>;
-    if(c._etapa==="teste") return <><Btn size="sm" variant="ghost" className="text-rose-600" icon={I.x} onClick={()=>setAcao({tipo:"declinar",c,motivo:"",obs:""})}>Reprovar</Btn><Btn size="sm" icon={I.check} onClick={()=>setAcao({tipo:"aprovar",c,admissao:"",salario:c.salario||""})}>Aprovar</Btn></>;
-    return null; };
-  const novoForm=()=>{ const c0=cargosLista[0]; const ci=cargoInfo(c0); setForm({ nome:"", tel:"", email:"", cargo:c0, turnoIdx:0, unidade:unidades[0]?.id, fonte:"", entrevistaEm:hojeStr(), notas:{}, pretensao:"", salario:ci&&ci.salarioBase?ci.salarioBase:"", obs:"" }); };
-  const salvarForm=async()=>{ const f=form; if(!String(f.nome||"").trim()){ toast("Informe o nome"); return; } if(soDigitos(f.tel).length<10){ toast("Informe o WhatsApp com DDD"); return; }
-    const dados={ nome:f.nome.trim(), tel:f.tel, email:(f.email||"").trim(), cargo:f.cargo, turnoIdx:Number(f.turnoIdx)||0, turno:turnoDe(f.cargo,f.turnoIdx)||(String(f.horario||"").trim()?{nome:"",horario:String(f.horario).trim()}:null), unidade:f.unidade, fonte:f.fonte||"", entrevistaEm:f.entrevistaEm||"",
-      entrevistador:f.entrevistador||eu, notas:f.notas||{}, pretensao:f.pretensao||"", salario:f.salario||"", obs:f.obs||"" };
-    if(f.id){ if(await salvarCand(f.id,dados,"Dados da entrevista atualizados")){ toast("Candidato atualizado"); setForm(null); } return; }
-    const ref=nCol("candidatos").doc();
-    try{ await ref.set({...dados, etapa:"entrevistado", criadoEm:Date.now(), criadoPor:eu, historico:[{em:Date.now(),por:eu,txt:"Entrevista registrada"}]}); setForm(null); toast("Candidato registrado");
-      gerarLink({...dados,id:ref.id}); }
-    catch(e){ toast("Não foi possível salvar: "+erroBanco(e)); } };
+  const statusDe=(c)=> c._etapa==="aprovado" ? (c._colab?["Documentos recebidos","green"]:c.conviteDocs?["Aprovado · aguardando documentos","amber"]:["Aprovado","green"])
+    : c._etapa==="inscrito" ? ["Candidatura recebida","slate"] : c._etapa==="entrevistado" ? ["Entrevistado","blue"] : c._etapa==="teste" ? ["Em teste","amber"] : ["Declinado","red"];
   const unid=(id)=>(unidades||[]).find(u=>String(u.id)===String(id));
+  const prefs=(c)=>[c.cargoPretendido&&("procura: "+c.cargoPretendido), (c.horarios||[]).length&&("prefere "+(c.horarios.length===RS_HORARIOS.length?"qualquer horário":c.horarios.join(", ").toLowerCase())), c.pretensao&&("pretensão "+fmtBRL(c.pretensao))].filter(Boolean).join(" · ");
+  const proxAcao=(c)=>{
+    if(c._etapa==="inscrito") return <Btn size="sm" icon={I.star||I.edit} onClick={()=>abrirEntrevista(c)}>Avaliar entrevista</Btn>;
+    if(c._etapa==="entrevistado") return <Btn size="sm" icon={I.calendar} onClick={()=>setAcao({tipo:"teste",c,data:"",unidade:c.unidade,obs:""})}>Agendar teste</Btn>;
+    if(c._etapa==="teste") return <><Btn size="sm" variant="ghost" className="text-rose-600" icon={I.x} onClick={()=>setAcao({tipo:"declinar",c,motivo:"",obs:""})}>Reprovar</Btn><Btn size="sm" icon={I.check} onClick={()=>setAcao({tipo:"aprovar",c,admissao:"",salario:c.salario||""})}>Aprovar</Btn></>;
+    if(c._etapa==="aprovado" && c.conviteDocs && !c._colab) return <Btn size="sm" variant="soft" icon={I.arrow} onClick={()=>linkDocsModal(c,c.conviteDocs)}>Reenviar link de documentos</Btn>;
+    return null; };
 
   return <div className="space-y-4 fade-in">
-    <PageHeader title="Recrutamento & Seleção" sub="Entrevista → link de cadastro → teste → aprovação. Aprovados entram sozinhos em Colaboradores CLT.">
-      <Btn icon={I.plus} onClick={novoForm}>Registrar entrevista</Btn>
+    <PageHeader title="Recrutamento & Seleção" sub="Candidatura simples → entrevista → teste → aprovação → documentos. Aprovados entram em Colaboradores e na Contabilidade.">
+      <div className="flex flex-wrap gap-2"><Btn variant="ghost" icon={I.link} onClick={abrirLinkGeral}>Link de candidatura</Btn><Btn icon={I.plus} onClick={()=>abrirEntrevista(null)}>Registrar entrevista</Btn></div>
     </PageHeader>
-    {/* funil */}
     <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-      {RS_ETAPAS.map(([k,l,t],i)=><button key={k} onClick={()=>setFiltro(k)} className={cx("p-3 rounded-2xl border text-left transition", filtro===k?"border-brand-500 ring-2 ring-brand-200 bg-white":"border-slate-200 bg-white hover:border-slate-300")}>
-        <div className="text-[11px] font-bold uppercase tracking-wide text-slate-400">{i<3?(i+1)+". ":""}{l}</div><div className="text-2xl font-extrabold text-slate-900">{cont(k)}</div></button>)}
+      {RS_ETAPAS.map(([k,l],i)=><button key={k} onClick={()=>setFiltro(k)} className={cx("p-3 rounded-2xl border text-left transition", filtro===k?"border-brand-500 ring-2 ring-brand-200 bg-white":"border-slate-200 bg-white hover:border-slate-300")}>
+        <div className="text-[11px] font-bold uppercase tracking-wide text-slate-400">{i<4?(i+1)+". ":""}{l}</div><div className="text-2xl font-extrabold text-slate-900">{cont(k)}</div></button>)}
     </div>
     <div className="flex flex-wrap items-center gap-2">
       {[["andamento","Em andamento"],["todos","Todos"]].map(([k,l])=><button key={k} onClick={()=>setFiltro(k)} className={cx("px-3 py-1.5 rounded-full text-sm font-semibold", filtro===k?"bg-slate-900 text-white":"bg-white border border-slate-200 text-slate-600 hover:bg-slate-50")}>{l}</button>)}
-      <div className="flex-1 min-w-[180px]"><Input placeholder="Buscar por nome, cargo ou telefone" value={q} onChange={e=>setQ(e.target.value)} aria-label="Buscar candidato"/></div>
+      <div className="flex-1 min-w-[180px]"><Input placeholder="Buscar por nome, cargo, telefone ou CPF" value={q} onChange={e=>setQ(e.target.value)} aria-label="Buscar candidato"/></div>
     </div>
     {cands==null ? <Card className="p-10 text-center"><div className="w-8 h-8 mx-auto rounded-full border-2 border-slate-200 border-t-brand-600 animate-spin"/></Card>
-    : vis.length===0 ? <Card className="p-8 text-center text-sm text-slate-400">{todos.length?"Nenhum candidato neste filtro.":"Nenhum candidato ainda. Depois da entrevista, clique em Registrar entrevista."}</Card>
-    : <div className="space-y-2">{vis.map(c=>{ const [el,et]=ETAPA[c._etapa]||[c._etapa,"slate"]; const u=unid(c.unidade);
+    : vis.length===0 ? <Card className="p-8 text-center text-sm text-slate-400">{todos.length?"Nenhum candidato neste filtro.":<>Nenhum candidato ainda. Divulgue o <b>Link de candidatura</b> ou registre uma entrevista.</>}</Card>
+    : <div className="space-y-2">{vis.map(c=>{ const [sl,st]=statusDe(c); const u=unid(c.unidade!=null?c.unidade:c.unidadePref);
       return <Card key={c.id} className="p-4">
         <div className="flex flex-wrap items-start gap-3">
           <button className="flex-1 min-w-[220px] text-left" onClick={()=>setAbertoId(c.id)}>
-            <div className="font-bold text-slate-900 flex items-center gap-2 flex-wrap">{c.nome}{c._nota!=null && <span className="text-amber-500 text-sm font-bold">★ {String(c._nota).replace(".",",")}</span>}</div>
-            <div className="text-xs text-slate-500">{c.cargo||"—"}{c.turno&&c.turno.nome&&c.turno.nome!=="Padrão"?" · "+c.turno.nome:""}{c.turno&&c.turno.horario?" · "+c.turno.horario:""} · {u?u.nome:"—"}</div>
-            <div className="text-xs text-slate-400">Entrevista {c.entrevistaEm?fmtDataBR(c.entrevistaEm):"—"}{c.teste&&c.teste.data&&c._etapa==="teste"?" · teste "+new Date(c.teste.data).toLocaleString("pt-BR",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}):""}{c.decisao&&c.decisao.motivo?" · "+c.decisao.motivo:""}</div>
+            <div className="font-bold text-slate-900 flex items-center gap-2 flex-wrap">{c.nome}{c._nota!=null && <span className="text-amber-500 text-sm font-bold">★ {String(c._nota).replace(".",",")}</span>}
+              {exColab(c) && <Badge tone="blue">Já trabalhou conosco</Badge>}{porCpf[soDigitos(c.cpf)]>1 && <Badge tone="amber">Candidatura repetida</Badge>}</div>
+            <div className="text-xs text-slate-500">{c.cargo?[c.cargo, c.turno&&(c.turno.nome&&c.turno.nome!=="Padrão"?c.turno.nome:c.turno.horario)].filter(Boolean).join(" · ")+" · ":""}{u?u.nome:"qualquer unidade"}</div>
+            {prefs(c) && <div className="text-xs text-slate-400">{prefs(c)}</div>}
           </button>
-          <div className="flex flex-col items-end gap-1"><Badge tone={et}>{c._etapa==="entrevistado"&&c.conviteId?"Aguardando cadastro":el}</Badge></div>
+          <Badge tone={st}>{sl}</Badge>
         </div>
-        <div className="flex flex-wrap gap-2 justify-end mt-2">
-          <Btn size="sm" variant="ghost" icon={I.eye} onClick={()=>setAbertoId(c.id)}>Detalhes</Btn>{proxAcao(c)}
-        </div>
+        <div className="flex flex-wrap gap-2 justify-end mt-2"><Btn size="sm" variant="ghost" icon={I.eye} onClick={()=>setAbertoId(c.id)}>Detalhes</Btn>{proxAcao(c)}</div>
       </Card>; })}</div>}
 
-    {/* ---------- registrar / editar entrevista ---------- */}
+    {/* ---------- entrevista ---------- */}
     <Modal open={!!form} onClose={()=>setForm(null)} wide>
       {form && <div className="p-6">
-        <h3 className="text-lg font-bold text-slate-900 mb-4">{form.id?"Editar entrevista":"Registrar entrevista"}</h3>
+        <h3 className="text-lg font-bold text-slate-900 mb-4">{form.id?"Avaliar entrevista":"Registrar entrevista"}</h3>
         <div className="grid sm:grid-cols-2 gap-3">
           <Field label="Nome do candidato *"><Input value={form.nome} onChange={e=>setForm({...form,nome:e.target.value})}/></Field>
           <Field label="WhatsApp *"><Input value={form.tel} onChange={e=>setForm({...form,tel:e.target.value})} placeholder="(11) 90000-0000"/></Field>
           <Field label="Cargo da vaga"><Select value={form.cargo} onChange={e=>{ const ci=cargoInfo(e.target.value); setForm({...form,cargo:e.target.value,turnoIdx:0,salario:ci&&ci.salarioBase?ci.salarioBase:form.salario}); }}>{[...new Set([...cargosLista,form.cargo].filter(Boolean))].map(c=><option key={c}>{c}</option>)}</Select></Field>
-          {(()=>{ const tns=turnosDe(cargoInfo(form.cargo)); return <Field label="Horário de trabalho escolhido">{tns.length ? <Select value={Number(form.turnoIdx)||0} onChange={e=>setForm({...form,turnoIdx:Number(e.target.value)})}>{tns.map((t,i)=><option key={i} value={i}>{rotuloTurno(t)||"Padrão"}</option>)}</Select>
+          {(()=>{ const tns=turnosDe(cargoInfo(form.cargo)); return <Field label="Horário de trabalho">{tns.length ? <Select value={Number(form.turnoIdx)||0} onChange={e=>setForm({...form,turnoIdx:Number(e.target.value)})}>{tns.map((t,i)=><option key={i} value={i}>{rotuloTurno(t)||"Padrão"}</option>)}</Select>
             : <Input value={form.horario||""} onChange={e=>setForm({...form,horario:e.target.value})} placeholder="Ex.: 18:00 às 02:20 · 6x1"/>}</Field>; })()}
-          <Field label="Unidade / endereço escolhido"><Select value={form.unidade} onChange={e=>setForm({...form,unidade:Number(e.target.value)})}>{unidades.map(u=><option key={u.id} value={u.id}>{u.nome}{u.end?" — "+u.end:""}</option>)}</Select></Field>
+          <Field label="Unidade / endereço"><Select value={form.unidade} onChange={e=>setForm({...form,unidade:Number(e.target.value)})}>{unidades.map(u=><option key={u.id} value={u.id}>{u.nome}{u.end?" — "+u.end:""}</option>)}</Select></Field>
           <Field label="Data da entrevista"><Input type="date" value={form.entrevistaEm} onChange={e=>setForm({...form,entrevistaEm:e.target.value})}/></Field>
-          <Field label="Como conheceu a vaga"><Select value={form.fonte} onChange={e=>setForm({...form,fonte:e.target.value})}><option value="">—</option>{RS_FONTES.map(x=><option key={x}>{x}</option>)}</Select></Field>
-          <Field label="Pretensão salarial (R$)"><Input type="number" value={form.pretensao} onChange={e=>setForm({...form,pretensao:e.target.value})}/></Field>
         </div>
         <div className="mt-4 p-4 rounded-2xl border border-slate-200">
           <div className="flex items-center justify-between mb-2"><div className="text-xs font-bold text-slate-400 uppercase tracking-wide">Avaliação da entrevista</div>
@@ -5145,72 +5214,76 @@ function RSPage(){
           <div className="grid sm:grid-cols-2 gap-x-6 gap-y-1.5">{RS_CRITERIOS.map(([k,l])=><div key={k} className="flex items-center justify-between gap-2"><span className="text-sm text-slate-700">{l}</span>
             <Estrelas label={l} v={(form.notas||{})[k]} onChange={n=>setForm({...form,notas:{...(form.notas||{}),[k]:n}})}/></div>)}</div>
         </div>
-        <div className="mt-3"><Field label="Observações da entrevista"><textarea className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm" rows={3} value={form.obs} onChange={e=>setForm({...form,obs:e.target.value})} placeholder="Pontos fortes, pontos de atenção, experiência anterior…"/></Field></div>
-        <div className="flex gap-2 mt-4"><Btn variant="ghost" onClick={()=>setForm(null)}>Cancelar</Btn><Btn className="flex-1" icon={I.check} onClick={salvarForm}>{form.id?"Salvar":"Salvar e gerar link de cadastro"}</Btn></div>
+        <div className="mt-3"><Field label="Observações (só o R&S vê)"><textarea className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm" rows={3} value={form.obs} onChange={e=>setForm({...form,obs:e.target.value})} placeholder="Pontos fortes, pontos de atenção…"/></Field></div>
+        <div className="flex gap-2 mt-4"><Btn variant="ghost" onClick={()=>setForm(null)}>Cancelar</Btn><Btn className="flex-1" icon={I.check} onClick={salvarForm}>Salvar entrevista</Btn></div>
       </div>}
     </Modal>
 
-    {/* ---------- link pronto ---------- */}
-    <Modal open={!!linkPronto} onClose={()=>setLinkPronto(null)}>
-      {linkPronto && <div className="p-6 text-center">
+    {/* ---------- link (candidatura ou documentos) ---------- */}
+    <Modal open={!!linkModal} onClose={()=>setLinkModal(null)}>
+      {linkModal && <div className="p-6 text-center">
         <div className="w-14 h-14 mx-auto rounded-2xl grad-brand grid place-items-center text-white mb-3"><Icon d={I.link} className="w-7 h-7"/></div>
-        <h3 className="text-lg font-bold text-slate-900">Link de cadastro pronto</h3>
-        <p className="text-sm text-slate-500 mt-1">Envie para {linkPronto.nome}. Quando o cadastro chegar, ele aparece aqui como <b>Cadastro recebido</b>.</p>
-        <div className="my-4 p-3 rounded-xl bg-slate-50 text-xs font-mono text-slate-600 break-all">{linkConvite(linkPronto.conviteId)}</div>
-        <div className="flex gap-2"><Btn variant="ghost" className="flex-1" icon={I.copy} onClick={()=>{ copyText(msgLink(linkPronto)); toast("Mensagem copiada"); }}>Copiar mensagem</Btn>
-          <Btn className="flex-1" icon={I.arrow} onClick={()=>whats(linkPronto)}>Enviar no WhatsApp</Btn></div>
+        <h3 className="text-lg font-bold text-slate-900">{linkModal.titulo}</h3>
+        <p className="text-sm text-slate-500 mt-1">{linkModal.texto}</p>
+        <div className="my-4 p-3 rounded-xl bg-slate-50 text-xs font-mono text-slate-600 break-all">{linkModal.link}</div>
+        <div className="flex gap-2"><Btn variant="ghost" className="flex-1" icon={I.copy} onClick={()=>{ copyText(linkModal.msg); toast("Mensagem copiada"); }}>Copiar mensagem</Btn>
+          <Btn className="flex-1" icon={I.arrow} onClick={()=>whats(linkModal.tel,linkModal.msg)}>Enviar no WhatsApp</Btn></div>
       </div>}
     </Modal>
 
-    {/* ---------- detalhes do candidato ---------- */}
+    {/* ---------- detalhes ---------- */}
     <Modal open={!!aberto} onClose={()=>setAbertoId(null)} wide>
-      {aberto && (()=>{ const c=aberto; const cad=cadDe(c); const [el,et]=ETAPA[c._etapa]||[c._etapa,"slate"]; const u=unid(c.unidade);
+      {aberto && (()=>{ const c=aberto; const [sl,st]=statusDe(c); const u=unid(c.unidade); const up=unid(c.unidadePref); const leg=legadoDe(c);
         return <div className="p-6 space-y-4">
           <div className="flex items-start gap-3">
-            <Avatar name={c.nome} src={cad&&cad.foto} size="w-12 h-12"/>
+            <Avatar name={c.nome} size="w-12 h-12"/>
             <div className="flex-1 min-w-0"><h3 className="text-lg font-bold text-slate-900">{c.nome}</h3>
-              <div className="text-sm text-slate-500">{c.tel}{c.fonte?" · via "+c.fonte:""}</div></div>
-            <Badge tone={et}>{el}</Badge>
+              <div className="text-sm text-slate-500">{[c.tel,c.email].filter(Boolean).join(" · ")}</div>
+              <div className="flex flex-wrap gap-1 mt-1">{exColab(c) && <Badge tone="blue">Já trabalhou conosco</Badge>}{porCpf[soDigitos(c.cpf)]>1 && <Badge tone="amber">Candidatura repetida</Badge>}</div></div>
+            <Badge tone={st}>{sl}</Badge>
             <button onClick={()=>setAbertoId(null)} className="text-slate-400 hover:text-slate-600" aria-label="Fechar"><Icon d={I.x}/></button>
           </div>
-          <div className="grid sm:grid-cols-3 gap-2 text-sm">
-            {[["Cargo",c.cargo||"—"],["Horário",c.turno?rotuloTurno(c.turno)||"Padrão":"—"],["Unidade",u?u.nome+(u.end?" — "+u.end:""):"—"]].map(([l,x])=><div key={l} className="p-3 rounded-xl bg-slate-50"><div className="text-[11px] font-bold uppercase text-slate-400">{l}</div><div className="font-semibold text-slate-800">{x}</div></div>)}
+          <div className="p-4 rounded-2xl border border-slate-200">
+            <div className="text-xs font-bold text-slate-400 uppercase mb-2">Candidatura {c.inscritoEm?"· "+new Date(c.inscritoEm).toLocaleDateString("pt-BR"):""}</div>
+            {c.inscritoEm ? <div className="grid sm:grid-cols-2 gap-x-6 gap-y-1 text-sm">
+              {[["CPF",c.cpf],["Cargo que procura",c.cargoPretendido],["Unidade de preferência",up?up.nome:"Qualquer"],["Horário que prefere",(c.horarios||[]).join(", ")],["Fins de semana",c.fimSemana],["Pretensão salarial",c.pretensao?fmtBRL(c.pretensao):""],["Como soube",c.fonte]].filter(([,v])=>v).map(([l,v])=>
+                <div key={l} className="flex justify-between gap-3 border-b border-slate-50 py-1"><span className="text-slate-400">{l}</span><span className="text-slate-800 font-medium text-right">{v}</span></div>)}
+              {c.experiencia && <div className="sm:col-span-2 pt-1"><div className="text-slate-400 text-xs">Experiência</div><p className="text-slate-700 whitespace-pre-line">{c.experiencia}</p></div>}
+            </div> : <div className="flex flex-wrap items-center gap-2 text-sm"><span className="text-slate-500">Registrado pelo recrutador — ainda sem a candidatura (CPF, horários, pretensão).</span>
+              <Btn size="sm" variant="soft" icon={I.link} onClick={()=>abrirLinkIndividual(c)}>Enviar link de candidatura</Btn></div>}
           </div>
           <div className="p-4 rounded-2xl border border-slate-200">
             <div className="flex items-center justify-between mb-2"><div className="text-xs font-bold text-slate-400 uppercase">Entrevista {c.entrevistaEm?"· "+fmtDataBR(c.entrevistaEm):""}</div>
-              <Btn size="sm" variant="ghost" icon={I.edit} onClick={()=>{ setForm({...c, horario:(c.turno&&c.turno.horario)||""}); setAbertoId(null); }}>Editar</Btn></div>
-            <div className="grid sm:grid-cols-2 gap-x-6 gap-y-1">{RS_CRITERIOS.map(([k,l])=><div key={k} className="flex items-center justify-between"><span className="text-sm text-slate-600">{l}</span><Estrelas label={l} v={(c.notas||{})[k]}/></div>)}</div>
-            <div className="text-sm mt-2"><b className="text-amber-500">Nota geral {c._nota!=null?"★ "+String(c._nota).replace(".",","):"—"}</b>{c.pretensao?" · pretensão "+fmtBRL(c.pretensao):""}</div>
-            {c.obs && <p className="text-sm text-slate-600 mt-2 whitespace-pre-line">{c.obs}</p>}
+              {!["aprovado","declinado"].includes(c._etapa) && <Btn size="sm" variant="ghost" icon={I.edit} onClick={()=>{ abrirEntrevista(c); setAbertoId(null); }}>{c._etapa==="inscrito"?"Avaliar":"Editar"}</Btn>}</div>
+            {c._etapa==="inscrito" && !c.notas ? <p className="text-sm text-slate-500">Ainda não entrevistado.</p> : <>
+              <div className="grid sm:grid-cols-3 gap-2 text-sm mb-2">{[["Cargo",c.cargo||"—"],["Horário",c.turno?rotuloTurno(c.turno)||"Padrão":"—"],["Unidade",u?u.nome+(u.end?" — "+u.end:""):"—"]].map(([l,x])=><div key={l} className="p-2.5 rounded-xl bg-slate-50"><div className="text-[11px] font-bold uppercase text-slate-400">{l}</div><div className="font-semibold text-slate-800">{x}</div></div>)}</div>
+              <div className="grid sm:grid-cols-2 gap-x-6 gap-y-1">{RS_CRITERIOS.map(([k,l])=><div key={k} className="flex items-center justify-between"><span className="text-sm text-slate-600">{l}</span><Estrelas label={l} v={(c.notas||{})[k]}/></div>)}</div>
+              <div className="text-sm mt-2"><b className="text-amber-500">Nota geral {c._nota!=null?"★ "+String(c._nota).replace(".",","):"—"}</b></div>
+              {c.obs && <p className="text-sm text-slate-600 mt-2 whitespace-pre-line">{c.obs}</p>}</>}
           </div>
-          <div className="p-4 rounded-2xl border border-slate-200">
-            <div className="text-xs font-bold text-slate-400 uppercase mb-2">Cadastro pelo link</div>
-            {cad ? <div className="flex flex-wrap items-center gap-2 text-sm"><span className="text-slate-700">Recebido em {new Date(cad.criadoEm||0).toLocaleDateString("pt-BR")} · CPF {cad.cpf||"—"}</span>
-                <Btn size="sm" variant="soft" icon={I.eye} onClick={()=>setVerCad({c:{pessoaKey:"clt-"+cad.id,tipo:"clt",preenchidoEm:cad.criadoEm},p:cad})}>Ver cadastro e documentos</Btn></div>
-              : c.conviteId ? <div className="flex flex-wrap items-center gap-2 text-sm"><span className="text-slate-500">Link enviado em {new Date(c.linkEm||0).toLocaleDateString("pt-BR")} — aguardando o candidato.</span>
-                <Btn size="sm" variant="soft" icon={I.copy} onClick={()=>{ copyText(msgLink(c)); toast("Mensagem copiada"); }}>Copiar link</Btn><Btn size="sm" icon={I.arrow} onClick={()=>whats(c)}>WhatsApp</Btn></div>
-              : <Btn size="sm" icon={I.link} onClick={()=>gerarLink(c)}>Enviar link de cadastro</Btn>}
-          </div>
-          {(c.teste||c.decisao) && <div className="p-4 rounded-2xl border border-slate-200 text-sm space-y-1">
+          {(c.teste||c.decisao||c._etapa==="aprovado") && <div className="p-4 rounded-2xl border border-slate-200 text-sm space-y-1.5">
             {c.teste && <div><b>Teste:</b> {c.teste.data?new Date(c.teste.data).toLocaleString("pt-BR"):"—"} · {unidadeNome(c.teste.unidade,unidades)}{c.teste.obs?" · "+c.teste.obs:""}</div>}
             {c.decisao && c.decisao.motivo && <div className="text-rose-700"><b>Declinado:</b> {c.decisao.motivo}{c.decisao.obs?" — "+c.decisao.obs:""}</div>}
-            {c._etapa==="aprovado" && <div className="text-emerald-700 font-semibold">Aprovado em {new Date(c.aprovadoEm||0).toLocaleDateString("pt-BR")} — está em Colaboradores CLT.</div>}
+            {c._etapa==="aprovado" && (c._colab ? <div className="text-emerald-700 font-semibold">✓ Documentos recebidos — {c.nome} já está em Colaboradores CLT{c._colab.admissao?" (admissão "+fmtDataBR(c._colab.admissao)+")":" (aguardando a data de admissão)"} e na aba Contabilidade para o registro.</div>
+              : c.conviteDocs ? <div className="flex flex-wrap items-center gap-2"><span className="text-amber-700 font-semibold">Aprovado em {new Date(c.aprovadoEm||0).toLocaleDateString("pt-BR")} — aguardando o envio dos documentos.</span>
+                  <Btn size="sm" variant="soft" icon={I.arrow} onClick={()=>linkDocsModal(c,c.conviteDocs)}>Reenviar link de documentos</Btn></div>
+              : <div className="text-emerald-700 font-semibold">Aprovado em {new Date(c.aprovadoEm||0).toLocaleDateString("pt-BR")} — está em Colaboradores CLT.</div>)}
           </div>}
           {(c.historico||[]).length>0 && <details className="text-sm"><summary className="cursor-pointer text-slate-500 font-semibold">Histórico ({c.historico.length})</summary>
             <ol className="mt-2 space-y-1 border-l-2 border-slate-100 pl-3">{[...c.historico].reverse().map((h,i)=><li key={i} className="text-xs text-slate-600"><span className="text-slate-400">{new Date(h.em).toLocaleString("pt-BR")}{h.por?" · "+h.por:""}</span><br/>{h.txt}</li>)}</ol></details>}
           <div className="flex flex-wrap gap-2 pt-2 border-t border-slate-100">
             <Btn size="sm" variant="ghost" className="text-rose-600" icon={I.trash} onClick={()=>excluir(c)}>Excluir</Btn>
             <div className="flex-1"/>
-            {["aprovado","declinado"].includes(c._etapa) ? (c._etapa==="declinado" && <Btn size="sm" variant="ghost" icon={I.refresh} onClick={()=>reabrir(c)}>Reabrir processo</Btn>)
-              : <><Btn size="sm" variant="ghost" className="text-rose-600" icon={I.x} onClick={()=>setAcao({tipo:"declinar",c,motivo:"",obs:""})}>Declinar</Btn>
-                {c._etapa!=="teste" && cad && <Btn size="sm" variant="soft" icon={I.calendar} onClick={()=>setAcao({tipo:"teste",c,data:"",unidade:c.unidade,obs:""})}>Agendar teste</Btn>}
-                {cad && <Btn size="sm" icon={I.check} onClick={()=>setAcao({tipo:"aprovar",c,admissao:"",salario:c.salario||""})}>Aprovar</Btn>}</>}
+            {c._etapa==="declinado" ? <Btn size="sm" variant="ghost" icon={I.refresh} onClick={()=>reabrir(c)}>Reabrir processo</Btn>
+            : c._etapa!=="aprovado" && <><Btn size="sm" variant="ghost" className="text-rose-600" icon={I.x} onClick={()=>setAcao({tipo:"declinar",c,motivo:"",obs:""})}>Declinar</Btn>
+                {c._etapa==="inscrito" ? <Btn size="sm" icon={I.edit} onClick={()=>{ abrirEntrevista(c); setAbertoId(null); }}>Avaliar entrevista</Btn>
+                : <>{c._etapa!=="teste" && <Btn size="sm" variant="soft" icon={I.calendar} onClick={()=>setAcao({tipo:"teste",c,data:"",unidade:c.unidade,obs:""})}>Agendar teste</Btn>}
+                  <Btn size="sm" icon={I.check} onClick={()=>setAcao({tipo:"aprovar",c,admissao:"",salario:c.salario||""})}>Aprovar</Btn></>}</>}
           </div>
         </div>; })()}
     </Modal>
-    <Modal open={!!verCad} onClose={()=>setVerCad(null)} wide>{verCad && <FichaCadastro convite={verCad.c} pessoa={verCad.p} onClose={()=>setVerCad(null)}/>}</Modal>
 
-    {/* ---------- ações: teste / aprovar / declinar / configurar ---------- */}
+    {/* ---------- ações ---------- */}
     <Modal open={!!acao} onClose={()=>setAcao(null)}>
       {acao && <div className="p-6">
         {acao.tipo==="teste" && <>
@@ -5222,10 +5295,10 @@ function RSPage(){
         </>}
         {acao.tipo==="aprovar" && <>
           <h3 className="text-lg font-bold text-slate-900 mb-1">Aprovar {acao.c.nome}</h3>
-          <p className="text-sm text-slate-500 mb-4">O cadastro vai para <b>Colaboradores CLT</b> como {acao.c.cargo} em {unidadeNome(acao.c.unidade,unidades)}. Sem data de admissão, fica como "aguardando admissão" (sem entrar na escala).</p>
-          <div className="grid grid-cols-2 gap-3"><Field label="Data de admissão (opcional)"><Input type="date" value={acao.admissao} onChange={e=>setAcao({...acao,admissao:e.target.value})}/></Field>
+          <p className="text-sm text-slate-500 mb-4">{legadoDe(acao.c) ? "O cadastro completo já foi recebido: a pessoa vai direto para Colaboradores CLT." : <>Vamos gerar o <b>link de documentos</b> (RG/CPF, comprovante, CTPS, selfie…) já preenchido com os dados da candidatura. Quando a pessoa enviar, ela entra em <b>Colaboradores CLT</b> como {acao.c.cargo} em {unidadeNome(acao.c.unidade,unidades)} e aparece na aba <b>Contabilidade</b>.</>}</p>
+          <div className="grid grid-cols-2 gap-3"><Field label="Data de admissão (se já souber)"><Input type="date" value={acao.admissao} onChange={e=>setAcao({...acao,admissao:e.target.value})}/></Field>
             <Field label="Salário (R$)"><Input type="number" value={acao.salario} onChange={e=>setAcao({...acao,salario:e.target.value})}/></Field></div>
-          <div className="flex gap-2 mt-4"><Btn variant="ghost" onClick={()=>setAcao(null)}>Cancelar</Btn><Btn className="flex-1" icon={I.check} onClick={()=>aprovar(acao)}>Aprovar e enviar para Colaboradores</Btn></div>
+          <div className="flex gap-2 mt-4"><Btn variant="ghost" onClick={()=>setAcao(null)}>Cancelar</Btn><Btn className="flex-1" icon={I.check} onClick={()=>aprovar(acao)}>{legadoDe(acao.c)?"Aprovar e enviar para Colaboradores":"Aprovar e gerar link de documentos"}</Btn></div>
         </>}
         {acao.tipo==="declinar" && <>
           <h3 className="text-lg font-bold text-slate-900 mb-4">Declinar {acao.c.nome}</h3>
@@ -7522,7 +7595,8 @@ function ConviteCadastro({onClose}){
     await Promise.all([worker(),worker(),worker()]);
     const dados=juntarLeituras(leituras);
     if(tipo==="pj"){ dados.responsavel=dados.nome||""; }
-    const base={ ...dados, telefone:dados.telefone||"", email:dados.email||"", tipoPix:dados.pix?"Aleatória":"CPF" };
+    const pre=(conv&&conv.pre)||{}; const lidos=Object.fromEntries(Object.entries(dados).filter(([,v])=>String(v??"").trim()));   // dados da candidatura (R&S) completam o que não foi lido
+    const base={ ...Object.fromEntries(Object.entries(pre).filter(([,v])=>String(v??"").trim())), ...lidos, telefone:dados.telefone||pre.telefone||"", email:dados.email||pre.email||"", tipoPix:dados.pix?"Aleatória":"CPF" };
     // o que a pessoa já digitou à mão (ex.: voltou para incluir mais um documento) não é apagado pela nova leitura
     setF(prev=>{ const manual=Object.fromEntries(Object.entries(prev).filter(([k,v])=>!auto[k] && String(v||"").trim())); return {...base,...manual}; });
     setAuto(Object.fromEntries(Object.keys(dados).filter(k=>!String(f[k]||"").trim()||auto[k]).map(k=>[k,true])));
@@ -7571,7 +7645,7 @@ function ConviteCadastro({onClose}){
         : tipo==="free"
         ? { ...comum, tipo:"free", nome:nomePessoa, cpf:f.cpf||"", cargo:conv.cargo||"", setor:SETOR_POR_CARGO[conv.cargo]||"salao", unidade:conv.unidade,
             valor:Number(((cargosFreela||[]).find(c=>c.nome===conv.cargo)||{}).valor)||0, foto }
-        : { ...comum, tipo:"clt", nome:nomePessoa, cpf:f.cpf||"", cargo:conv.cargo||CARGOS[0], setor:SETOR_POR_CARGO[conv.cargo]||"salao", escala:"6x1", folgaDia:6, unidade:conv.unidade, salario:Number(conv.salario)||0, vt:0, admissao:"", foto };
+        : { ...comum, tipo:"clt", nome:nomePessoa, cpf:f.cpf||"", cargo:conv.cargo||CARGOS[0], setor:SETOR_POR_CARGO[conv.cargo]||"salao", escala:"6x1", folgaDia:6, unidade:conv.unidade, salario:Number(conv.salario)||0, vt:0, admissao:conv.admissao||"", foto };
       await ref.set(dados);
       await nCol("convites").doc(token).set({ status:"preenchido", preenchidoEm:Date.now(), pessoaKey:donoKey, nome:nomePessoa },{merge:true}).catch(()=>{});
       setEtapa("ok");
@@ -8091,7 +8165,7 @@ function Shell({ onLogout }) {
 // Roteamento por hash para os LINKS de cadastro/ponto (CLT e Freelancer).
 // Ex.: abrir  ...wilami-ponto-app.html#ponto-clt  já abre o quiosque CLT (público).
 function usePontoHash() {
-  const read=()=>{ const h=(window.location.hash||"").replace("#",""); return h==="ponto-clt"?"clt": h==="ponto-free"?"free": h==="meus-docs"?"docs": h.indexOf("convite/")===0?"convite": h.indexOf("termo/")===0?"termo": h.indexOf("assinar/")===0?"assinar": (!h && /[?&]assinar=/.test(window.location.search))?"assinar": null; };
+  const read=()=>{ const h=(window.location.hash||"").replace("#",""); return h==="ponto-clt"?"clt": h==="ponto-free"?"free": h==="meus-docs"?"docs": h.indexOf("convite/")===0?"convite": (h==="trabalhe-conosco"||h.indexOf("trabalhe-conosco/")===0)?"candidatura": h.indexOf("termo/")===0?"termo": h.indexOf("assinar/")===0?"assinar": (!h && /[?&]assinar=/.test(window.location.search))?"assinar": null; };
   const [mode,setMode]=useState(read());
   useEffect(()=>{ const on=()=>setMode(read()); window.addEventListener("hashchange",on); return ()=>window.removeEventListener("hashchange",on); },[]);
   return [mode, ()=>{ let q=window.location.search; try{ const u=new URLSearchParams(q); if(u.has("assinar")){ u.delete("assinar"); q=u.toString()?"?"+u.toString():""; } }catch(e){}
@@ -8134,6 +8208,7 @@ function App() {
   const logout=()=>{ try{ window.__WPAUTH&&window.__WPAUTH.signOut(); }catch(e){} setLocalLogged(false); };
   return <StoreProvider>
     {pontoMode==="convite" ? <ConviteCadastro onClose={fecharPonto}/>
+     : pontoMode==="candidatura" ? <Candidatura onClose={fecharPonto}/>
      : pontoMode==="termo" ? <TermoAssinatura onClose={fecharPonto}/>
      : pontoMode==="assinar" ? <AssinarDocumento onClose={fecharPonto}/>
      : pontoMode==="docs" ? <PortalColab onClose={fecharPonto}/>
