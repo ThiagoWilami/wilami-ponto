@@ -26,6 +26,15 @@ Ponto digital, escala e RH para restaurantes. O app é um único `index.html` (R
 - **PCMSO** (*Pessoas → PCMSO*): planilha "cadastro de funcionários" (Modelo I) preenchida a partir do cadastro e da leitura dos documentos (unidade, CNPJ, setor, cargo, nascimento, sexo, admissão, RG, CPF, CTPS, CBO sugerido, descrição do cargo, e-mail, celular). Os campos obrigatórios em branco ficam em vermelho e podem ser completados na própria tabela. **Baixar planilha** gera o .xlsx no layout do modelo, em MAIÚSCULAS e sem acentos.
 - **Logins restritos**: em *Gerentes & acessos*, crie o usuário com o papel **Contabilidade** ou **PAROMED / PCMSO**. Esse login vê só a sua aba.
 
+## Recrutamento & Seleção (R&S)
+
+*Pessoas → Recrutamento & Seleção* (só administradores e logins com o papel **R&S**):
+
+1. **Registrar entrevista:** candidato, WhatsApp, cargo, horário (turno do cargo), unidade/endereço, como conheceu a vaga, pretensão e avaliação por estrelas (comunicação, experiência, postura, atitude, disponibilidade), com nota geral.
+2. **Link de cadastro:** gerado ao salvar, para enviar pelo WhatsApp. É o mesmo cadastro dos convites (documentos, leitura automática, selfie, termo), mas o cadastro fica **oculto em Colaboradores** até a aprovação.
+3. **Consulta de processos (opcional):** quando o cadastro chega, o sistema consulta processos judiciais públicos do CPF no Escavador (`api/antecedentes.js`) e mostra os de natureza criminal em que a pessoa é ré/investigada. O link pede a autorização do candidato. Requer `ESCAVADOR_TOKEN` na Vercel; dá para limitar a cargos específicos em **Configurar**. Atenção ao Tema 1 do TST (antecedentes só quando a função justifica).
+4. **Teste → Aprovar ou Declinar:** aprovar envia a pessoa para *Colaboradores CLT* (com cargo, unidade, horário, salário e, se informada, a data de admissão). Declinar registra o motivo. Cada candidato tem histórico das etapas.
+
 ## Notas fiscais dos PJ e Financeiro
 
 - **PJ:** no app "Meus documentos" (`#meus-docs`), entrando com CNPJ + PIN, aparece o quadro **Nota fiscal do mês**. O PJ escolhe o mês e envia o PDF, o XML ou uma foto da nota. O sistema lê a nota (XML ou texto do PDF; foto ou PDF escaneado pela leitura automática do Claude, `api/nota.js`) e confere o valor com o contrato, o CNPJ do emitente e o CNPJ da empresa. Se o valor divergir, o PJ vê o aviso antes de enviar.
