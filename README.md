@@ -32,7 +32,7 @@ Ponto digital, escala e RH para restaurantes. O app é um único `index.html` (R
 
 1. **Candidatura simples** (`#trabalhe-conosco`): nome, CPF (validado), WhatsApp, e-mail, cargo que procura, unidade e horários de preferência, fins de semana, pretensão salarial, experiência e como soube da vaga. Não pede documentos. O link geral fica em **Link de candidatura**; para quem já foi entrevistado, há o link individual no próprio candidato (os dados entram nele, sem duplicar).
 2. **Entrevista:** avaliação por estrelas (comunicação, experiência, postura, atitude, disponibilidade), cargo, horário e unidade oferecidos e observações (só o R&S vê). Dá para registrar uma entrevista sem candidatura.
-3. **Teste → Aprovar ou Declinar** (motivos padronizados). Selos de "Já trabalhou conosco" e "Candidatura repetida" pelo CPF.
+3. **Teste → Aprovar ou Declinar** (motivos padronizados). Ao agendar o teste, a pessoa vira **freelancer** (cargo e diária de *Freelancers*) e entra na escala da unidade na data e turno do teste — bate ponto pelo link de freelancer com o CPF. Reagendar move a escala; declinar antes do teste tira da escala. Quando os documentos chegam e ela vira CLT, o freelancer fica inativo ("Efetivado CLT"). Selos de "Já trabalhou conosco" e "Candidatura repetida" pelo CPF.
 4. **Aprovado → documentos:** a aprovação gera o link de documentos (o mesmo dos convites), já preenchido com nome, CPF, telefone e e-mail da candidatura, com cargo, horário, unidade, salário e admissão prevista. Quando a pessoa envia, ela entra em *Colaboradores CLT* e aparece na aba *Contabilidade*; o R&S vê "Documentos recebidos".
 
 ## Notas fiscais dos PJ e Financeiro
