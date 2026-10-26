@@ -1072,7 +1072,6 @@ function StoreProvider({children}) {
   // Candidatos do R&S (link de cadastro do recrutamento) só viram colaborador depois de aprovados
   const cadAuto=useMemo(()=>cadTodos.filter(c=>!c.rsPendente),[cadTodos]);
   const cadastrosRS=useMemo(()=>cadTodos.filter(c=>c.rsCandidato),[cadTodos]);
-  const [rsCfg,setRsCfg]=usePersist("rsCfg",{});
   const [atestados,atestadosOps]=useAtestados();
   const enviarAtestado=(obj)=>{ if(window.__WPDB) return atestadosOps.add(obj); return Promise.resolve(); };
   const [ajustes,ajustesOps]=useAjustes();
@@ -1411,7 +1410,7 @@ function StoreProvider({children}) {
   const value={ unidades:unidadesVis,salvarUnidade,excluirUnidade, clts:cltsVis,freelas:freelasVis,freelasComPagamentos:freelasPagVis,salvarClt,salvarFreela,excluirColab,cadastrarPublico, anexarDoc,
     escala,setEscala, escalaOv,setEscalaOv, registros:registrosVis,addRegistro, pontoHist, freelancerEscaladoHoje, valorFreela, setFreelaAjuste, cltExtraAjuste,setCltExtra, gorjetasCLT,setGorjetaCLT, pagamentosFreela,addPagamentoFreela,removePagamentoFreela, pagamentosCLT,addPagamentoCLT,removePagamentoCLT, faltaDescontoDesde,setFaltaDescontoDesde, vtDiaPagamento,setVtDiaPagamento,
     cargosFreela,salvarCargoFreela,excluirCargoFreela, atestados,enviarAtestado, ajustes,enviarAjuste,resolverAjuste,
-    dossie,getDossie,addFalta,addFeedback,addAnexo, perfil,setPerfil, perms,setPerms, can, envContab,setEnvContab, contabCfg,setContabCfg, finCfg,setFinCfg, pcmso,setPcmso, cadastrosRS, cadOpsRS:cadOps, rsCfg,setRsCfg,
+    dossie,getDossie,addFalta,addFeedback,addAnexo, perfil,setPerfil, perms,setPerms, can, envContab,setEnvContab, contabCfg,setContabCfg, finCfg,setFinCfg, pcmso,setPcmso, cadastrosRS, cadOpsRS:cadOps,
     clientes,clienteAtivo,tenantAtual,criarCliente,trocarCliente,
     acesso,donos,setDonos,acessos,acessosOps,
     marca,setMarca, pjs:(casaRestrita!=null?pjsTodos.filter(x=>x.unidade==null||x.unidade==="todas"||_mesmaCasa(x.unidade)):pjsTodos), salvarPj,excluirPj, pagamentosPJ,addPagamentoPJ,removePagamentoPJ,
@@ -5018,29 +5017,25 @@ const RS_CRITERIOS=[["comunicacao","Comunicação"],["experiencia","Experiência
 const RS_MOTIVOS=["Reprovado no teste","Não compareceu ao teste","Desistiu da vaga","Aceitou outra proposta","Pretensão salarial acima da vaga","Horário incompatível","Distância / deslocamento","Perfil não aderente à vaga","Documentação incompleta","Vaga preenchida ou cancelada","Outro"];
 const RS_FONTES=["Indicação","Instagram","Facebook","Sites de vagas (Indeed, InfoJobs…)","WhatsApp","Placa na loja","Banco de talentos","Outro"];
 const rsNotaMedia=(c)=>{ const v=RS_CRITERIOS.map(([k])=>Number((c.notas||{})[k])||0).filter(Boolean); return v.length? Math.round(v.reduce((a,b)=>a+b,0)/v.length*10)/10 : null; };
-const rsVerificaCargo=(cfg,cargo)=> cfg.verificar!==false && (!Array.isArray(cfg.cargosVerificar) || cfg.cargosVerificar.includes(cargo));
 function Estrelas({v,onChange,label}){
   return <div className="flex items-center gap-0.5" role="radiogroup" aria-label={label}>{[1,2,3,4,5].map(n=>
     <button type="button" key={n} role="radio" aria-checked={Number(v)===n} aria-label={label+" "+n} disabled={!onChange} onClick={()=>onChange&&onChange(Number(v)===n?0:n)}
       className={cx("text-xl leading-none px-0.5", n<=Number(v||0)?"text-amber-400":"text-slate-200", onChange&&"hover:scale-110 transition")}>★</button>)}</div>;
 }
 function RSPage(){
-  const { unidades, cargosLista, cargoInfo, cadastrosRS, cadOpsRS, rsCfg, setRsCfg, acesso, marca } = useStore();
+  const { unidades, cargosLista, cargoInfo, cadastrosRS, cadOpsRS, acesso, marca } = useStore();
   const toast=useContext(ToastCtx);
   const pode = !acesso || acesso.ehDono || acesso.papelKey==="rs";
   const [cands,setCands]=useState(null);
   useEffect(()=>{ if(!pode) return; if(!window.__WPDB){ setCands([]); return; }
     try{ return nCol("candidatos").onSnapshot(function(s){ const a=[]; s.forEach(d=>a.push({...d.data(),id:d.id})); a.sort((x,y)=>(y.criadoEm||0)-(x.criadoEm||0)); setCands(a); }, function(){ setCands([]); }); }catch(e){ setCands([]); }
   },[pode]);
-  const cfg=rsCfg||{};
   const [filtro,setFiltro]=useState("andamento"); const [q,setQ]=useState("");
   const [form,setForm]=useState(null);       // novo/editar candidato
   const [abertoId,setAbertoId]=useState(null);
   const [linkPronto,setLinkPronto]=useState(null);
   const [verCad,setVerCad]=useState(null);
   const [acao,setAcao]=useState(null);       // { tipo:"teste"|"aprovar"|"declinar", c, ... }
-  const [verificando,setVerificando]=useState("");
-  const [semEscavador,setSemEscavador]=useState("");
   const eu=(acesso&&acesso.email)||(((window.__WPAUTH&&window.__WPAUTH.currentUser)||{}).email)||"";
   const cadDe=(c)=> c ? (cadastrosRS.find(x=>x.rsCandidato===c.id) || (c.conviteId && cadastrosRS.find(x=>x.conviteId===c.conviteId)) || null) : null;
   const etapaDe=(c)=> (c.etapa||"entrevistado")==="entrevistado" && cadDe(c) ? "cadastro" : (c.etapa||"entrevistado");
@@ -5056,28 +5051,11 @@ function RSPage(){
       beneficios:ci.beneficios||"", requisitos:ci.requisitos||"", descritivo:ci.descritivo||"", unidadeNome:unidadeNome(c.unidade,unidades), salario:0, empresa:(marca&&marca.nome)||"WILAMI" } : null;
     const token=gerarTokenConvite();
     const doc={ vaga, tipo:"clt", nome:c.nome||"", tel:soDigitos(c.tel), unidade:c.unidade, cargo:c.cargo, servico:"", salario:Number(c.salario)||0, valor:0, status:"aberto",
-      criadoEm:Date.now(), expira:Date.now()+30*864e5, criadoPor:eu, rs:true, candidatoId:c.id, verificar:rsVerificaCargo(cfg,c.cargo) };
+      criadoEm:Date.now(), expira:Date.now()+30*864e5, criadoPor:eu, rs:true, candidatoId:c.id };
     try{ await nCol("convites").doc(token).set(doc); await salvarCand(c.id,{conviteId:token, linkEm:Date.now()},"Link de cadastro gerado"); setLinkPronto({...c, conviteId:token}); }
     catch(e){ toast("Não foi possível gerar o link: "+erroBanco(e)); } };
   const msgLink=(c)=>`Olá${c.nome?", "+String(c.nome).split(" ")[0]:""}! Obrigado pela entrevista. Para seguir no processo seletivo, faça seu cadastro pelo link abaixo (envie fotos ou PDFs dos documentos — o sistema preenche os dados):\n${linkConvite(c.conviteId)}`;
   const whats=(c)=>{ const tel=soDigitos(c.tel); window.open("https://wa.me/"+(tel?(tel.length<=11?"55"+tel:tel):"")+"?text="+encodeURIComponent(msgLink(c)),"_blank"); };
-  // ---------- consulta de processos (Escavador) ----------
-  const verificar=async(c,auto)=>{ const cad=cadDe(c); const cpf=cad&&(cad.cpf||(cad.ficha||{}).cpf); if(!cpf){ if(!auto) toast("O candidato ainda não informou o CPF"); return; }
-    setVerificando(c.id);
-    try{ const user=window.__WPAUTH&&window.__WPAUTH.currentUser; const token=user? await user.getIdToken().catch(()=>""): "";
-      const r=await fetch("/api/antecedentes",{ method:"POST", headers:{"Content-Type":"application/json", ...(token?{Authorization:"Bearer "+token}:{})}, body:JSON.stringify({ cpf }) });
-      let j=null; try{ j=await r.json(); }catch(e){}
-      if(r.status===501){ setSemEscavador((j&&j.erro)||"Consulta não configurada"); }
-      else if(!r.ok){ if(!auto) toast((j&&j.erro)||("Erro "+r.status)); }
-      else { const res={ em:Date.now(), por:eu, total:j.total||0, criminais:j.criminais||[], outros:j.outros||0, maisPaginas:!!j.maisPaginas };
-        await salvarCand(c.id,{verificacao:res}, res.criminais.length? "Consulta de processos: "+res.criminais.length+" processo(s) criminal(is) encontrado(s)" : "Consulta de processos: nada consta na esfera criminal"); }
-    }catch(e){ if(!auto) toast("Não foi possível consultar agora."); }
-    setVerificando(""); };
-  const autoFeitos=useRef({});
-  useEffect(()=>{ if(!pode || !cands || semEscavador) return;
-    const alvo=cands.find(c=>!c.verificacao && !autoFeitos.current[c.id] && etapaDe(c)==="cadastro" && rsVerificaCargo(cfg,c.cargo) && (cadDe(c)||{}).rsConsultaAutorizadaEm);
-    if(alvo){ autoFeitos.current[alvo.id]=1; verificar(alvo,true); }
-  },[cands,cadastrosRS,cfg.verificar,semEscavador]);   // eslint-disable-line
   // ---------- decisões ----------
   const agendarTeste=async({c,data,unidade,obs})=>{ if(await salvarCand(c.id,{etapa:"teste", teste:{data,unidade,obs:obs||""}},"Teste agendado para "+(data?new Date(data).toLocaleString("pt-BR"):"—")+" em "+unidadeNome(unidade,unidades))){ toast("Teste agendado"); setAcao(null); setAbertoId(null); } };
   const aprovar=async({c,admissao,salario})=>{ const cad=cadDe(c); if(!cad){ toast("O candidato ainda não preencheu o cadastro pelo link."); return; }
@@ -5100,9 +5078,6 @@ function RSPage(){
   const vis=todos.filter(c=> (filtro==="andamento" ? ["entrevistado","cadastro","teste"].includes(c._etapa) : filtro==="todos" ? true : c._etapa===filtro) && normTxt(c.nome+" "+(c.cargo||"")+" "+(c.tel||"")).includes(normTxt(q)));
   const aberto=abertoId && todos.find(c=>c.id===abertoId);
   const ETAPA=Object.fromEntries(RS_ETAPAS.map(([k,l,t])=>[k,[l,t]]));
-  const BadgeVerif=({c})=>{ const v=c.verificacao; if(!rsVerificaCargo(cfg,c.cargo)) return null;
-    if(v) return v.criminais&&v.criminais.length ? <Badge tone="red">⚠ {v.criminais.length} processo(s) criminal(is)</Badge> : <Badge tone="green">Nada consta (criminal)</Badge>;
-    if(c._etapa==="cadastro") return <Badge tone="slate">{verificando===c.id?"Consultando processos…":"Consulta de processos pendente"}</Badge>; return null; };
   const proxAcao=(c)=>{
     if(c._etapa==="entrevistado") return c.conviteId ? <Btn size="sm" variant="soft" icon={I.arrow} onClick={()=>whats(c)}>Reenviar link</Btn> : <Btn size="sm" icon={I.link} onClick={()=>gerarLink(c)}>Enviar link de cadastro</Btn>;
     if(c._etapa==="cadastro") return <Btn size="sm" icon={I.calendar} onClick={()=>setAcao({tipo:"teste",c,data:"",unidade:c.unidade,obs:""})}>Agendar teste</Btn>;
@@ -5131,9 +5106,7 @@ function RSPage(){
     <div className="flex flex-wrap items-center gap-2">
       {[["andamento","Em andamento"],["todos","Todos"]].map(([k,l])=><button key={k} onClick={()=>setFiltro(k)} className={cx("px-3 py-1.5 rounded-full text-sm font-semibold", filtro===k?"bg-slate-900 text-white":"bg-white border border-slate-200 text-slate-600 hover:bg-slate-50")}>{l}</button>)}
       <div className="flex-1 min-w-[180px]"><Input placeholder="Buscar por nome, cargo ou telefone" value={q} onChange={e=>setQ(e.target.value)} aria-label="Buscar candidato"/></div>
-      <Btn size="sm" variant="ghost" icon={I.gear} onClick={()=>setAcao({tipo:"config"})}>Configurar</Btn>
     </div>
-    {semEscavador && <div className="p-3 rounded-xl bg-amber-50 text-amber-800 text-sm">A consulta de processos ainda não está ativa: {semEscavador}</div>}
     {cands==null ? <Card className="p-10 text-center"><div className="w-8 h-8 mx-auto rounded-full border-2 border-slate-200 border-t-brand-600 animate-spin"/></Card>
     : vis.length===0 ? <Card className="p-8 text-center text-sm text-slate-400">{todos.length?"Nenhum candidato neste filtro.":"Nenhum candidato ainda. Depois da entrevista, clique em Registrar entrevista."}</Card>
     : <div className="space-y-2">{vis.map(c=>{ const [el,et]=ETAPA[c._etapa]||[c._etapa,"slate"]; const u=unid(c.unidade);
@@ -5144,7 +5117,7 @@ function RSPage(){
             <div className="text-xs text-slate-500">{c.cargo||"—"}{c.turno&&c.turno.nome&&c.turno.nome!=="Padrão"?" · "+c.turno.nome:""}{c.turno&&c.turno.horario?" · "+c.turno.horario:""} · {u?u.nome:"—"}</div>
             <div className="text-xs text-slate-400">Entrevista {c.entrevistaEm?fmtDataBR(c.entrevistaEm):"—"}{c.teste&&c.teste.data&&c._etapa==="teste"?" · teste "+new Date(c.teste.data).toLocaleString("pt-BR",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}):""}{c.decisao&&c.decisao.motivo?" · "+c.decisao.motivo:""}</div>
           </button>
-          <div className="flex flex-col items-end gap-1"><Badge tone={et}>{c._etapa==="entrevistado"&&c.conviteId?"Aguardando cadastro":el}</Badge><BadgeVerif c={c}/></div>
+          <div className="flex flex-col items-end gap-1"><Badge tone={et}>{c._etapa==="entrevistado"&&c.conviteId?"Aguardando cadastro":el}</Badge></div>
         </div>
         <div className="flex flex-wrap gap-2 justify-end mt-2">
           <Btn size="sm" variant="ghost" icon={I.eye} onClick={()=>setAbertoId(c.id)}>Detalhes</Btn>{proxAcao(c)}
@@ -5182,7 +5155,7 @@ function RSPage(){
       {linkPronto && <div className="p-6 text-center">
         <div className="w-14 h-14 mx-auto rounded-2xl grad-brand grid place-items-center text-white mb-3"><Icon d={I.link} className="w-7 h-7"/></div>
         <h3 className="text-lg font-bold text-slate-900">Link de cadastro pronto</h3>
-        <p className="text-sm text-slate-500 mt-1">Envie para {linkPronto.nome}. Quando o cadastro chegar, ele aparece aqui como <b>Cadastro recebido</b>{rsVerificaCargo(cfg,linkPronto.cargo)?" e a consulta de processos é feita automaticamente":""}.</p>
+        <p className="text-sm text-slate-500 mt-1">Envie para {linkPronto.nome}. Quando o cadastro chegar, ele aparece aqui como <b>Cadastro recebido</b>.</p>
         <div className="my-4 p-3 rounded-xl bg-slate-50 text-xs font-mono text-slate-600 break-all">{linkConvite(linkPronto.conviteId)}</div>
         <div className="flex gap-2"><Btn variant="ghost" className="flex-1" icon={I.copy} onClick={()=>{ copyText(msgLink(linkPronto)); toast("Mensagem copiada"); }}>Copiar mensagem</Btn>
           <Btn className="flex-1" icon={I.arrow} onClick={()=>whats(linkPronto)}>Enviar no WhatsApp</Btn></div>
@@ -5191,7 +5164,7 @@ function RSPage(){
 
     {/* ---------- detalhes do candidato ---------- */}
     <Modal open={!!aberto} onClose={()=>setAbertoId(null)} wide>
-      {aberto && (()=>{ const c=aberto; const cad=cadDe(c); const [el,et]=ETAPA[c._etapa]||[c._etapa,"slate"]; const u=unid(c.unidade); const v=c.verificacao;
+      {aberto && (()=>{ const c=aberto; const cad=cadDe(c); const [el,et]=ETAPA[c._etapa]||[c._etapa,"slate"]; const u=unid(c.unidade);
         return <div className="p-6 space-y-4">
           <div className="flex items-start gap-3">
             <Avatar name={c.nome} src={cad&&cad.foto} size="w-12 h-12"/>
@@ -5218,19 +5191,6 @@ function RSPage(){
                 <Btn size="sm" variant="soft" icon={I.copy} onClick={()=>{ copyText(msgLink(c)); toast("Mensagem copiada"); }}>Copiar link</Btn><Btn size="sm" icon={I.arrow} onClick={()=>whats(c)}>WhatsApp</Btn></div>
               : <Btn size="sm" icon={I.link} onClick={()=>gerarLink(c)}>Enviar link de cadastro</Btn>}
           </div>
-          {rsVerificaCargo(cfg,c.cargo) && <div className={cx("p-4 rounded-2xl border", v&&v.criminais&&v.criminais.length?"border-rose-200 bg-rose-50/40":"border-slate-200")}>
-            <div className="flex items-center justify-between gap-2 mb-1"><div className="text-xs font-bold text-slate-400 uppercase">Processos judiciais públicos (Escavador)</div>
-              {cad && <Btn size="sm" variant="ghost" icon={I.refresh} disabled={verificando===c.id} onClick={()=>verificar(c)}>{verificando===c.id?"Consultando…":v?"Consultar de novo":"Consultar agora"}</Btn>}</div>
-            {!cad ? <p className="text-sm text-slate-500">A consulta é feita quando o candidato envia o cadastro com o CPF.</p>
-            : !cad.rsConsultaAutorizadaEm ? <p className="text-sm text-amber-700">O candidato não autorizou a consulta no cadastro (link gerado antes de a consulta ser ativada).</p>
-            : !v ? <p className="text-sm text-slate-500">Ainda não consultado.</p>
-            : <>
-              {v.criminais.length ? <div className="text-sm font-bold text-rose-700 mb-2">⚠ {v.criminais.length} processo(s) de natureza criminal em que o CPF aparece como parte acusada/investigada</div>
-                : <div className="text-sm font-bold text-emerald-700 mb-1">Nada consta na esfera criminal para este CPF</div>}
-              {v.criminais.length>0 && <div className="space-y-1.5">{v.criminais.map((p,i)=><div key={i} className="text-xs p-2 rounded-lg bg-white border border-rose-100"><b>{p.classe||"Processo"}</b>{p.assunto?" — "+p.assunto:""}<div className="text-slate-500">{[p.tribunal,p.numero,p.tipo,p.inicio&&("início "+fmtDataBR(String(p.inicio).slice(0,10))),p.status].filter(Boolean).join(" · ")}</div></div>)}</div>}
-              <p className="text-[11px] text-slate-400 mt-2">Consultado em {new Date(v.em).toLocaleString("pt-BR")} · {v.total} processo(s) no total ({v.outros} de outras áreas). Resultado indicativo: confira o processo antes de qualquer decisão.</p>
-            </>}
-          </div>}
           {(c.teste||c.decisao) && <div className="p-4 rounded-2xl border border-slate-200 text-sm space-y-1">
             {c.teste && <div><b>Teste:</b> {c.teste.data?new Date(c.teste.data).toLocaleString("pt-BR"):"—"} · {unidadeNome(c.teste.unidade,unidades)}{c.teste.obs?" · "+c.teste.obs:""}</div>}
             {c.decisao && c.decisao.motivo && <div className="text-rose-700"><b>Declinado:</b> {c.decisao.motivo}{c.decisao.obs?" — "+c.decisao.obs:""}</div>}
@@ -5272,21 +5232,6 @@ function RSPage(){
           <div className="grid gap-3"><Field label="Motivo *"><Select value={acao.motivo} onChange={e=>setAcao({...acao,motivo:e.target.value})} aria-label="Motivo"><option value="">Escolha…</option>{RS_MOTIVOS.map(m=><option key={m}>{m}</option>)}</Select></Field>
             <Field label="Detalhes (opcional)"><Input value={acao.obs} onChange={e=>setAcao({...acao,obs:e.target.value})}/></Field></div>
           <div className="flex gap-2 mt-4"><Btn variant="ghost" onClick={()=>setAcao(null)}>Cancelar</Btn><Btn className="flex-1" variant="danger" icon={I.x} disabled={!acao.motivo} onClick={()=>declinar(acao)}>Declinar</Btn></div>
-        </>}
-        {acao.tipo==="config" && <>
-          <h3 className="text-lg font-bold text-slate-900 mb-3">Configurar R&S</h3>
-          <label className="flex items-start gap-2 text-sm text-slate-700"><input type="checkbox" checked={cfg.verificar!==false} onChange={e=>setRsCfg({...cfg,verificar:e.target.checked})} className="mt-0.5 w-4 h-4 accent-green-700"/>
-            <span><b>Consultar processos judiciais públicos (Escavador)</b> quando o cadastro chegar. O link pede a autorização do candidato.</span></label>
-          {cfg.verificar!==false && <div className="mt-3">
-            <div className="text-xs font-bold text-slate-400 uppercase mb-1">Aplicar nos cargos</div>
-            <label className="flex items-center gap-2 text-sm mb-1"><input type="radio" checked={!Array.isArray(cfg.cargosVerificar)} onChange={()=>setRsCfg({...cfg,cargosVerificar:null})}/>Todos os cargos</label>
-            <label className="flex items-center gap-2 text-sm"><input type="radio" checked={Array.isArray(cfg.cargosVerificar)} onChange={()=>setRsCfg({...cfg,cargosVerificar:[]})}/>Só nos cargos selecionados</label>
-            {Array.isArray(cfg.cargosVerificar) && <div className="grid grid-cols-2 gap-1 mt-2 pl-5">{cargosLista.map(cg=><label key={cg} className="flex items-center gap-1.5 text-sm"><input type="checkbox" checked={cfg.cargosVerificar.includes(cg)} onChange={e=>setRsCfg({...cfg,cargosVerificar:e.target.checked?[...cfg.cargosVerificar,cg]:cfg.cargosVerificar.filter(x=>x!==cg)})}/>{cg}</label>)}</div>}
-            <div className="mt-3 p-3 rounded-xl bg-amber-50 text-amber-900 text-xs leading-relaxed"><b>Atenção (Justiça do Trabalho):</b> o TST (Tema 1, 2017) considera a exigência de antecedentes criminais discriminatória e passível de dano moral, mesmo que o candidato não seja contratado, quando não houver previsão em lei ou justificativa pela natureza da função ou fidúcia especial (ex.: quem lida com valores, armas ou informações sigilosas). Prefira aplicar só nos cargos que justificam e use o resultado com cautela: ele é indicativo e pode trazer homônimos ou processos já encerrados.</div>
-            <p className="text-xs text-slate-500 mt-2">Requer o token da API do Escavador na Vercel (<code>ESCAVADOR_TOKEN</code>). Cada consulta é cobrada pelo Escavador.</p>
-          </div>}
-          <p className="text-xs text-slate-500 mt-3">Acesso: só administradores e logins com o papel <b>R&S</b> (crie em Gerentes & acessos) veem esta aba.</p>
-          <div className="flex justify-end mt-4"><Btn onClick={()=>setAcao(null)}>Pronto</Btn></div>
         </>}
       </div>}
     </Modal>
@@ -7518,7 +7463,6 @@ function ConviteCadastro({onClose}){
   const [prog,setProg]=useState({feito:0,total:0});
   const [erro,setErro]=useState("");
   const [aceite,setAceite]=useState(false);
-  const [aceiteConsulta,setAceiteConsulta]=useState(false);   // R&S: autorização da consulta de processos públicos
   // Rascunho: restaura o que a pessoa já tinha feito (a página pode recarregar ao voltar da galeria/câmera)
   const chaveRasc="convite_"+token;
   const [rascOk,setRascOk]=useState(false);
@@ -7526,7 +7470,7 @@ function ConviteCadastro({onClose}){
   useEffect(()=>{ let vivo=true;
     rascunho.ler(chaveRasc).then(r=>{ if(!vivo) return;
       if(r && Date.now()-(r.em||0)<14*864e5){
-        setEtapa(r.etapa||"inicio"); setAceiteFuncao(!!r.aceiteFn); setArqs(r.arqs||{}); setFoto(r.foto||""); setF(r.f||{}); setAuto(r.auto||{}); setAvisos(r.avisos||[]); setAceite(!!r.aceite); setAceiteConsulta(!!r.aceiteConsulta);
+        setEtapa(r.etapa||"inicio"); setAceiteFuncao(!!r.aceiteFn); setArqs(r.arqs||{}); setFoto(r.foto||""); setF(r.f||{}); setAuto(r.auto||{}); setAvisos(r.avisos||[]); setAceite(!!r.aceite);
         if(Object.keys(r.arqs||{}).length || Object.keys(r.f||{}).length) setRecuperado(true);
       }
       setRascOk(true); });
@@ -7534,11 +7478,11 @@ function ConviteCadastro({onClose}){
   },[chaveRasc]);
   const etapaRasc = etapa==="lendo" ? "docs" : etapa==="enviando" ? "termo" : etapa;
   const rascAtual=useRef(null);
-  rascAtual.current={ etapa:etapaRasc, aceiteFn, arqs, foto, f, auto, avisos, aceite, aceiteConsulta, em:Date.now() };
+  rascAtual.current={ etapa:etapaRasc, aceiteFn, arqs, foto, f, auto, avisos, aceite, em:Date.now() };
   useEffect(()=>{ if(!rascOk || !token) return;
     if(etapa==="ok"){ rascunho.apagar(chaveRasc); return; }
     const t=setTimeout(()=>rascunho.gravar(chaveRasc,rascAtual.current),250); return ()=>clearTimeout(t);
-  },[rascOk,etapaRasc,aceiteFn,arqs,foto,f,auto,avisos,aceite,aceiteConsulta]);
+  },[rascOk,etapaRasc,aceiteFn,arqs,foto,f,auto,avisos,aceite]);
   useEffect(()=>{ if(!rascOk || !token) return;   // ao sair para a galeria/câmera, grava na hora
     const salvar=()=>{ if(document.visibilityState!=="visible" && rascAtual.current.etapa!=="ok") rascunho.gravar(chaveRasc,{...rascAtual.current,em:Date.now()}); };
     document.addEventListener("visibilitychange",salvar); window.addEventListener("pagehide",salvar);
@@ -7590,8 +7534,6 @@ function ConviteCadastro({onClose}){
   const faltaForm=obrigForm.filter(([k])=>!String(f[k]||"").trim()).map(([,l])=>l);
   if(tipo!=="pj" && !foto) faltaForm.push("selfie");
   if(!aceite) faltaForm.push("aceite LGPD");
-  const pedeConsulta=!!(conv && conv.rs && conv.verificar);
-  if(pedeConsulta && !aceiteConsulta) faltaForm.push("autorização da consulta");
   const enviar=async(assinaturaTermo)=>{
     setEtapa("enviando"); setErro("");
     try{
@@ -7608,7 +7550,7 @@ function ConviteCadastro({onClose}){
       const endereco=[f.logradouro,f.numero,f.complemento,f.bairro,f.cidade&&(f.cidade+(f.uf?"/"+f.uf:"")),f.cep].filter(Boolean).join(", ");
       const comum={ tel:f.telefone||"", email:(f.email||"").trim().toLowerCase(), tipoPix:f.tipoPix||"CPF", pix:f.pix||"", banco:[f.banco,f.agencia&&("ag. "+f.agencia),f.conta&&("c/c "+f.conta)].filter(Boolean).join(" "),
         endereco, ficha, docs, origem:"convite", conviteId:token, status:"ativo", criadoEm:Date.now() };
-      if(conv.rs){ comum.rsPendente=true; comum.rsCandidato=conv.candidatoId||""; if(pedeConsulta) comum.rsConsultaAutorizadaEm=Date.now(); }
+      if(conv.rs){ comum.rsPendente=true; comum.rsCandidato=conv.candidatoId||""; }
       if(temVaga){
         comum.aceiteFuncao={ cargo:vaga.cargo, turno:vaga.turno||"", horario:vaga.horario||"", descritivo:vaga.descritivo, aceitoEm:Date.now(), nome:nomePessoa };
         if(vaga.turno) comum.turno=vaga.turno; if(vaga.horario) comum.horario=vaga.horario;
@@ -7740,8 +7682,6 @@ function ConviteCadastro({onClose}){
     </div>}
     <label className="flex items-start gap-2 text-sm text-slate-600"><input type="checkbox" checked={aceite} onChange={e=>setAceite(e.target.checked)} className="mt-0.5 w-4 h-4 accent-green-700"/>
       <span>Autorizo o uso dos meus dados e documentos para fins de cadastro, admissão e cumprimento de obrigações legais (LGPD).</span></label>
-    {pedeConsulta && <label className="flex items-start gap-2 text-sm text-slate-600 mt-2"><input type="checkbox" checked={aceiteConsulta} onChange={e=>setAceiteConsulta(e.target.checked)} className="mt-0.5 w-4 h-4 accent-green-700"/>
-      <span>Autorizo a consulta de processos judiciais públicos vinculados ao meu CPF, apenas para este processo seletivo.</span></label>}
     {erro && <p className="text-sm text-rose-500 mt-3">{erro}</p>}
     {faltaForm.length>0 && <p className="text-xs text-slate-400 mt-3">Falta: {faltaForm.join(", ")}</p>}
     <div className="flex gap-2 mt-4"><Btn variant="ghost" onClick={()=>setEtapa("docs")}>Voltar</Btn><Btn className="flex-1" size="lg" icon={I.arrow} disabled={faltaForm.length>0} onClick={()=>{ setErro(""); setEtapa("termo"); }}>Continuar</Btn></div>
