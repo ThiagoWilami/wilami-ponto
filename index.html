@@ -463,7 +463,7 @@ function compressImg(dataUrl, max=640, q=0.62){
 }
 // Copiar texto — funciona também em file:// e navegadores sem clipboard API
 function copyText(t){
-  try{ if(navigator.clipboard && window.isSecureContext){ navigator.clipboard.writeText(t); return true; } }catch{}
+  try{ if(navigator.clipboard && window.isSecureContext){ navigator.clipboard.writeText(t).catch(()=>{}); return true; } }catch{}
   try{ const ta=document.createElement("textarea"); ta.value=t; ta.setAttribute("readonly",""); ta.style.position="fixed"; ta.style.top="-1000px"; ta.style.opacity="0"; document.body.appendChild(ta); ta.focus(); ta.select(); ta.setSelectionRange(0,t.length); const okc=document.execCommand("copy"); document.body.removeChild(ta); return okc; }catch{ return false; }
 }
 
@@ -689,7 +689,7 @@ const escalaInicial = () => {
 // Esses documentos não têm o campo "ts" (é guardado como "_ts"), então NÃO aparecem na lista de
 // ajustes de ponto, que é ordenada por "ts".
 const COL_HOSPEDEIRA="ajustes";
-const COL_VIRTUAL={ arquivos:["arq_","arquivo"], arquivos_partes:["arqp_","arquivo_parte"], acessosColab:["pin_","pin"], convites:["conv_","convite"], termos:["ter_","termo_pedido"], entregas:["ent_","entrega"], assinaturas:["ass_","assinatura_env"], assinaturas_provas:["assp_","assinatura_prova"], notas:["nf_","nota_fiscal"] };
+const COL_VIRTUAL={ arquivos:["arq_","arquivo"], arquivos_partes:["arqp_","arquivo_parte"], acessosColab:["pin_","pin"], convites:["conv_","convite"], termos:["ter_","termo_pedido"], entregas:["ent_","entrega"], assinaturas:["ass_","assinatura_env"], assinaturas_provas:["assp_","assinatura_prova"], notas:["nf_","nota_fiscal"], candidatos:["cand_","candidato"] };
 const _vEntrada=(nome,data)=>{ const o={...data, _t:COL_VIRTUAL[nome][1]}; if("ts" in o){ o._ts=o.ts; delete o.ts; } return o; };
 const _vSaida=(data)=>{ const o={...(data||{})}; if("_ts" in o){ o.ts=o._ts; delete o._ts; } delete o._t; return o; };
 function nCol(nome){
@@ -960,7 +960,7 @@ const PERMS_INIT = {
 };
 const CAPS = [["escala","Editar escala"],["colaboradores","Gerir colaboradores"],["financeiro","Relatórios financeiros"],["documentos","Documentos e dossiê"],["unidades","Gerir unidades"],["ajustes","Aprovar ajustes de ponto"],["equipe","Gerir equipe"],["excluir","Excluir/apagar dados"]];
 // "diretor" e "financeira" (Diretora Financeira) são os únicos que enxergam o pagamento SIGILOSO da diretoria.
-const PAPEIS = { proprietario:"Proprietário", gerente:"Gerente", rh_financeiro:"RH / Financeiro", diretor:"Diretor", financeira:"Diretora Financeira", contabilidade:"Contabilidade (só a aba Contabilidade)", pcmso:"PAROMED / PCMSO (só a aba PCMSO)", financeiro:"Financeiro (só a aba Notas fiscais PJ)" };
+const PAPEIS = { proprietario:"Proprietário", gerente:"Gerente", rh_financeiro:"RH / Financeiro", diretor:"Diretor", financeira:"Diretora Financeira", contabilidade:"Contabilidade (só a aba Contabilidade)", pcmso:"PAROMED / PCMSO (só a aba PCMSO)", financeiro:"Financeiro (só a aba Notas fiscais PJ)", rs:"R&S — Recrutamento (só a aba Recrutamento & Seleção)" };
 
 // Coleção PÚBLICA de auto-cadastros (feitos pelo celular, sem login).
 // Cada cadastro é um documento próprio → o celular só CRIA (não sobrescreve a base).
@@ -1068,7 +1068,11 @@ function StoreProvider({children}) {
   const [unidades,setUnidades]=usePersist("unidades",SEED_UNIDADES);
   const [cltsBase,setClts,cltsPronto]=usePersist("clts",SEED_CLTS);
   const [freelasBase,setFreelas,freelasPronto]=usePersist("freelas",SEED_FREELAS);
-  const [cadAuto,cadOps,cadPronto]=useCadastros();
+  const [cadTodos,cadOps,cadPronto]=useCadastros();
+  // Candidatos do R&S (link de cadastro do recrutamento) só viram colaborador depois de aprovados
+  const cadAuto=useMemo(()=>cadTodos.filter(c=>!c.rsPendente),[cadTodos]);
+  const cadastrosRS=useMemo(()=>cadTodos.filter(c=>c.rsCandidato),[cadTodos]);
+  const [rsCfg,setRsCfg]=usePersist("rsCfg",{});
   const [atestados,atestadosOps]=useAtestados();
   const enviarAtestado=(obj)=>{ if(window.__WPDB) return atestadosOps.add(obj); return Promise.resolve(); };
   const [ajustes,ajustesOps]=useAjustes();
@@ -1120,7 +1124,7 @@ function StoreProvider({children}) {
   const _capitaliza=(s)=> s ? s.charAt(0).toUpperCase()+s.slice(1) : s;
   const _nomeLocal = meuEmail ? _capitaliza(meuEmail.split("@")[0]) : "";
   const meuNome = (meuBind&&meuBind.nome) || _nomeLocal || (semAuth?"Gestor":"Usuário");
-  const meuPapel = semAuth ? "Proprietário" : (ehDono ? "Administrador" : ({contabilidade:"Contabilidade",pcmso:"PAROMED / PCMSO",financeiro:"Financeiro"}[meuBind&&meuBind.papel] || "Gerente"));
+  const meuPapel = semAuth ? "Proprietário" : (ehDono ? "Administrador" : ({contabilidade:"Contabilidade",pcmso:"PAROMED / PCMSO",financeiro:"Financeiro",rs:"R&S"}[meuBind&&meuBind.papel] || "Gerente"));
   const casaRestrita = (!ehDono && meuBind && meuBind.unidade && meuBind.unidade!=="todas") ? meuBind.unidade : null;
   const papelKey = (meuBind&&meuBind.papel) || (semAuth?"proprietario":(ehDono?"proprietario":""));
   // Sigilo da diretoria: quem enxerga o valor do pagamento marcado como sigiloso.
@@ -1407,7 +1411,7 @@ function StoreProvider({children}) {
   const value={ unidades:unidadesVis,salvarUnidade,excluirUnidade, clts:cltsVis,freelas:freelasVis,freelasComPagamentos:freelasPagVis,salvarClt,salvarFreela,excluirColab,cadastrarPublico, anexarDoc,
     escala,setEscala, escalaOv,setEscalaOv, registros:registrosVis,addRegistro, pontoHist, freelancerEscaladoHoje, valorFreela, setFreelaAjuste, cltExtraAjuste,setCltExtra, gorjetasCLT,setGorjetaCLT, pagamentosFreela,addPagamentoFreela,removePagamentoFreela, pagamentosCLT,addPagamentoCLT,removePagamentoCLT, faltaDescontoDesde,setFaltaDescontoDesde, vtDiaPagamento,setVtDiaPagamento,
     cargosFreela,salvarCargoFreela,excluirCargoFreela, atestados,enviarAtestado, ajustes,enviarAjuste,resolverAjuste,
-    dossie,getDossie,addFalta,addFeedback,addAnexo, perfil,setPerfil, perms,setPerms, can, envContab,setEnvContab, contabCfg,setContabCfg, finCfg,setFinCfg, pcmso,setPcmso,
+    dossie,getDossie,addFalta,addFeedback,addAnexo, perfil,setPerfil, perms,setPerms, can, envContab,setEnvContab, contabCfg,setContabCfg, finCfg,setFinCfg, pcmso,setPcmso, cadastrosRS, cadOpsRS:cadOps, rsCfg,setRsCfg,
     clientes,clienteAtivo,tenantAtual,criarCliente,trocarCliente,
     acesso,donos,setDonos,acessos,acessosOps,
     marca,setMarca, pjs:(casaRestrita!=null?pjsTodos.filter(x=>x.unidade==null||x.unidade==="todas"||_mesmaCasa(x.unidade)):pjsTodos), salvarPj,excluirPj, pagamentosPJ,addPagamentoPJ,removePagamentoPJ,
@@ -5006,6 +5010,289 @@ function PrestadoresPJ(){
 }
 
 /* ============================ APP DO COLABORADOR — MEUS DOCUMENTOS (CPF/CNPJ + PIN) ============================ */
+/* ============================ RECRUTAMENTO & SELEÇÃO ============================ */
+// Funil: entrevista (com notas) → link de cadastro → cadastro recebido (+ consulta de processos) → teste → aprovado/declinado.
+// O cadastro feito pelo link fica oculto em Colaboradores até a aprovação (rsPendente); ao aprovar, vira CLT "aguardando admissão".
+const RS_ETAPAS=[["entrevistado","Entrevistado","slate"],["cadastro","Cadastro recebido","blue"],["teste","Em teste","amber"],["aprovado","Aprovado","green"],["declinado","Declinado","red"]];
+const RS_CRITERIOS=[["comunicacao","Comunicação"],["experiencia","Experiência na função"],["postura","Postura e apresentação"],["atitude","Atitude e proatividade"],["disponibilidade","Disponibilidade de horário"]];
+const RS_MOTIVOS=["Reprovado no teste","Não compareceu ao teste","Desistiu da vaga","Aceitou outra proposta","Pretensão salarial acima da vaga","Horário incompatível","Distância / deslocamento","Perfil não aderente à vaga","Documentação incompleta","Vaga preenchida ou cancelada","Outro"];
+const RS_FONTES=["Indicação","Instagram","Facebook","Sites de vagas (Indeed, InfoJobs…)","WhatsApp","Placa na loja","Banco de talentos","Outro"];
+const rsNotaMedia=(c)=>{ const v=RS_CRITERIOS.map(([k])=>Number((c.notas||{})[k])||0).filter(Boolean); return v.length? Math.round(v.reduce((a,b)=>a+b,0)/v.length*10)/10 : null; };
+const rsVerificaCargo=(cfg,cargo)=> cfg.verificar!==false && (!Array.isArray(cfg.cargosVerificar) || cfg.cargosVerificar.includes(cargo));
+function Estrelas({v,onChange,label}){
+  return <div className="flex items-center gap-0.5" role="radiogroup" aria-label={label}>{[1,2,3,4,5].map(n=>
+    <button type="button" key={n} role="radio" aria-checked={Number(v)===n} aria-label={label+" "+n} disabled={!onChange} onClick={()=>onChange&&onChange(Number(v)===n?0:n)}
+      className={cx("text-xl leading-none px-0.5", n<=Number(v||0)?"text-amber-400":"text-slate-200", onChange&&"hover:scale-110 transition")}>★</button>)}</div>;
+}
+function RSPage(){
+  const { unidades, cargosLista, cargoInfo, cadastrosRS, cadOpsRS, rsCfg, setRsCfg, acesso, marca } = useStore();
+  const toast=useContext(ToastCtx);
+  const pode = !acesso || acesso.ehDono || acesso.papelKey==="rs";
+  const [cands,setCands]=useState(null);
+  useEffect(()=>{ if(!pode) return; if(!window.__WPDB){ setCands([]); return; }
+    try{ return nCol("candidatos").onSnapshot(function(s){ const a=[]; s.forEach(d=>a.push({...d.data(),id:d.id})); a.sort((x,y)=>(y.criadoEm||0)-(x.criadoEm||0)); setCands(a); }, function(){ setCands([]); }); }catch(e){ setCands([]); }
+  },[pode]);
+  const cfg=rsCfg||{};
+  const [filtro,setFiltro]=useState("andamento"); const [q,setQ]=useState("");
+  const [form,setForm]=useState(null);       // novo/editar candidato
+  const [abertoId,setAbertoId]=useState(null);
+  const [linkPronto,setLinkPronto]=useState(null);
+  const [verCad,setVerCad]=useState(null);
+  const [acao,setAcao]=useState(null);       // { tipo:"teste"|"aprovar"|"declinar", c, ... }
+  const [verificando,setVerificando]=useState("");
+  const [semEscavador,setSemEscavador]=useState("");
+  const eu=(acesso&&acesso.email)||(((window.__WPAUTH&&window.__WPAUTH.currentUser)||{}).email)||"";
+  const cadDe=(c)=> c ? (cadastrosRS.find(x=>x.rsCandidato===c.id) || (c.conviteId && cadastrosRS.find(x=>x.conviteId===c.conviteId)) || null) : null;
+  const etapaDe=(c)=> (c.etapa||"entrevistado")==="entrevistado" && cadDe(c) ? "cadastro" : (c.etapa||"entrevistado");
+  const salvarCand=async(id,patch,txt)=>{ const atual=(cands||[]).find(x=>x.id===id)||{};
+    const hist=txt?[...(atual.historico||[]),{em:Date.now(),por:eu,txt}]:atual.historico;
+    try{ await nCol("candidatos").doc(id).set({...patch, ...(hist?{historico:hist}:{}), atualizadoEm:Date.now()},{merge:true}); return true; }
+    catch(e){ toast("Não foi possível salvar: "+erroBanco(e)); return false; } };
+  const turnoDe=(cargo,idx)=>{ const tns=turnosDe(cargoInfo(cargo)); return tns[Number(idx)||0]||null; };
+  // ---------- link de cadastro (mesmo fluxo dos convites, marcado como R&S) ----------
+  const gerarLink=async(c)=>{
+    const ci=cargoInfo(c.cargo); const tns=turnosDe(ci); const tn=tns[Number(c.turnoIdx)||0]||{};
+    const vaga = ci ? { cargo:ci.nome, setorNome:(SETOR_MAP[ci.setor]||{}).l||"", turno:tns.length>1||tn.nome!=="Padrão"?(tn.nome||""):"", escala:tn.escala?ESCALAS[tn.escala]||tn.escala:"", horario:tn.horario||"",
+      beneficios:ci.beneficios||"", requisitos:ci.requisitos||"", descritivo:ci.descritivo||"", unidadeNome:unidadeNome(c.unidade,unidades), salario:0, empresa:(marca&&marca.nome)||"WILAMI" } : null;
+    const token=gerarTokenConvite();
+    const doc={ vaga, tipo:"clt", nome:c.nome||"", tel:soDigitos(c.tel), unidade:c.unidade, cargo:c.cargo, servico:"", salario:Number(c.salario)||0, valor:0, status:"aberto",
+      criadoEm:Date.now(), expira:Date.now()+30*864e5, criadoPor:eu, rs:true, candidatoId:c.id, verificar:rsVerificaCargo(cfg,c.cargo) };
+    try{ await nCol("convites").doc(token).set(doc); await salvarCand(c.id,{conviteId:token, linkEm:Date.now()},"Link de cadastro gerado"); setLinkPronto({...c, conviteId:token}); }
+    catch(e){ toast("Não foi possível gerar o link: "+erroBanco(e)); } };
+  const msgLink=(c)=>`Olá${c.nome?", "+String(c.nome).split(" ")[0]:""}! Obrigado pela entrevista. Para seguir no processo seletivo, faça seu cadastro pelo link abaixo (envie fotos ou PDFs dos documentos — o sistema preenche os dados):\n${linkConvite(c.conviteId)}`;
+  const whats=(c)=>{ const tel=soDigitos(c.tel); window.open("https://wa.me/"+(tel?(tel.length<=11?"55"+tel:tel):"")+"?text="+encodeURIComponent(msgLink(c)),"_blank"); };
+  // ---------- consulta de processos (Escavador) ----------
+  const verificar=async(c,auto)=>{ const cad=cadDe(c); const cpf=cad&&(cad.cpf||(cad.ficha||{}).cpf); if(!cpf){ if(!auto) toast("O candidato ainda não informou o CPF"); return; }
+    setVerificando(c.id);
+    try{ const user=window.__WPAUTH&&window.__WPAUTH.currentUser; const token=user? await user.getIdToken().catch(()=>""): "";
+      const r=await fetch("/api/antecedentes",{ method:"POST", headers:{"Content-Type":"application/json", ...(token?{Authorization:"Bearer "+token}:{})}, body:JSON.stringify({ cpf }) });
+      let j=null; try{ j=await r.json(); }catch(e){}
+      if(r.status===501){ setSemEscavador((j&&j.erro)||"Consulta não configurada"); }
+      else if(!r.ok){ if(!auto) toast((j&&j.erro)||("Erro "+r.status)); }
+      else { const res={ em:Date.now(), por:eu, total:j.total||0, criminais:j.criminais||[], outros:j.outros||0, maisPaginas:!!j.maisPaginas };
+        await salvarCand(c.id,{verificacao:res}, res.criminais.length? "Consulta de processos: "+res.criminais.length+" processo(s) criminal(is) encontrado(s)" : "Consulta de processos: nada consta na esfera criminal"); }
+    }catch(e){ if(!auto) toast("Não foi possível consultar agora."); }
+    setVerificando(""); };
+  const autoFeitos=useRef({});
+  useEffect(()=>{ if(!pode || !cands || semEscavador) return;
+    const alvo=cands.find(c=>!c.verificacao && !autoFeitos.current[c.id] && etapaDe(c)==="cadastro" && rsVerificaCargo(cfg,c.cargo) && (cadDe(c)||{}).rsConsultaAutorizadaEm);
+    if(alvo){ autoFeitos.current[alvo.id]=1; verificar(alvo,true); }
+  },[cands,cadastrosRS,cfg.verificar,semEscavador]);   // eslint-disable-line
+  // ---------- decisões ----------
+  const agendarTeste=async({c,data,unidade,obs})=>{ if(await salvarCand(c.id,{etapa:"teste", teste:{data,unidade,obs:obs||""}},"Teste agendado para "+(data?new Date(data).toLocaleString("pt-BR"):"—")+" em "+unidadeNome(unidade,unidades))){ toast("Teste agendado"); setAcao(null); setAbertoId(null); } };
+  const aprovar=async({c,admissao,salario})=>{ const cad=cadDe(c); if(!cad){ toast("O candidato ainda não preencheu o cadastro pelo link."); return; }
+    const tn=c.turno||{}; const ci=cargoInfo(c.cargo)||{};
+    try{ await cadOpsRS.update(cad._docId, { rsPendente:false, rsAprovadoEm:Date.now(), cargo:c.cargo, setor:ci.setor||SETOR_POR_CARGO[c.cargo]||cad.setor||"salao", unidade:c.unidade,
+        ...(tn.nome?{turno:tn.nome}:{}), ...(tn.horario?{horario:tn.horario}:{}), ...(Number(salario)>0?{salario:Number(salario)}:{}), admissao:admissao||"" }); }
+    catch(e){ toast("Não foi possível liberar o cadastro: "+erroBanco(e)); return; }
+    if(await salvarCand(c.id,{etapa:"aprovado", aprovadoEm:Date.now(), decisao:{em:Date.now(),por:eu}},"Aprovado — enviado para Colaboradores CLT"+(admissao?" (admissão "+fmtDataBR(admissao)+")":""))){ toast(c.nome+" aprovado(a) e enviado(a) para Colaboradores CLT"); setAcao(null); setAbertoId(null); } };
+  const declinar=async({c,motivo,obs})=>{ if(!motivo){ toast("Escolha o motivo"); return; }
+    if(await salvarCand(c.id,{etapa:"declinado", decisao:{motivo,obs:obs||"",em:Date.now(),por:eu}},"Declinado: "+motivo+(obs?" — "+obs:""))){ toast("Candidato declinado"); setAcao(null); setAbertoId(null); } };
+  const reabrir=async(c)=>{ await salvarCand(c.id,{etapa:c.teste?"teste":"entrevistado", decisao:null},"Processo reaberto"); };
+  const excluir=async(c)=>{ if(!confirm("Excluir "+(c.nome||"o candidato")+" e os dados do cadastro? Esta ação não pode ser desfeita.")) return;
+    const cad=cadDe(c);
+    try{ if(cad && cad.rsPendente!==false) cadOpsRS.remove(cad._docId); await nCol("candidatos").doc(c.id).delete(); if(c.conviteId) nCol("convites").doc(c.conviteId).set({status:"cancelado"},{merge:true}).catch(()=>{}); setAbertoId(null); toast("Candidato excluído"); }
+    catch(e){ toast(erroBanco(e)); } };
+
+  if(!pode) return <Card className="p-10 text-center text-slate-500">A aba Recrutamento & Seleção é exclusiva do time de R&S.</Card>;
+  const todos=(cands||[]).map(c=>({...c, _etapa:etapaDe(c), _nota:rsNotaMedia(c)}));
+  const cont=(e)=>todos.filter(c=>c._etapa===e).length;
+  const vis=todos.filter(c=> (filtro==="andamento" ? ["entrevistado","cadastro","teste"].includes(c._etapa) : filtro==="todos" ? true : c._etapa===filtro) && normTxt(c.nome+" "+(c.cargo||"")+" "+(c.tel||"")).includes(normTxt(q)));
+  const aberto=abertoId && todos.find(c=>c.id===abertoId);
+  const ETAPA=Object.fromEntries(RS_ETAPAS.map(([k,l,t])=>[k,[l,t]]));
+  const BadgeVerif=({c})=>{ const v=c.verificacao; if(!rsVerificaCargo(cfg,c.cargo)) return null;
+    if(v) return v.criminais&&v.criminais.length ? <Badge tone="red">⚠ {v.criminais.length} processo(s) criminal(is)</Badge> : <Badge tone="green">Nada consta (criminal)</Badge>;
+    if(c._etapa==="cadastro") return <Badge tone="slate">{verificando===c.id?"Consultando processos…":"Consulta de processos pendente"}</Badge>; return null; };
+  const proxAcao=(c)=>{
+    if(c._etapa==="entrevistado") return c.conviteId ? <Btn size="sm" variant="soft" icon={I.arrow} onClick={()=>whats(c)}>Reenviar link</Btn> : <Btn size="sm" icon={I.link} onClick={()=>gerarLink(c)}>Enviar link de cadastro</Btn>;
+    if(c._etapa==="cadastro") return <Btn size="sm" icon={I.calendar} onClick={()=>setAcao({tipo:"teste",c,data:"",unidade:c.unidade,obs:""})}>Agendar teste</Btn>;
+    if(c._etapa==="teste") return <><Btn size="sm" variant="ghost" className="text-rose-600" icon={I.x} onClick={()=>setAcao({tipo:"declinar",c,motivo:"",obs:""})}>Reprovar</Btn><Btn size="sm" icon={I.check} onClick={()=>setAcao({tipo:"aprovar",c,admissao:"",salario:c.salario||""})}>Aprovar</Btn></>;
+    return null; };
+  const novoForm=()=>{ const c0=cargosLista[0]; const ci=cargoInfo(c0); setForm({ nome:"", tel:"", email:"", cargo:c0, turnoIdx:0, unidade:unidades[0]?.id, fonte:"", entrevistaEm:hojeStr(), notas:{}, pretensao:"", salario:ci&&ci.salarioBase?ci.salarioBase:"", obs:"" }); };
+  const salvarForm=async()=>{ const f=form; if(!String(f.nome||"").trim()){ toast("Informe o nome"); return; } if(soDigitos(f.tel).length<10){ toast("Informe o WhatsApp com DDD"); return; }
+    const dados={ nome:f.nome.trim(), tel:f.tel, email:(f.email||"").trim(), cargo:f.cargo, turnoIdx:Number(f.turnoIdx)||0, turno:turnoDe(f.cargo,f.turnoIdx)||(String(f.horario||"").trim()?{nome:"",horario:String(f.horario).trim()}:null), unidade:f.unidade, fonte:f.fonte||"", entrevistaEm:f.entrevistaEm||"",
+      entrevistador:f.entrevistador||eu, notas:f.notas||{}, pretensao:f.pretensao||"", salario:f.salario||"", obs:f.obs||"" };
+    if(f.id){ if(await salvarCand(f.id,dados,"Dados da entrevista atualizados")){ toast("Candidato atualizado"); setForm(null); } return; }
+    const ref=nCol("candidatos").doc();
+    try{ await ref.set({...dados, etapa:"entrevistado", criadoEm:Date.now(), criadoPor:eu, historico:[{em:Date.now(),por:eu,txt:"Entrevista registrada"}]}); setForm(null); toast("Candidato registrado");
+      gerarLink({...dados,id:ref.id}); }
+    catch(e){ toast("Não foi possível salvar: "+erroBanco(e)); } };
+  const unid=(id)=>(unidades||[]).find(u=>String(u.id)===String(id));
+
+  return <div className="space-y-4 fade-in">
+    <PageHeader title="Recrutamento & Seleção" sub="Entrevista → link de cadastro → teste → aprovação. Aprovados entram sozinhos em Colaboradores CLT.">
+      <Btn icon={I.plus} onClick={novoForm}>Registrar entrevista</Btn>
+    </PageHeader>
+    {/* funil */}
+    <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+      {RS_ETAPAS.map(([k,l,t],i)=><button key={k} onClick={()=>setFiltro(k)} className={cx("p-3 rounded-2xl border text-left transition", filtro===k?"border-brand-500 ring-2 ring-brand-200 bg-white":"border-slate-200 bg-white hover:border-slate-300")}>
+        <div className="text-[11px] font-bold uppercase tracking-wide text-slate-400">{i<3?(i+1)+". ":""}{l}</div><div className="text-2xl font-extrabold text-slate-900">{cont(k)}</div></button>)}
+    </div>
+    <div className="flex flex-wrap items-center gap-2">
+      {[["andamento","Em andamento"],["todos","Todos"]].map(([k,l])=><button key={k} onClick={()=>setFiltro(k)} className={cx("px-3 py-1.5 rounded-full text-sm font-semibold", filtro===k?"bg-slate-900 text-white":"bg-white border border-slate-200 text-slate-600 hover:bg-slate-50")}>{l}</button>)}
+      <div className="flex-1 min-w-[180px]"><Input placeholder="Buscar por nome, cargo ou telefone" value={q} onChange={e=>setQ(e.target.value)} aria-label="Buscar candidato"/></div>
+      <Btn size="sm" variant="ghost" icon={I.gear} onClick={()=>setAcao({tipo:"config"})}>Configurar</Btn>
+    </div>
+    {semEscavador && <div className="p-3 rounded-xl bg-amber-50 text-amber-800 text-sm">A consulta de processos ainda não está ativa: {semEscavador}</div>}
+    {cands==null ? <Card className="p-10 text-center"><div className="w-8 h-8 mx-auto rounded-full border-2 border-slate-200 border-t-brand-600 animate-spin"/></Card>
+    : vis.length===0 ? <Card className="p-8 text-center text-sm text-slate-400">{todos.length?"Nenhum candidato neste filtro.":"Nenhum candidato ainda. Depois da entrevista, clique em Registrar entrevista."}</Card>
+    : <div className="space-y-2">{vis.map(c=>{ const [el,et]=ETAPA[c._etapa]||[c._etapa,"slate"]; const u=unid(c.unidade);
+      return <Card key={c.id} className="p-4">
+        <div className="flex flex-wrap items-start gap-3">
+          <button className="flex-1 min-w-[220px] text-left" onClick={()=>setAbertoId(c.id)}>
+            <div className="font-bold text-slate-900 flex items-center gap-2 flex-wrap">{c.nome}{c._nota!=null && <span className="text-amber-500 text-sm font-bold">★ {String(c._nota).replace(".",",")}</span>}</div>
+            <div className="text-xs text-slate-500">{c.cargo||"—"}{c.turno&&c.turno.nome&&c.turno.nome!=="Padrão"?" · "+c.turno.nome:""}{c.turno&&c.turno.horario?" · "+c.turno.horario:""} · {u?u.nome:"—"}</div>
+            <div className="text-xs text-slate-400">Entrevista {c.entrevistaEm?fmtDataBR(c.entrevistaEm):"—"}{c.teste&&c.teste.data&&c._etapa==="teste"?" · teste "+new Date(c.teste.data).toLocaleString("pt-BR",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}):""}{c.decisao&&c.decisao.motivo?" · "+c.decisao.motivo:""}</div>
+          </button>
+          <div className="flex flex-col items-end gap-1"><Badge tone={et}>{c._etapa==="entrevistado"&&c.conviteId?"Aguardando cadastro":el}</Badge><BadgeVerif c={c}/></div>
+        </div>
+        <div className="flex flex-wrap gap-2 justify-end mt-2">
+          <Btn size="sm" variant="ghost" icon={I.eye} onClick={()=>setAbertoId(c.id)}>Detalhes</Btn>{proxAcao(c)}
+        </div>
+      </Card>; })}</div>}
+
+    {/* ---------- registrar / editar entrevista ---------- */}
+    <Modal open={!!form} onClose={()=>setForm(null)} wide>
+      {form && <div className="p-6">
+        <h3 className="text-lg font-bold text-slate-900 mb-4">{form.id?"Editar entrevista":"Registrar entrevista"}</h3>
+        <div className="grid sm:grid-cols-2 gap-3">
+          <Field label="Nome do candidato *"><Input value={form.nome} onChange={e=>setForm({...form,nome:e.target.value})}/></Field>
+          <Field label="WhatsApp *"><Input value={form.tel} onChange={e=>setForm({...form,tel:e.target.value})} placeholder="(11) 90000-0000"/></Field>
+          <Field label="Cargo da vaga"><Select value={form.cargo} onChange={e=>{ const ci=cargoInfo(e.target.value); setForm({...form,cargo:e.target.value,turnoIdx:0,salario:ci&&ci.salarioBase?ci.salarioBase:form.salario}); }}>{[...new Set([...cargosLista,form.cargo].filter(Boolean))].map(c=><option key={c}>{c}</option>)}</Select></Field>
+          {(()=>{ const tns=turnosDe(cargoInfo(form.cargo)); return <Field label="Horário de trabalho escolhido">{tns.length ? <Select value={Number(form.turnoIdx)||0} onChange={e=>setForm({...form,turnoIdx:Number(e.target.value)})}>{tns.map((t,i)=><option key={i} value={i}>{rotuloTurno(t)||"Padrão"}</option>)}</Select>
+            : <Input value={form.horario||""} onChange={e=>setForm({...form,horario:e.target.value})} placeholder="Ex.: 18:00 às 02:20 · 6x1"/>}</Field>; })()}
+          <Field label="Unidade / endereço escolhido"><Select value={form.unidade} onChange={e=>setForm({...form,unidade:Number(e.target.value)})}>{unidades.map(u=><option key={u.id} value={u.id}>{u.nome}{u.end?" — "+u.end:""}</option>)}</Select></Field>
+          <Field label="Data da entrevista"><Input type="date" value={form.entrevistaEm} onChange={e=>setForm({...form,entrevistaEm:e.target.value})}/></Field>
+          <Field label="Como conheceu a vaga"><Select value={form.fonte} onChange={e=>setForm({...form,fonte:e.target.value})}><option value="">—</option>{RS_FONTES.map(x=><option key={x}>{x}</option>)}</Select></Field>
+          <Field label="Pretensão salarial (R$)"><Input type="number" value={form.pretensao} onChange={e=>setForm({...form,pretensao:e.target.value})}/></Field>
+        </div>
+        <div className="mt-4 p-4 rounded-2xl border border-slate-200">
+          <div className="flex items-center justify-between mb-2"><div className="text-xs font-bold text-slate-400 uppercase tracking-wide">Avaliação da entrevista</div>
+            {rsNotaMedia(form)!=null && <div className="text-sm font-bold text-amber-500">Nota geral ★ {String(rsNotaMedia(form)).replace(".",",")}</div>}</div>
+          <div className="grid sm:grid-cols-2 gap-x-6 gap-y-1.5">{RS_CRITERIOS.map(([k,l])=><div key={k} className="flex items-center justify-between gap-2"><span className="text-sm text-slate-700">{l}</span>
+            <Estrelas label={l} v={(form.notas||{})[k]} onChange={n=>setForm({...form,notas:{...(form.notas||{}),[k]:n}})}/></div>)}</div>
+        </div>
+        <div className="mt-3"><Field label="Observações da entrevista"><textarea className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm" rows={3} value={form.obs} onChange={e=>setForm({...form,obs:e.target.value})} placeholder="Pontos fortes, pontos de atenção, experiência anterior…"/></Field></div>
+        <div className="flex gap-2 mt-4"><Btn variant="ghost" onClick={()=>setForm(null)}>Cancelar</Btn><Btn className="flex-1" icon={I.check} onClick={salvarForm}>{form.id?"Salvar":"Salvar e gerar link de cadastro"}</Btn></div>
+      </div>}
+    </Modal>
+
+    {/* ---------- link pronto ---------- */}
+    <Modal open={!!linkPronto} onClose={()=>setLinkPronto(null)}>
+      {linkPronto && <div className="p-6 text-center">
+        <div className="w-14 h-14 mx-auto rounded-2xl grad-brand grid place-items-center text-white mb-3"><Icon d={I.link} className="w-7 h-7"/></div>
+        <h3 className="text-lg font-bold text-slate-900">Link de cadastro pronto</h3>
+        <p className="text-sm text-slate-500 mt-1">Envie para {linkPronto.nome}. Quando o cadastro chegar, ele aparece aqui como <b>Cadastro recebido</b>{rsVerificaCargo(cfg,linkPronto.cargo)?" e a consulta de processos é feita automaticamente":""}.</p>
+        <div className="my-4 p-3 rounded-xl bg-slate-50 text-xs font-mono text-slate-600 break-all">{linkConvite(linkPronto.conviteId)}</div>
+        <div className="flex gap-2"><Btn variant="ghost" className="flex-1" icon={I.copy} onClick={()=>{ copyText(msgLink(linkPronto)); toast("Mensagem copiada"); }}>Copiar mensagem</Btn>
+          <Btn className="flex-1" icon={I.arrow} onClick={()=>whats(linkPronto)}>Enviar no WhatsApp</Btn></div>
+      </div>}
+    </Modal>
+
+    {/* ---------- detalhes do candidato ---------- */}
+    <Modal open={!!aberto} onClose={()=>setAbertoId(null)} wide>
+      {aberto && (()=>{ const c=aberto; const cad=cadDe(c); const [el,et]=ETAPA[c._etapa]||[c._etapa,"slate"]; const u=unid(c.unidade); const v=c.verificacao;
+        return <div className="p-6 space-y-4">
+          <div className="flex items-start gap-3">
+            <Avatar name={c.nome} src={cad&&cad.foto} size="w-12 h-12"/>
+            <div className="flex-1 min-w-0"><h3 className="text-lg font-bold text-slate-900">{c.nome}</h3>
+              <div className="text-sm text-slate-500">{c.tel}{c.fonte?" · via "+c.fonte:""}</div></div>
+            <Badge tone={et}>{el}</Badge>
+            <button onClick={()=>setAbertoId(null)} className="text-slate-400 hover:text-slate-600" aria-label="Fechar"><Icon d={I.x}/></button>
+          </div>
+          <div className="grid sm:grid-cols-3 gap-2 text-sm">
+            {[["Cargo",c.cargo||"—"],["Horário",c.turno?rotuloTurno(c.turno)||"Padrão":"—"],["Unidade",u?u.nome+(u.end?" — "+u.end:""):"—"]].map(([l,x])=><div key={l} className="p-3 rounded-xl bg-slate-50"><div className="text-[11px] font-bold uppercase text-slate-400">{l}</div><div className="font-semibold text-slate-800">{x}</div></div>)}
+          </div>
+          <div className="p-4 rounded-2xl border border-slate-200">
+            <div className="flex items-center justify-between mb-2"><div className="text-xs font-bold text-slate-400 uppercase">Entrevista {c.entrevistaEm?"· "+fmtDataBR(c.entrevistaEm):""}</div>
+              <Btn size="sm" variant="ghost" icon={I.edit} onClick={()=>{ setForm({...c, horario:(c.turno&&c.turno.horario)||""}); setAbertoId(null); }}>Editar</Btn></div>
+            <div className="grid sm:grid-cols-2 gap-x-6 gap-y-1">{RS_CRITERIOS.map(([k,l])=><div key={k} className="flex items-center justify-between"><span className="text-sm text-slate-600">{l}</span><Estrelas label={l} v={(c.notas||{})[k]}/></div>)}</div>
+            <div className="text-sm mt-2"><b className="text-amber-500">Nota geral {c._nota!=null?"★ "+String(c._nota).replace(".",","):"—"}</b>{c.pretensao?" · pretensão "+fmtBRL(c.pretensao):""}</div>
+            {c.obs && <p className="text-sm text-slate-600 mt-2 whitespace-pre-line">{c.obs}</p>}
+          </div>
+          <div className="p-4 rounded-2xl border border-slate-200">
+            <div className="text-xs font-bold text-slate-400 uppercase mb-2">Cadastro pelo link</div>
+            {cad ? <div className="flex flex-wrap items-center gap-2 text-sm"><span className="text-slate-700">Recebido em {new Date(cad.criadoEm||0).toLocaleDateString("pt-BR")} · CPF {cad.cpf||"—"}</span>
+                <Btn size="sm" variant="soft" icon={I.eye} onClick={()=>setVerCad({c:{pessoaKey:"clt-"+cad.id,tipo:"clt",preenchidoEm:cad.criadoEm},p:cad})}>Ver cadastro e documentos</Btn></div>
+              : c.conviteId ? <div className="flex flex-wrap items-center gap-2 text-sm"><span className="text-slate-500">Link enviado em {new Date(c.linkEm||0).toLocaleDateString("pt-BR")} — aguardando o candidato.</span>
+                <Btn size="sm" variant="soft" icon={I.copy} onClick={()=>{ copyText(msgLink(c)); toast("Mensagem copiada"); }}>Copiar link</Btn><Btn size="sm" icon={I.arrow} onClick={()=>whats(c)}>WhatsApp</Btn></div>
+              : <Btn size="sm" icon={I.link} onClick={()=>gerarLink(c)}>Enviar link de cadastro</Btn>}
+          </div>
+          {rsVerificaCargo(cfg,c.cargo) && <div className={cx("p-4 rounded-2xl border", v&&v.criminais&&v.criminais.length?"border-rose-200 bg-rose-50/40":"border-slate-200")}>
+            <div className="flex items-center justify-between gap-2 mb-1"><div className="text-xs font-bold text-slate-400 uppercase">Processos judiciais públicos (Escavador)</div>
+              {cad && <Btn size="sm" variant="ghost" icon={I.refresh} disabled={verificando===c.id} onClick={()=>verificar(c)}>{verificando===c.id?"Consultando…":v?"Consultar de novo":"Consultar agora"}</Btn>}</div>
+            {!cad ? <p className="text-sm text-slate-500">A consulta é feita quando o candidato envia o cadastro com o CPF.</p>
+            : !cad.rsConsultaAutorizadaEm ? <p className="text-sm text-amber-700">O candidato não autorizou a consulta no cadastro (link gerado antes de a consulta ser ativada).</p>
+            : !v ? <p className="text-sm text-slate-500">Ainda não consultado.</p>
+            : <>
+              {v.criminais.length ? <div className="text-sm font-bold text-rose-700 mb-2">⚠ {v.criminais.length} processo(s) de natureza criminal em que o CPF aparece como parte acusada/investigada</div>
+                : <div className="text-sm font-bold text-emerald-700 mb-1">Nada consta na esfera criminal para este CPF</div>}
+              {v.criminais.length>0 && <div className="space-y-1.5">{v.criminais.map((p,i)=><div key={i} className="text-xs p-2 rounded-lg bg-white border border-rose-100"><b>{p.classe||"Processo"}</b>{p.assunto?" — "+p.assunto:""}<div className="text-slate-500">{[p.tribunal,p.numero,p.tipo,p.inicio&&("início "+fmtDataBR(String(p.inicio).slice(0,10))),p.status].filter(Boolean).join(" · ")}</div></div>)}</div>}
+              <p className="text-[11px] text-slate-400 mt-2">Consultado em {new Date(v.em).toLocaleString("pt-BR")} · {v.total} processo(s) no total ({v.outros} de outras áreas). Resultado indicativo: confira o processo antes de qualquer decisão.</p>
+            </>}
+          </div>}
+          {(c.teste||c.decisao) && <div className="p-4 rounded-2xl border border-slate-200 text-sm space-y-1">
+            {c.teste && <div><b>Teste:</b> {c.teste.data?new Date(c.teste.data).toLocaleString("pt-BR"):"—"} · {unidadeNome(c.teste.unidade,unidades)}{c.teste.obs?" · "+c.teste.obs:""}</div>}
+            {c.decisao && c.decisao.motivo && <div className="text-rose-700"><b>Declinado:</b> {c.decisao.motivo}{c.decisao.obs?" — "+c.decisao.obs:""}</div>}
+            {c._etapa==="aprovado" && <div className="text-emerald-700 font-semibold">Aprovado em {new Date(c.aprovadoEm||0).toLocaleDateString("pt-BR")} — está em Colaboradores CLT.</div>}
+          </div>}
+          {(c.historico||[]).length>0 && <details className="text-sm"><summary className="cursor-pointer text-slate-500 font-semibold">Histórico ({c.historico.length})</summary>
+            <ol className="mt-2 space-y-1 border-l-2 border-slate-100 pl-3">{[...c.historico].reverse().map((h,i)=><li key={i} className="text-xs text-slate-600"><span className="text-slate-400">{new Date(h.em).toLocaleString("pt-BR")}{h.por?" · "+h.por:""}</span><br/>{h.txt}</li>)}</ol></details>}
+          <div className="flex flex-wrap gap-2 pt-2 border-t border-slate-100">
+            <Btn size="sm" variant="ghost" className="text-rose-600" icon={I.trash} onClick={()=>excluir(c)}>Excluir</Btn>
+            <div className="flex-1"/>
+            {["aprovado","declinado"].includes(c._etapa) ? (c._etapa==="declinado" && <Btn size="sm" variant="ghost" icon={I.refresh} onClick={()=>reabrir(c)}>Reabrir processo</Btn>)
+              : <><Btn size="sm" variant="ghost" className="text-rose-600" icon={I.x} onClick={()=>setAcao({tipo:"declinar",c,motivo:"",obs:""})}>Declinar</Btn>
+                {c._etapa!=="teste" && cad && <Btn size="sm" variant="soft" icon={I.calendar} onClick={()=>setAcao({tipo:"teste",c,data:"",unidade:c.unidade,obs:""})}>Agendar teste</Btn>}
+                {cad && <Btn size="sm" icon={I.check} onClick={()=>setAcao({tipo:"aprovar",c,admissao:"",salario:c.salario||""})}>Aprovar</Btn>}</>}
+          </div>
+        </div>; })()}
+    </Modal>
+    <Modal open={!!verCad} onClose={()=>setVerCad(null)} wide>{verCad && <FichaCadastro convite={verCad.c} pessoa={verCad.p} onClose={()=>setVerCad(null)}/>}</Modal>
+
+    {/* ---------- ações: teste / aprovar / declinar / configurar ---------- */}
+    <Modal open={!!acao} onClose={()=>setAcao(null)}>
+      {acao && <div className="p-6">
+        {acao.tipo==="teste" && <>
+          <h3 className="text-lg font-bold text-slate-900 mb-4">Agendar teste — {acao.c.nome}</h3>
+          <div className="grid gap-3"><Field label="Data e hora"><Input type="datetime-local" value={acao.data} onChange={e=>setAcao({...acao,data:e.target.value})}/></Field>
+            <Field label="Unidade"><Select value={acao.unidade} onChange={e=>setAcao({...acao,unidade:Number(e.target.value)})}>{unidades.map(u=><option key={u.id} value={u.id}>{u.nome}</option>)}</Select></Field>
+            <Field label="Observações"><Input value={acao.obs} onChange={e=>setAcao({...acao,obs:e.target.value})} placeholder="Ex.: falar com o gerente, levar uniforme…"/></Field></div>
+          <div className="flex gap-2 mt-4"><Btn variant="ghost" onClick={()=>setAcao(null)}>Cancelar</Btn><Btn className="flex-1" icon={I.calendar} disabled={!acao.data} onClick={()=>agendarTeste(acao)}>Agendar</Btn></div>
+        </>}
+        {acao.tipo==="aprovar" && <>
+          <h3 className="text-lg font-bold text-slate-900 mb-1">Aprovar {acao.c.nome}</h3>
+          <p className="text-sm text-slate-500 mb-4">O cadastro vai para <b>Colaboradores CLT</b> como {acao.c.cargo} em {unidadeNome(acao.c.unidade,unidades)}. Sem data de admissão, fica como "aguardando admissão" (sem entrar na escala).</p>
+          <div className="grid grid-cols-2 gap-3"><Field label="Data de admissão (opcional)"><Input type="date" value={acao.admissao} onChange={e=>setAcao({...acao,admissao:e.target.value})}/></Field>
+            <Field label="Salário (R$)"><Input type="number" value={acao.salario} onChange={e=>setAcao({...acao,salario:e.target.value})}/></Field></div>
+          <div className="flex gap-2 mt-4"><Btn variant="ghost" onClick={()=>setAcao(null)}>Cancelar</Btn><Btn className="flex-1" icon={I.check} onClick={()=>aprovar(acao)}>Aprovar e enviar para Colaboradores</Btn></div>
+        </>}
+        {acao.tipo==="declinar" && <>
+          <h3 className="text-lg font-bold text-slate-900 mb-4">Declinar {acao.c.nome}</h3>
+          <div className="grid gap-3"><Field label="Motivo *"><Select value={acao.motivo} onChange={e=>setAcao({...acao,motivo:e.target.value})} aria-label="Motivo"><option value="">Escolha…</option>{RS_MOTIVOS.map(m=><option key={m}>{m}</option>)}</Select></Field>
+            <Field label="Detalhes (opcional)"><Input value={acao.obs} onChange={e=>setAcao({...acao,obs:e.target.value})}/></Field></div>
+          <div className="flex gap-2 mt-4"><Btn variant="ghost" onClick={()=>setAcao(null)}>Cancelar</Btn><Btn className="flex-1" variant="danger" icon={I.x} disabled={!acao.motivo} onClick={()=>declinar(acao)}>Declinar</Btn></div>
+        </>}
+        {acao.tipo==="config" && <>
+          <h3 className="text-lg font-bold text-slate-900 mb-3">Configurar R&S</h3>
+          <label className="flex items-start gap-2 text-sm text-slate-700"><input type="checkbox" checked={cfg.verificar!==false} onChange={e=>setRsCfg({...cfg,verificar:e.target.checked})} className="mt-0.5 w-4 h-4 accent-green-700"/>
+            <span><b>Consultar processos judiciais públicos (Escavador)</b> quando o cadastro chegar. O link pede a autorização do candidato.</span></label>
+          {cfg.verificar!==false && <div className="mt-3">
+            <div className="text-xs font-bold text-slate-400 uppercase mb-1">Aplicar nos cargos</div>
+            <label className="flex items-center gap-2 text-sm mb-1"><input type="radio" checked={!Array.isArray(cfg.cargosVerificar)} onChange={()=>setRsCfg({...cfg,cargosVerificar:null})}/>Todos os cargos</label>
+            <label className="flex items-center gap-2 text-sm"><input type="radio" checked={Array.isArray(cfg.cargosVerificar)} onChange={()=>setRsCfg({...cfg,cargosVerificar:[]})}/>Só nos cargos selecionados</label>
+            {Array.isArray(cfg.cargosVerificar) && <div className="grid grid-cols-2 gap-1 mt-2 pl-5">{cargosLista.map(cg=><label key={cg} className="flex items-center gap-1.5 text-sm"><input type="checkbox" checked={cfg.cargosVerificar.includes(cg)} onChange={e=>setRsCfg({...cfg,cargosVerificar:e.target.checked?[...cfg.cargosVerificar,cg]:cfg.cargosVerificar.filter(x=>x!==cg)})}/>{cg}</label>)}</div>}
+            <div className="mt-3 p-3 rounded-xl bg-amber-50 text-amber-900 text-xs leading-relaxed"><b>Atenção (Justiça do Trabalho):</b> o TST (Tema 1, 2017) considera a exigência de antecedentes criminais discriminatória e passível de dano moral, mesmo que o candidato não seja contratado, quando não houver previsão em lei ou justificativa pela natureza da função ou fidúcia especial (ex.: quem lida com valores, armas ou informações sigilosas). Prefira aplicar só nos cargos que justificam e use o resultado com cautela: ele é indicativo e pode trazer homônimos ou processos já encerrados.</div>
+            <p className="text-xs text-slate-500 mt-2">Requer o token da API do Escavador na Vercel (<code>ESCAVADOR_TOKEN</code>). Cada consulta é cobrada pelo Escavador.</p>
+          </div>}
+          <p className="text-xs text-slate-500 mt-3">Acesso: só administradores e logins com o papel <b>R&S</b> (crie em Gerentes & acessos) veem esta aba.</p>
+          <div className="flex justify-end mt-4"><Btn onClick={()=>setAcao(null)}>Pronto</Btn></div>
+        </>}
+      </div>}
+    </Modal>
+  </div>;
+}
+
 /* ============================ NOTAS FISCAIS DOS PRESTADORES PJ ============================ */
 // O PJ envia a nota do mês pelo app "Meus documentos"; o sistema lê a nota (XML, texto do PDF ou, se preciso,
 // a leitura automática do Claude), confere com o valor do contrato e avisa o financeiro por e-mail.
@@ -6634,7 +6921,7 @@ function EnvelopeWilamiModal({envId,onClose}){
 
 /* ============================ CONTABILIDADE (admissão) e PCMSO (medicina do trabalho) ============================ */
 // Papéis com acesso restrito: o login vê só a sua aba.
-const ABA_DO_PAPEL = { contabilidade:"contabilidade", pcmso:"pcmso", financeiro:"notasPJ" };
+const ABA_DO_PAPEL = { contabilidade:"contabilidade", pcmso:"pcmso", financeiro:"notasPJ", rs:"rs" };
 const semAcento=(s)=> String(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"");
 const maiusc=(s)=> semAcento(s).toUpperCase().replace(/\s+/g," ").trim();
 const fmtCelular=(t)=>{ const d=soDigitos(t).replace(/^55(?=\d{10,11}$)/,""); if(d.length===11) return `(${d.slice(0,2)}) ${d.slice(2,7)}-${d.slice(7)}`; if(d.length===10) return `(${d.slice(0,2)}) ${d.slice(2,6)}-${d.slice(6)}`; return t||""; };
@@ -7072,7 +7359,7 @@ async function lerDocumentoIA(arquivo, esperado, convite){
 function ConvitesPage(){
   const { unidades, clts, pjs, freelas, cargosFreela, can, cargosLista, cargosDesc, cargoInfo, marca } = useStore();
   const toast=useContext(ToastCtx);
-  const convitesBrutos=useConvites(true);
+  const convitesBrutos=useConvites(true).filter(c=>!c.rs);   // links do R&S ficam na aba Recrutamento & Seleção
   const cargosPJ=(cargosDesc||[]).filter(c=>c.tipo==="pj");
   const porConvite={}; [...clts.map(p=>["clt",p]), ...pjs.map(p=>["pj",p])].forEach(([t,p])=>{ if(p.conviteId) porConvite[p.conviteId]=t+"-"+p.id; });
   const convites=convitesBrutos.map(c=> c.status==="aberto" && porConvite[c.id] ? {...c, status:"preenchido", pessoaKey:porConvite[c.id], preenchidoEm:c.preenchidoEm||c.criadoEm} : c);
@@ -7231,6 +7518,7 @@ function ConviteCadastro({onClose}){
   const [prog,setProg]=useState({feito:0,total:0});
   const [erro,setErro]=useState("");
   const [aceite,setAceite]=useState(false);
+  const [aceiteConsulta,setAceiteConsulta]=useState(false);   // R&S: autorização da consulta de processos públicos
   // Rascunho: restaura o que a pessoa já tinha feito (a página pode recarregar ao voltar da galeria/câmera)
   const chaveRasc="convite_"+token;
   const [rascOk,setRascOk]=useState(false);
@@ -7238,7 +7526,7 @@ function ConviteCadastro({onClose}){
   useEffect(()=>{ let vivo=true;
     rascunho.ler(chaveRasc).then(r=>{ if(!vivo) return;
       if(r && Date.now()-(r.em||0)<14*864e5){
-        setEtapa(r.etapa||"inicio"); setAceiteFuncao(!!r.aceiteFn); setArqs(r.arqs||{}); setFoto(r.foto||""); setF(r.f||{}); setAuto(r.auto||{}); setAvisos(r.avisos||[]); setAceite(!!r.aceite);
+        setEtapa(r.etapa||"inicio"); setAceiteFuncao(!!r.aceiteFn); setArqs(r.arqs||{}); setFoto(r.foto||""); setF(r.f||{}); setAuto(r.auto||{}); setAvisos(r.avisos||[]); setAceite(!!r.aceite); setAceiteConsulta(!!r.aceiteConsulta);
         if(Object.keys(r.arqs||{}).length || Object.keys(r.f||{}).length) setRecuperado(true);
       }
       setRascOk(true); });
@@ -7246,11 +7534,11 @@ function ConviteCadastro({onClose}){
   },[chaveRasc]);
   const etapaRasc = etapa==="lendo" ? "docs" : etapa==="enviando" ? "termo" : etapa;
   const rascAtual=useRef(null);
-  rascAtual.current={ etapa:etapaRasc, aceiteFn, arqs, foto, f, auto, avisos, aceite, em:Date.now() };
+  rascAtual.current={ etapa:etapaRasc, aceiteFn, arqs, foto, f, auto, avisos, aceite, aceiteConsulta, em:Date.now() };
   useEffect(()=>{ if(!rascOk || !token) return;
     if(etapa==="ok"){ rascunho.apagar(chaveRasc); return; }
     const t=setTimeout(()=>rascunho.gravar(chaveRasc,rascAtual.current),250); return ()=>clearTimeout(t);
-  },[rascOk,etapaRasc,aceiteFn,arqs,foto,f,auto,avisos,aceite]);
+  },[rascOk,etapaRasc,aceiteFn,arqs,foto,f,auto,avisos,aceite,aceiteConsulta]);
   useEffect(()=>{ if(!rascOk || !token) return;   // ao sair para a galeria/câmera, grava na hora
     const salvar=()=>{ if(document.visibilityState!=="visible" && rascAtual.current.etapa!=="ok") rascunho.gravar(chaveRasc,{...rascAtual.current,em:Date.now()}); };
     document.addEventListener("visibilitychange",salvar); window.addEventListener("pagehide",salvar);
@@ -7302,6 +7590,8 @@ function ConviteCadastro({onClose}){
   const faltaForm=obrigForm.filter(([k])=>!String(f[k]||"").trim()).map(([,l])=>l);
   if(tipo!=="pj" && !foto) faltaForm.push("selfie");
   if(!aceite) faltaForm.push("aceite LGPD");
+  const pedeConsulta=!!(conv && conv.rs && conv.verificar);
+  if(pedeConsulta && !aceiteConsulta) faltaForm.push("autorização da consulta");
   const enviar=async(assinaturaTermo)=>{
     setEtapa("enviando"); setErro("");
     try{
@@ -7318,6 +7608,7 @@ function ConviteCadastro({onClose}){
       const endereco=[f.logradouro,f.numero,f.complemento,f.bairro,f.cidade&&(f.cidade+(f.uf?"/"+f.uf:"")),f.cep].filter(Boolean).join(", ");
       const comum={ tel:f.telefone||"", email:(f.email||"").trim().toLowerCase(), tipoPix:f.tipoPix||"CPF", pix:f.pix||"", banco:[f.banco,f.agencia&&("ag. "+f.agencia),f.conta&&("c/c "+f.conta)].filter(Boolean).join(" "),
         endereco, ficha, docs, origem:"convite", conviteId:token, status:"ativo", criadoEm:Date.now() };
+      if(conv.rs){ comum.rsPendente=true; comum.rsCandidato=conv.candidatoId||""; if(pedeConsulta) comum.rsConsultaAutorizadaEm=Date.now(); }
       if(temVaga){
         comum.aceiteFuncao={ cargo:vaga.cargo, turno:vaga.turno||"", horario:vaga.horario||"", descritivo:vaga.descritivo, aceitoEm:Date.now(), nome:nomePessoa };
         if(vaga.turno) comum.turno=vaga.turno; if(vaga.horario) comum.horario=vaga.horario;
@@ -7449,6 +7740,8 @@ function ConviteCadastro({onClose}){
     </div>}
     <label className="flex items-start gap-2 text-sm text-slate-600"><input type="checkbox" checked={aceite} onChange={e=>setAceite(e.target.checked)} className="mt-0.5 w-4 h-4 accent-green-700"/>
       <span>Autorizo o uso dos meus dados e documentos para fins de cadastro, admissão e cumprimento de obrigações legais (LGPD).</span></label>
+    {pedeConsulta && <label className="flex items-start gap-2 text-sm text-slate-600 mt-2"><input type="checkbox" checked={aceiteConsulta} onChange={e=>setAceiteConsulta(e.target.checked)} className="mt-0.5 w-4 h-4 accent-green-700"/>
+      <span>Autorizo a consulta de processos judiciais públicos vinculados ao meu CPF, apenas para este processo seletivo.</span></label>}
     {erro && <p className="text-sm text-rose-500 mt-3">{erro}</p>}
     {faltaForm.length>0 && <p className="text-xs text-slate-400 mt-3">Falta: {faltaForm.join(", ")}</p>}
     <div className="flex gap-2 mt-4"><Btn variant="ghost" onClick={()=>setEtapa("docs")}>Voltar</Btn><Btn className="flex-1" size="lg" icon={I.arrow} disabled={faltaForm.length>0} onClick={()=>{ setErro(""); setEtapa("termo"); }}>Continuar</Btn></div>
@@ -7537,6 +7830,7 @@ const NAV = [
     {k:"pjs",l:"Prestadores PJ",d:I.briefcase},
     {k:"cargos",l:"Cargos & funções",d:I.doc},
     {k:"convites",l:"Convites de cadastro",d:I.link},
+    {k:"rs",l:"Recrutamento & Seleção",d:I.team,rs:true},
     {k:"contabilidade",l:"Contabilidade",d:I.briefcase},
     {k:"pcmso",l:"PCMSO (Paromed)",d:I.shield},
     {k:"equipe",l:"Equipe & permissões",d:I.team,dono:true},
@@ -7563,7 +7857,7 @@ const NAV = [
     {k:"ajuda",l:"Ajuda",d:I.help},
   ]},
 ];
-const TITULOS={dashboard:"Painel",escala:"Escala por unidade",ponto:"Ponto ao vivo",ajustes:"Ajustes de ponto",clt:"Colaboradores CLT",freelas:"Freelancers",pjs:"Prestadores PJ",cargos:"Cargos & funções",convites:"Convites de cadastro",arquivos:"Arquivos & pastas",holerites:"Holerites",termos:"Termos e assinaturas",entregas:"Armário, uniformes & EPIs",modeloContrato:"Modelo de contrato PJ",dossie:"Dossiê do colaborador",equipe:"Equipe & permissões",relatorios:"Relatórios",financeiro:"Financeiro",pagamentos:"Pagamentos",unidades:"Unidades",links:"Links & QR",acessos:"Gerentes & acessos",config:"Configurações",ajuda:"Ajuda",contabilidade:"Contabilidade",pcmso:"PCMSO (Paromed)",notasPJ:"Notas fiscais PJ"};
+const TITULOS={dashboard:"Painel",escala:"Escala por unidade",ponto:"Ponto ao vivo",ajustes:"Ajustes de ponto",clt:"Colaboradores CLT",freelas:"Freelancers",pjs:"Prestadores PJ",cargos:"Cargos & funções",convites:"Convites de cadastro",arquivos:"Arquivos & pastas",holerites:"Holerites",termos:"Termos e assinaturas",entregas:"Armário, uniformes & EPIs",modeloContrato:"Modelo de contrato PJ",dossie:"Dossiê do colaborador",equipe:"Equipe & permissões",relatorios:"Relatórios",financeiro:"Financeiro",pagamentos:"Pagamentos",unidades:"Unidades",links:"Links & QR",acessos:"Gerentes & acessos",config:"Configurações",ajuda:"Ajuda",contabilidade:"Contabilidade",pcmso:"PCMSO (Paromed)",notasPJ:"Notas fiscais PJ",rs:"Recrutamento & Seleção"};
 
 // Seletor de cliente (multiempresa) — troca entre grupos de restaurantes e cria novo cliente.
 function ClienteSwitcher(){
@@ -7776,7 +8070,7 @@ function Sidebar({view,setView,open,setOpen,onLogout}) {
     <aside className={cx("fixed lg:sticky top-0 z-40 h-screen w-64 shrink-0 grad-ink text-white flex flex-col transition-transform lg:translate-x-0", open?"translate-x-0":"-translate-x-full")}>
       <div className="p-5"><Logo light/></div>
       <div className="px-3 flex-1 overflow-y-auto">
-        {NAV.map(g=>({...g, items:g.items.filter(it=> abaRestrita ? it.k===abaRestrita : (!it.dono||ehDono))})).filter(g=>g.items.length).map(g=>
+        {NAV.map(g=>({...g, items:g.items.filter(it=> abaRestrita ? it.k===abaRestrita : ((!it.dono||ehDono) && (!it.rs||ehDono)))})).filter(g=>g.items.length).map(g=>
           <div key={g.sec} className="mb-4">
             <div className="px-3 text-[11px] uppercase tracking-wider text-white/35 font-bold mb-1">{g.sec}</div>
             {g.items.map(it=>
@@ -7829,7 +8123,7 @@ function Shell({ onLogout }) {
   if(acesso && acesso.semAcesso) return <TelaBloqueio icone={I.shield} titulo="Sua conta ainda não tem acesso" texto="Peça ao administrador para vincular seu e-mail a um cliente. Assim que ele liberar, é só entrar novamente." onLogout={onLogout}/>;
   if(acesso && acesso.tenantBind!=null && acesso.tenantBind!==tenantAtual) return <TelaBloqueio spin titulo="Abrindo seu cliente…"/>;
   const views={ dashboard:<Dashboard go={setView}/>, escala:<EscalaVisual/>, ponto:<PontoLive/>, ajustes:<AjustesPonto/>, clt:<ColaboradoresCLT/>, freelas:<Freelancers/>,
-    dossie:<Dossie/>, pjs:<PrestadoresPJ/>, cargos:<CargosPage/>, convites:<ConvitesPage/>, arquivos:<ArquivosPage/>, holerites:<HoleritesPage/>, termos:<TermosPage/>, entregas:<EntregasPage/>, modeloContrato:<ModeloContratoPage/>, equipe:<Equipe/>, contabilidade:<ContabilidadePage/>, pcmso:<PcmsoPage/>, relatorios:<Relatorios/>, financeiro:<Financeiro/>, notasPJ:<NotasPJPage/>, pagamentos:<Pagamentos/>, unidades:<Unidades/>, links:<LinksQR/>, acessos:<GerentesAcesso/>, config:<Configuracoes/>, ajuda:<Ajuda/> };
+    dossie:<Dossie/>, pjs:<PrestadoresPJ/>, cargos:<CargosPage/>, convites:<ConvitesPage/>, arquivos:<ArquivosPage/>, holerites:<HoleritesPage/>, termos:<TermosPage/>, entregas:<EntregasPage/>, modeloContrato:<ModeloContratoPage/>, equipe:<Equipe/>, contabilidade:<ContabilidadePage/>, pcmso:<PcmsoPage/>, relatorios:<Relatorios/>, financeiro:<Financeiro/>, notasPJ:<NotasPJPage/>, rs:<RSPage/>, pagamentos:<Pagamentos/>, unidades:<Unidades/>, links:<LinksQR/>, acessos:<GerentesAcesso/>, config:<Configuracoes/>, ajuda:<Ajuda/> };
   return <ToastCtx.Provider value={pushToast}>
     <div className="flex min-h-screen">
       <Sidebar view={view} setView={setView} open={sbOpen} setOpen={setSbOpen} onLogout={onLogout}/>
