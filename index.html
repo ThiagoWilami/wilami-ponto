@@ -1239,6 +1239,14 @@ function StoreProvider({children}) {
     if(f.id){ setFreelas(prev=>prev.map(x=>x.id===f.id?{...x,...f}:x)); }
     else { setFreelas(prev=>[...prev,{...f,id:(prev.reduce((m,x)=>Math.max(m,x.id),100))+1,status:"ativo",jornadasHist:[]}]); }
   };
+  // R&S: candidato em teste vira freelancer (retorna o id) e entra/sai da escala numa data específica
+  const criarFreela=(f)=>{ const id=Math.max(100,...freelasBase.map(x=>Number(x.id)||0))+1; setFreelas(prev=>[...prev,{...f,id,status:"ativo",jornadasHist:[]}]); return id; };
+  const escalarNaData=(pid,tipo,uid,ds,turno)=> setEscalaOv(prev=>{ const u={...((prev||{})[uid]||{})};
+    const base=u[ds]!=null?u[ds]:(diaEscala(escala,prev,uid,ds,wdDe(ds))||[]);
+    if(base.some(a=>String(a.pid)===String(pid)&&a.tipo===tipo&&a.turno===turno)) return prev;
+    u[ds]=[...base.filter(a=>!(String(a.pid)===String(pid)&&a.tipo===tipo)).map(a=>({...a})),{id:(tipo==="free"?"f":"c")+Date.now()+Math.floor(Math.random()*1000),pid,tipo,turno}];
+    return {...(prev||{}),[uid]:u}; });
+  const tirarDaData=(pid,tipo,uid,ds)=> setEscalaOv(prev=>{ const u=(prev||{})[uid]; if(!u||!u[ds]) return prev; return {...prev,[uid]:{...u,[ds]:u[ds].filter(a=>!(String(a.pid)===String(pid)&&a.tipo===tipo))}}; });
   // Cadastro PÚBLICO (celular, sem login) → grava na coleção "cadastros" (retorna Promise p/ validar sincronização)
   const cadastrarPublico=(dados)=>{
     if(window.__WPDB) return cadOps.add(dados);
@@ -1410,7 +1418,7 @@ function StoreProvider({children}) {
   const value={ unidades:unidadesVis,salvarUnidade,excluirUnidade, clts:cltsVis,freelas:freelasVis,freelasComPagamentos:freelasPagVis,salvarClt,salvarFreela,excluirColab,cadastrarPublico, anexarDoc,
     escala,setEscala, escalaOv,setEscalaOv, registros:registrosVis,addRegistro, pontoHist, freelancerEscaladoHoje, valorFreela, setFreelaAjuste, cltExtraAjuste,setCltExtra, gorjetasCLT,setGorjetaCLT, pagamentosFreela,addPagamentoFreela,removePagamentoFreela, pagamentosCLT,addPagamentoCLT,removePagamentoCLT, faltaDescontoDesde,setFaltaDescontoDesde, vtDiaPagamento,setVtDiaPagamento,
     cargosFreela,salvarCargoFreela,excluirCargoFreela, atestados,enviarAtestado, ajustes,enviarAjuste,resolverAjuste,
-    dossie,getDossie,addFalta,addFeedback,addAnexo, perfil,setPerfil, perms,setPerms, can, envContab,setEnvContab, contabCfg,setContabCfg, finCfg,setFinCfg, pcmso,setPcmso, cadastrosRS, cadOpsRS:cadOps,
+    dossie,getDossie,addFalta,addFeedback,addAnexo, perfil,setPerfil, perms,setPerms, can, envContab,setEnvContab, contabCfg,setContabCfg, finCfg,setFinCfg, pcmso,setPcmso, cadastrosRS, cadOpsRS:cadOps, criarFreela, escalarNaData, tirarDaData,
     clientes,clienteAtivo,tenantAtual,criarCliente,trocarCliente,
     acesso,donos,setDonos,acessos,acessosOps,
     marca,setMarca, pjs:(casaRestrita!=null?pjsTodos.filter(x=>x.unidade==null||x.unidade==="todas"||_mesmaCasa(x.unidade)):pjsTodos), salvarPj,excluirPj, pagamentosPJ,addPagamentoPJ,removePagamentoPJ,
@@ -2893,7 +2901,7 @@ function Freelancers() {
         <tbody className="divide-y divide-slate-50">
           {freelas.map(f=>
             <tr key={f.id} className="hover:bg-slate-50/70">
-              <td className="px-4 py-3"><div className="flex items-center gap-3"><Avatar name={f.nome} src={f.foto} tone="free"/><span className="font-semibold text-slate-800">{f.nome}</span></div></td>
+              <td className="px-4 py-3"><div className="flex items-center gap-3"><Avatar name={f.nome} src={f.foto} tone="free"/><span className="font-semibold text-slate-800">{f.nome}</span>{f.origem==="rs" && (f.efetivadoCLT?<Badge tone="green">Efetivado CLT</Badge>:<Badge tone="amber">Em teste (R&S)</Badge>)}</div></td>
               <td className="px-4 py-3 text-slate-600">{f.cargo}</td>
               <td className="px-4 py-3 text-slate-600">{unidadeNome(f.unidade,unidades)}</td>
               <td className="px-4 py-3 font-semibold">R$ {Number(f.valor).toLocaleString("pt-BR")}</td>
@@ -5077,7 +5085,7 @@ function Candidatura({onClose}){
 
 /* ---------- Painel: Recrutamento & Seleção ---------- */
 function RSPage(){
-  const { unidades, cargosLista, cargoInfo, cadastrosRS, cadOpsRS, clts, acesso, marca } = useStore();
+  const { unidades, cargosLista, cargoInfo, cadastrosRS, cadOpsRS, clts, freelas, cargosFreela, salvarFreela, criarFreela, escalarNaData, tirarDaData, acesso, marca } = useStore();
   const toast=useContext(ToastCtx);
   const pode = !acesso || acesso.ehDono || acesso.papelKey==="rs";
   const [cands,setCands]=useState(null);
@@ -5089,6 +5097,9 @@ function RSPage(){
   const [linkModal,setLinkModal]=useState(null);   // { titulo, texto, link, tel, msg }
   const [acao,setAcao]=useState(null);
   const eu=(acesso&&acesso.email)||(((window.__WPAUTH&&window.__WPAUTH.currentUser)||{}).email)||"";
+  // quem fez o teste como freelancer e já enviou os documentos (virou CLT) sai da lista de freelancers ativos
+  useEffect(()=>{ (cands||[]).forEach(c=>{ if(!c.freelaId || !c.conviteDocs) return; const virouClt=clts.some(p=>p.conviteId===c.conviteDocs); const fr=freelas.find(x=>String(x.id)===String(c.freelaId));
+    if(virouClt && fr && !fr.efetivadoCLT) salvarFreela({...fr, status:"inativo", efetivadoCLT:true}); }); },[cands,clts,freelas]);   // eslint-disable-line
   if(!pode) return <Card className="p-10 text-center text-slate-500">A aba Recrutamento & Seleção é exclusiva do time de R&S.</Card>;
   const brutos=cands||[];
   const anexada=(c)=>brutos.find(x=>x.vinculoCandidato===c.id && x.id!==c.id);     // candidatura enviada pelo link individual
@@ -5120,7 +5131,22 @@ function RSPage(){
   const linkDocsModal=(c,token)=>{ const l=linkConvite(token); setLinkModal({ titulo:"Link de documentos para "+primeiro(c.nome), texto:"Quando a pessoa enviar os documentos, ela entra em Colaboradores CLT e aparece na aba Contabilidade para o registro.", link:l, tel:c.tel,
     msg:`Parabéns, ${primeiro(c.nome)}! Você foi aprovado(a) para ${c.cargo}. Para o registro, envie seus documentos por este link (fotos ou PDF pelo celular):\n${l}` }); };
   // ---------- decisões ----------
-  const agendarTeste=async({c,data,unidade,obs})=>{ if(await salvarCand(c.id,{etapa:"teste", teste:{data,unidade,obs:obs||""}},"Teste agendado para "+(data?new Date(data).toLocaleString("pt-BR"):"—")+" em "+unidadeNome(unidade,unidades))){ toast("Teste agendado"); setAcao(null); setAbertoId(null); } };
+  const turnoDaHora=(dt)=>{ const h=Number(String(dt).slice(11,13)); return h<12?"manha":h<17?"tarde":"noite"; };
+  const cargoFreeDe=(c)=>{ const l=cargosFreela||[]; const n=normTxt(c.cargo||""); return (l.find(x=>normTxt(x.nome)===n)||l.find(x=>n&&normTxt(x.nome).includes(n.split(" ")[0]))||l[0]||{}).nome||""; };
+  const agendarTeste=async({c,data,unidade,obs,comoFreela,cargoFree})=>{
+    const d=dadosDe(c); let freelaId=c.freelaId||null;
+    if(c.teste && c.teste.freela && freelaId) tirarDaData(freelaId,"free",c.teste.unidade,String(c.teste.data).slice(0,10));   // reagendou: sai da data antiga
+    if(comoFreela){
+      const cf=(cargosFreela||[]).find(x=>x.nome===cargoFree)||{};
+      const existente=freelas.find(x=>String(x.id)===String(freelaId)) || (soDigitos(d.cpf).length===11 && freelas.find(x=>soDigitos(x.cpf)===soDigitos(d.cpf)));
+      if(existente){ freelaId=existente.id; salvarFreela({...existente, status:"ativo", cargo:cargoFree||existente.cargo, valor:Number(cf.valor)||existente.valor, unidade}); }
+      else freelaId=criarFreela({ nome:d.nome, cpf:d.cpf||"", tel:d.tel||"", cargo:cargoFree, setor:SETOR_POR_CARGO[cargoFree]||(cargoInfo(c.cargo)||{}).setor||"salao", unidade, valor:Number(cf.valor)||0,
+        tipoPix:"CPF", pix:soDigitos(d.cpf)||"", banco:"", origem:"rs", candidatoId:c.id });
+      escalarNaData(freelaId,"free",unidade,String(data).slice(0,10),turnoDaHora(data));
+    }
+    if(await salvarCand(c.id,{etapa:"teste", teste:{data,unidade,obs:obs||"",freela:!!comoFreela,cargoFree:comoFreela?cargoFree:""}, ...(freelaId?{freelaId}:{})},
+        "Teste agendado para "+(data?new Date(data).toLocaleString("pt-BR"):"—")+" em "+unidadeNome(unidade,unidades)+(comoFreela?" — na escala como freelancer ("+cargoFree+")":""))){
+      toast(comoFreela?"Teste agendado e incluído na escala como freelancer":"Teste agendado"); setAcao(null); setAbertoId(null); } };
   const aprovar=async({c,admissao,salario})=>{
     const leg=legadoDe(c);
     if(leg){ const tn=c.turno||{}; const ci=cargoInfo(c.cargo)||{};   // link antigo: o cadastro completo já existe, só libera
@@ -5130,6 +5156,7 @@ function RSPage(){
     if(await salvarCand(c.id,{etapa:"aprovado", aprovadoEm:Date.now(), salario:salario||"", admissaoPrevista:admissao||"", conviteDocs:token, docsLinkEm:Date.now(), decisao:{em:Date.now(),por:eu}},"Aprovado — link de documentos gerado"+(admissao?" (admissão prevista "+fmtDataBR(admissao)+")":""))){
       setAcao(null); setAbertoId(null); linkDocsModal(c,token); } };
   const declinar=async({c,motivo,obs})=>{ if(!motivo){ toast("Escolha o motivo"); return; }
+    if(c.teste && c.teste.freela && c.freelaId && String(c.teste.data).slice(0,10)>=hojeStr()) tirarDaData(c.freelaId,"free",c.teste.unidade,String(c.teste.data).slice(0,10));   // teste ainda não aconteceu: sai da escala
     if(await salvarCand(c.id,{etapa:"declinado", decisao:{motivo,obs:obs||"",em:Date.now(),por:eu}},"Declinado: "+motivo+(obs?" — "+obs:""))){ toast("Candidato declinado"); setAcao(null); setAbertoId(null); } };
   const reabrir=async(c)=>{ await salvarCand(c.id,{etapa:c.teste?"teste":(c.notas&&Object.keys(c.notas).length?"entrevistado":"inscrito"), decisao:null},"Processo reaberto"); };
   const excluir=async(c)=>{ if(!confirm("Excluir "+(c.nome||"o candidato")+"? Esta ação não pode ser desfeita.")) return;
@@ -5162,7 +5189,7 @@ function RSPage(){
   const prefs=(c)=>[c.cargoPretendido&&("procura: "+c.cargoPretendido), (c.horarios||[]).length&&("prefere "+(c.horarios.length===RS_HORARIOS.length?"qualquer horário":c.horarios.join(", ").toLowerCase())), c.pretensao&&("pretensão "+fmtBRL(c.pretensao))].filter(Boolean).join(" · ");
   const proxAcao=(c)=>{
     if(c._etapa==="inscrito") return <Btn size="sm" icon={I.star||I.edit} onClick={()=>abrirEntrevista(c)}>Avaliar entrevista</Btn>;
-    if(c._etapa==="entrevistado") return <Btn size="sm" icon={I.calendar} onClick={()=>setAcao({tipo:"teste",c,data:"",unidade:c.unidade,obs:""})}>Agendar teste</Btn>;
+    if(c._etapa==="entrevistado") return <Btn size="sm" icon={I.calendar} onClick={()=>setAcao({tipo:"teste",c,data:"",unidade:c.unidade,obs:"",comoFreela:true,cargoFree:cargoFreeDe(c)})}>Agendar teste</Btn>;
     if(c._etapa==="teste") return <><Btn size="sm" variant="ghost" className="text-rose-600" icon={I.x} onClick={()=>setAcao({tipo:"declinar",c,motivo:"",obs:""})}>Reprovar</Btn><Btn size="sm" icon={I.check} onClick={()=>setAcao({tipo:"aprovar",c,admissao:"",salario:c.salario||""})}>Aprovar</Btn></>;
     if(c._etapa==="aprovado" && c.conviteDocs && !c._colab) return <Btn size="sm" variant="soft" icon={I.arrow} onClick={()=>linkDocsModal(c,c.conviteDocs)}>Reenviar link de documentos</Btn>;
     return null; };
@@ -5262,7 +5289,8 @@ function RSPage(){
               {c.obs && <p className="text-sm text-slate-600 mt-2 whitespace-pre-line">{c.obs}</p>}</>}
           </div>
           {(c.teste||c.decisao||c._etapa==="aprovado") && <div className="p-4 rounded-2xl border border-slate-200 text-sm space-y-1.5">
-            {c.teste && <div><b>Teste:</b> {c.teste.data?new Date(c.teste.data).toLocaleString("pt-BR"):"—"} · {unidadeNome(c.teste.unidade,unidades)}{c.teste.obs?" · "+c.teste.obs:""}</div>}
+            {c.teste && <div><b>Teste:</b> {c.teste.data?new Date(c.teste.data).toLocaleString("pt-BR"):"—"} · {unidadeNome(c.teste.unidade,unidades)}{c.teste.obs?" · "+c.teste.obs:""}
+              {c.teste.freela && <div className="text-xs text-free-700 mt-0.5">Na escala como freelancer ({c.teste.cargoFree}) no dia do teste — aparece em Freelancers{c._colab?"; já foi efetivado como CLT":""}.</div>}</div>}
             {c.decisao && c.decisao.motivo && <div className="text-rose-700"><b>Declinado:</b> {c.decisao.motivo}{c.decisao.obs?" — "+c.decisao.obs:""}</div>}
             {c._etapa==="aprovado" && (c._colab ? <div className="text-emerald-700 font-semibold">✓ Documentos recebidos — {c.nome} já está em Colaboradores CLT{c._colab.admissao?" (admissão "+fmtDataBR(c._colab.admissao)+")":" (aguardando a data de admissão)"} e na aba Contabilidade para o registro.</div>
               : c.conviteDocs ? <div className="flex flex-wrap items-center gap-2"><span className="text-amber-700 font-semibold">Aprovado em {new Date(c.aprovadoEm||0).toLocaleDateString("pt-BR")} — aguardando o envio dos documentos.</span>
@@ -5277,7 +5305,7 @@ function RSPage(){
             {c._etapa==="declinado" ? <Btn size="sm" variant="ghost" icon={I.refresh} onClick={()=>reabrir(c)}>Reabrir processo</Btn>
             : c._etapa!=="aprovado" && <><Btn size="sm" variant="ghost" className="text-rose-600" icon={I.x} onClick={()=>setAcao({tipo:"declinar",c,motivo:"",obs:""})}>Declinar</Btn>
                 {c._etapa==="inscrito" ? <Btn size="sm" icon={I.edit} onClick={()=>{ abrirEntrevista(c); setAbertoId(null); }}>Avaliar entrevista</Btn>
-                : <>{c._etapa!=="teste" && <Btn size="sm" variant="soft" icon={I.calendar} onClick={()=>setAcao({tipo:"teste",c,data:"",unidade:c.unidade,obs:""})}>Agendar teste</Btn>}
+                : <><Btn size="sm" variant="soft" icon={I.calendar} onClick={()=>setAcao(c.teste&&c._etapa==="teste"?{tipo:"teste",c,data:c.teste.data,unidade:c.teste.unidade,obs:c.teste.obs||"",comoFreela:c.teste.freela!==false,cargoFree:c.teste.cargoFree||cargoFreeDe(c)}:{tipo:"teste",c,data:"",unidade:c.unidade,obs:"",comoFreela:true,cargoFree:cargoFreeDe(c)})}>{c._etapa==="teste"?"Reagendar teste":"Agendar teste"}</Btn>
                   <Btn size="sm" icon={I.check} onClick={()=>setAcao({tipo:"aprovar",c,admissao:"",salario:c.salario||""})}>Aprovar</Btn></>}</>}
           </div>
         </div>; })()}
@@ -5291,7 +5319,13 @@ function RSPage(){
           <div className="grid gap-3"><Field label="Data e hora"><Input type="datetime-local" value={acao.data} onChange={e=>setAcao({...acao,data:e.target.value})}/></Field>
             <Field label="Unidade"><Select value={acao.unidade} onChange={e=>setAcao({...acao,unidade:Number(e.target.value)})}>{unidades.map(u=><option key={u.id} value={u.id}>{u.nome}</option>)}</Select></Field>
             <Field label="Observações"><Input value={acao.obs} onChange={e=>setAcao({...acao,obs:e.target.value})} placeholder="Ex.: falar com o gerente, levar uniforme…"/></Field></div>
-          <div className="flex gap-2 mt-4"><Btn variant="ghost" onClick={()=>setAcao(null)}>Cancelar</Btn><Btn className="flex-1" icon={I.calendar} disabled={!acao.data} onClick={()=>agendarTeste(acao)}>Agendar</Btn></div>
+          <div className="mt-3 p-3 rounded-xl border border-slate-200">
+            <label className="flex items-start gap-2 text-sm text-slate-700"><input type="checkbox" checked={!!acao.comoFreela} onChange={e=>setAcao({...acao,comoFreela:e.target.checked})} className="mt-0.5 w-4 h-4 accent-green-700"/>
+              <span><b>Incluir na escala como freelancer</b> no dia do teste (bate ponto pelo CPF e recebe a diária).</span></label>
+            {acao.comoFreela && <div className="mt-2"><Field label="Cargo de freelancer (diária)"><Select value={acao.cargoFree} onChange={e=>setAcao({...acao,cargoFree:e.target.value})} aria-label="Cargo de freelancer">{(cargosFreela||[]).map(x=><option key={x.nome} value={x.nome}>{x.nome} — {fmtBRL(Number(x.valor)||0)}</option>)}</Select></Field>
+              {soDigitos(dadosDe(acao.c).cpf).length!==11 && <p className="text-xs text-amber-700 mt-1">Sem CPF na candidatura: o freelancer só consegue bater ponto depois que o CPF for informado (envie o link de candidatura ou complete em Freelancers).</p>}</div>}
+          </div>
+          <div className="flex gap-2 mt-4"><Btn variant="ghost" onClick={()=>setAcao(null)}>Cancelar</Btn><Btn className="flex-1" icon={I.calendar} disabled={!acao.data||(acao.comoFreela&&!acao.cargoFree)} onClick={()=>agendarTeste(acao)}>Agendar</Btn></div>
         </>}
         {acao.tipo==="aprovar" && <>
           <h3 className="text-lg font-bold text-slate-900 mb-1">Aprovar {acao.c.nome}</h3>
