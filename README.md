@@ -32,8 +32,7 @@ Ponto digital, escala e RH para restaurantes. O app é um único `index.html` (R
 
 1. **Registrar entrevista:** candidato, WhatsApp, cargo, horário (turno do cargo), unidade/endereço, como conheceu a vaga, pretensão e avaliação por estrelas (comunicação, experiência, postura, atitude, disponibilidade), com nota geral.
 2. **Link de cadastro:** gerado ao salvar, para enviar pelo WhatsApp. É o mesmo cadastro dos convites (documentos, leitura automática, selfie, termo), mas o cadastro fica **oculto em Colaboradores** até a aprovação.
-3. **Consulta de processos (opcional):** quando o cadastro chega, o sistema consulta processos judiciais públicos do CPF no Escavador (`api/antecedentes.js`) e mostra os de natureza criminal em que a pessoa é ré/investigada. O link pede a autorização do candidato. Requer `ESCAVADOR_TOKEN` na Vercel; dá para limitar a cargos específicos em **Configurar**. Atenção ao Tema 1 do TST (antecedentes só quando a função justifica).
-4. **Teste → Aprovar ou Declinar:** aprovar envia a pessoa para *Colaboradores CLT* (com cargo, unidade, horário, salário e, se informada, a data de admissão). Declinar registra o motivo. Cada candidato tem histórico das etapas.
+3. **Teste → Aprovar ou Declinar:** aprovar envia a pessoa para *Colaboradores CLT* (com cargo, unidade, horário, salário e, se informada, a data de admissão). Declinar registra o motivo. Cada candidato tem histórico das etapas.
 
 ## Notas fiscais dos PJ e Financeiro
 
