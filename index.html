@@ -7030,7 +7030,16 @@ async function zipAdmissao(d,arqsSel){
 }
 const baixarBlob=(blob,nome)=>{ const u=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=u; a.download=nome; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(u); a.remove(); },1500); };
 
-const STATUS_CONTAB={ enviado:["Enviado","blue"], recebido:["Recebido pela contabilidade","amber"], concluido:["Admissão concluída","green"] };
+const STATUS_CONTAB={ enviado:["Enviado","blue"], recebido:["Recebido pela contabilidade","amber"], concluido:["Admissão concluída","green"], cancelado:["Admissão cancelada","red"] };
+const MOTIVOS_CANCEL_ADM=["Candidato desistiu da vaga","Candidato não compareceu no início","Empresa cancelou a contratação","Reprovado no exame admissional","Documentação pendente / irregular","Outro motivo"];
+// E-mail para a contabilidade parar o registro (abre o Gmail já preenchido, como no envio)
+function emailCancelAdmissao({para,p,env,motivo,obs,por}){
+  const corpo=`Olá! A admissão abaixo foi CANCELADA. Por favor, não dê continuidade ao registro${env&&env.status==="recebido"?" (vocês já tinham recebido os dados)":""}.\n\n`+
+    `Nome: ${p.nome||"-"}\n${p.cpf?"CPF: "+p.cpf+"\n":""}Função: ${p.cargo||"-"}\nAdmissão prevista: ${p.admissao?fmtDataBR(p.admissao):"-"}\n`+
+    `${env&&env.enviadoEm?"Enviada para admissão em: "+new Date(env.enviadoEm).toLocaleDateString("pt-BR")+"\n":""}\nMotivo: ${motivo}\n${obs?"Observação: "+obs+"\n":""}`+
+    `\nCancelado por ${por||"RH"} em ${new Date().toLocaleString("pt-BR")}.\nO cancelamento também aparece na aba Contabilidade do Wilami:\n${location.origin+location.pathname}${WP_TENANT?"?t="+encodeURIComponent(WP_TENANT):""}`;
+  return "https://mail.google.com/mail/?view=cm&fs=1&to="+encodeURIComponent(para)+"&su="+encodeURIComponent("CANCELAMENTO de admissão: "+(p.nome||""))+"&body="+encodeURIComponent(corpo);
+}
 function ContabilidadePage(){
   const { clts, unidades, arquivos, cargoInfo, empresaContratante, contabCfg, setContabCfg, envContab, setEnvContab, acesso, can } = useStore();
   const toast=useContext(ToastCtx);
@@ -7042,7 +7051,11 @@ function ContabilidadePage(){
   const corte=ymd(addDias(new Date(),-90));
   const ativos=clts.filter(p=>p.status!=="inativo" && p.vinculo!=="confianca");
   const chave=(p)=>donoKeyDe("clt",p.id);
-  const lista = (aba==="enviar" ? ativos.filter(p=>!envContab[chave(p)] && (!p.admissao || p.admissao>=corte)) : ativos.filter(p=>envContab[chave(p)]))
+  const cancelada=(p)=> (envContab[chave(p)]||{}).status==="cancelado";
+  // a contabilidade vê as canceladas junto com as enviadas (para saber que deve parar o registro)
+  const lista = (aba==="enviar" ? ativos.filter(p=>!envContab[chave(p)] && (!p.admissao || p.admissao>=corte))
+      : aba==="cancelados" ? clts.filter(cancelada)
+      : souContab ? clts.filter(p=>envContab[chave(p)] && (cancelada(p) || ativos.includes(p))) : ativos.filter(p=>envContab[chave(p)] && !cancelada(p)))
     .filter(p=>normTxt(p.nome+" "+(p.cargo||"")).includes(normTxt(q)))
     .sort((a,b)=>String(b.admissao||"").localeCompare(String(a.admissao||"")));
   const docsResumo=(p)=>{ const d=docsDaPessoa(p,arquivos); return DOCS_ADMISSAO.map(x=>[x,d[x.k].length]); };
@@ -7054,18 +7067,18 @@ function ContabilidadePage(){
       <p className="text-xs text-slate-500 max-w-md">A contabilidade entra com login próprio e vê só esta aba: crie em <b>Gerentes & acessos</b> com o papel <b>Contabilidade</b>.</p>
     </Card>}
     <div className="flex flex-wrap items-center gap-2">
-      {!souContab && <div className="flex p-1 bg-slate-100 rounded-xl">{[["enviar","A enviar"],["enviados","Enviados"]].map(([k,l])=><button key={k} onClick={()=>setAba(k)} className={cx("px-4 py-1.5 rounded-lg text-sm font-semibold", aba===k?"bg-white shadow-soft text-brand-700":"text-slate-500")}>{l}</button>)}</div>}
+      {!souContab && <div className="flex p-1 bg-slate-100 rounded-xl">{[["enviar","A enviar"],["enviados","Enviados"],["cancelados","Canceladas"]].map(([k,l])=><button key={k} onClick={()=>setAba(k)} className={cx("px-4 py-1.5 rounded-lg text-sm font-semibold", aba===k?"bg-white shadow-soft text-brand-700":"text-slate-500")}>{l}</button>)}</div>}
       <div className="flex-1 min-w-[200px]"><Input value={q} onChange={e=>setQ(e.target.value)} placeholder="Buscar por nome ou função"/></div>
     </div>
     <Card className="divide-y divide-slate-100">
-      {lista.length===0 && <p className="p-6 text-center text-sm text-slate-400">{aba==="enviar"?"Nenhum novo CLT pendente de envio (admitidos nos últimos 90 dias).":"Nenhuma admissão enviada ainda."}</p>}
+      {lista.length===0 && <p className="p-6 text-center text-sm text-slate-400">{aba==="enviar"?"Nenhum novo CLT pendente de envio (admitidos nos últimos 90 dias).":aba==="cancelados"?"Nenhuma admissão cancelada.":"Nenhuma admissão enviada ainda."}</p>}
       {lista.map(p=>{ const env=envContab[chave(p)]; const st=env&&STATUS_CONTAB[env.status]; const u=unidades.find(x=>x.id===p.unidade);
         return <div key={chave(p)} className="p-3 flex flex-wrap items-center gap-3">
           <Avatar name={p.nome} src={p.foto} size="w-10 h-10"/>
           <div className="flex-1 min-w-[180px]"><div className="text-sm font-semibold text-slate-800">{p.nome}</div>
             <div className="text-xs text-slate-400">{p.cargo||"—"}{u?" · "+u.nome:""}{p.admissao?" · admissão "+fmtDataBR(p.admissao):" · sem data de admissão"}</div></div>
           <div className="flex flex-wrap gap-1">{docsResumo(p).map(([d,n])=><span key={d.k} className={cx("text-[11px] px-2 py-0.5 rounded-full border", n?"bg-emerald-50 border-emerald-200 text-emerald-700":d.obrig?"bg-rose-50 border-rose-200 text-rose-600":"bg-slate-50 border-slate-200 text-slate-400")}>{n?"✓ ":d.obrig?"falta ":"— "}{d.l.replace(" (se tiver)","")}</span>)}</div>
-          {st && <Badge tone={st[1]}>{st[0]}{env.enviadoEm?" · "+new Date(env.enviadoEm).toLocaleDateString("pt-BR"):""}</Badge>}
+          {st && <Badge tone={st[1]}>{st[0]}{env.status==="cancelado"?(env.canceladoEm?" · "+new Date(env.canceladoEm).toLocaleDateString("pt-BR"):""):(env.enviadoEm?" · "+new Date(env.enviadoEm).toLocaleDateString("pt-BR"):"")}</Badge>}
           {env && env.devolvidos>0 && <Badge tone="blue">📎 {env.devolvidos} devolvido(s)</Badge>}
           <Btn size="sm" variant={env?"ghost":"soft"} icon={env?I.eye:I.arrow} onClick={()=>setSel(chave(p))}>{env?"Abrir":"Preparar envio"}</Btn>
         </div>; })}
@@ -7074,7 +7087,7 @@ function ContabilidadePage(){
   </div>;
 }
 function AdmissaoModal({p,ctx,souContab,onClose}){
-  const { arquivos, envContab, setEnvContab, contabCfg, acesso, can, salvarClt } = useStore();
+  const { arquivos, envContab, setEnvContab, contabCfg, setContabCfg, acesso, can, salvarClt } = useStore();
   const toast=useContext(ToastCtx);
   const key=donoKeyDe("clt",p.id); const env=envContab[key];
   const base=dadosAdmissao(p,ctx);
@@ -7087,7 +7100,8 @@ function AdmissaoModal({p,ctx,souContab,onClose}){
   const [envDoc,setEnvDoc]=useState(""); const [ocupado,setOcupado]=useState("");
   const [obsContab,setObsContab]=useState((env&&env.obsContab)||"");
   const set=(k,v)=>setD(x=>({...x,[k]:v}));
-  const editavel=!souContab;
+  const cancelada=!!(env && env.status==="cancelado");
+  const editavel=!souContab && !cancelada;   // cancelada: só leitura (dá para desfazer)
   const selecionados=Object.values(docs).flat().filter(a=>marc[a.id]);
   const faltando=DOCS_ADMISSAO.filter(x=>x.obrig && !docs[x.k].some(a=>marc[a.id])).map(x=>x.l);
   const anexar=async(slot,file)=>{ if(!file) return; setEnvDoc(slot.k);
@@ -7115,6 +7129,22 @@ function AdmissaoModal({p,ctx,souContab,onClose}){
     setEnviandoDev("");
     if(ok){ setEnvContab(prev=>({...prev,[key]:{...(prev[key]||{}), devolvidoEm:Date.now(), devolvidos:(((prev[key]||{}).devolvidos)||0)+ok, historico:[...(((prev[key]||{}).historico)||[]),{em:Date.now(),acao:"devolveu "+ok+" arquivo(s)",por:(acesso&&acesso.email)||""}]}})); toast(ok+" arquivo(s) enviado(s) para a empresa"); } };
   const moverPara=async(a,pasta)=>{ try{ await arqAtualizar(a.id,{pasta, origem:"contabilidade"}); toast("Arquivo movido para "+pasta); }catch(e){ toast(erroBanco(e)); } };
+  // Cancelar a admissão (desistência do candidato ou decisão da empresa antes do registro)
+  const podeCancelar=editavel && !(env && env.status==="concluido");
+  const [canc,setCanc]=useState(null);   // { motivo, obs, avisar, para }
+  const abrirCancelar=()=>setCanc({ motivo:MOTIVOS_CANCEL_ADM[0], obs:"", avisar:!!env, para:contabCfg.email||"" });
+  const cancelar=()=>{ const por=(acesso&&acesso.email)||"";
+    const reg={ status:"cancelado", statusAntes:(env&&env.status)||"", canceladoEm:Date.now(), canceladoPor:por, motivoCancel:canc.motivo, obsCancel:canc.obs.trim(),
+      historico:[...((env&&env.historico)||[]),{em:Date.now(),acao:"cancelado — "+canc.motivo,por}] };
+    setEnvContab(prev=>({...prev,[key]:{...(prev[key]||{}),...reg}}));
+    if(canc.avisar && canc.para.trim()) window.open(emailCancelAdmissao({para:canc.para.trim(),p,env,motivo:canc.motivo,obs:canc.obs.trim(),por}),"_blank");
+    if(canc.para.trim() && canc.para.trim()!==contabCfg.email && !contabCfg.email) setContabCfg({...contabCfg,email:canc.para.trim()});
+    toast("Admissão cancelada"+(canc.avisar&&canc.para.trim()?" — confira e envie o e-mail":"")); setCanc(null); onClose(); };
+  const desfazerCancel=()=>{ if(!confirm("Desfazer o cancelamento? A admissão volta para "+(env.statusAntes?"Enviados":"A enviar")+".")) return;
+    const por=(acesso&&acesso.email)||"";
+    setEnvContab(prev=>{ const atual=prev[key]||{}; if(!atual.statusAntes){ const o={...prev}; delete o[key]; return o; }
+      return {...prev,[key]:{...atual, status:atual.statusAntes, canceladoEm:null, motivoCancel:"", obsCancel:"", historico:[...(atual.historico||[]),{em:Date.now(),acao:"cancelamento desfeito",por}]}}; });
+    toast("Cancelamento desfeito"); onClose(); };
   const marcarStatus=(status)=>{ setEnvContab(prev=>({...prev,[key]:{...(prev[key]||{}), status, obsContab, [status+"Em"]:Date.now(), historico:[...(((prev[key]||{}).historico)||[]),{em:Date.now(),acao:status,por:(acesso&&acesso.email)||""}]}})); toast(STATUS_CONTAB[status][0]); onClose(); };
   const linha=(rot,campo,tipo="text")=> <div className="grid grid-cols-[150px_1fr] items-center border border-slate-300 -mt-px bg-sky-50/60">
     <div className="px-3 py-2 text-xs font-bold text-slate-700 uppercase">{rot}</div>
@@ -7123,8 +7153,14 @@ function AdmissaoModal({p,ctx,souContab,onClose}){
   </div>;
   return <Modal open onClose={onClose} wide>
     <div className="p-5 sm:p-6">
-      <div className="flex items-start justify-between mb-3"><div><h3 className="text-lg font-bold text-slate-900">{p.nome}</h3><p className="text-sm text-slate-500">{env?(STATUS_CONTAB[env.status]||[""])[0]+(env.enviadoEm?" em "+new Date(env.enviadoEm).toLocaleString("pt-BR"):""):"Ainda não enviado à contabilidade"}</p></div>
+      <div className="flex items-start justify-between mb-3"><div><h3 className="text-lg font-bold text-slate-900">{p.nome}</h3><p className="text-sm text-slate-500">{cancelada?(env.enviadoEm?"Enviada em "+new Date(env.enviadoEm).toLocaleString("pt-BR")+" · cancelada":"Cancelada antes do envio"):env?(STATUS_CONTAB[env.status]||[""])[0]+(env.enviadoEm?" em "+new Date(env.enviadoEm).toLocaleString("pt-BR"):""):"Ainda não enviado à contabilidade"}</p></div>
         <button onClick={onClose} className="text-slate-400 hover:text-slate-600" aria-label="Fechar"><Icon d={I.x}/></button></div>
+      {cancelada && <div className="mb-3 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-sm flex flex-wrap items-start gap-2">
+        <Icon d={I.x} className="w-4 h-4 mt-0.5 shrink-0"/>
+        <div className="flex-1 min-w-[200px]"><b>Admissão cancelada{souContab?" — não dar continuidade ao registro":""}</b>{env.canceladoEm?" em "+new Date(env.canceladoEm).toLocaleString("pt-BR"):""}{env.canceladoPor?" por "+env.canceladoPor:""}.
+          <div>Motivo: {env.motivoCancel||"—"}{env.obsCancel?" · "+env.obsCancel:""}</div></div>
+        {!souContab && <Btn size="sm" variant="ghost" onClick={desfazerCancel}>Desfazer</Btn>}
+      </div>}
       <div className="rounded-xl overflow-hidden border border-slate-300">
         <div className="bg-[#1f4e79] text-white text-center font-bold py-3 tracking-wide">DADOS PARA ADMISSÃO DE FUNCIONÁRIO</div>
         <div className="p-3 space-y-3 bg-white">
@@ -7176,9 +7212,20 @@ function AdmissaoModal({p,ctx,souContab,onClose}){
       <div className="flex flex-wrap gap-2 mt-4">
         <Btn variant="ghost" icon={I.download} disabled={ocupado==="zip"} onClick={baixar}>{ocupado==="zip"?"Montando…":"Baixar dados + documentos (.zip)"}</Btn>
         {editavel && <Btn className="flex-1" icon={I.arrow} disabled={!!ocupado || faltando.length>0 || !d.nome} onClick={enviar}>{env?"Reenviar para a contabilidade":"Enviar para a contabilidade"}</Btn>}
-        {souContab && env && env.status!=="concluido" && <>{env.status==="enviado" && <Btn variant="soft" icon={I.check} onClick={()=>marcarStatus("recebido")}>Marcar como recebido</Btn>}
+        {podeCancelar && !canc && <button onClick={abrirCancelar} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold text-rose-600 border border-rose-200 hover:bg-rose-50"><Icon d={I.x} className="w-4 h-4"/>Cancelar admissão</button>}
+        {souContab && env && env.status!=="concluido" && !cancelada && <>{env.status==="enviado" && <Btn variant="soft" icon={I.check} onClick={()=>marcarStatus("recebido")}>Marcar como recebido</Btn>}
           <Btn className="flex-1" icon={I.check} onClick={()=>marcarStatus("concluido")}>Admissão concluída</Btn></>}
       </div>
+      {canc && <div className="mt-4 p-4 rounded-2xl border-2 border-rose-200 bg-rose-50/40 space-y-3">
+        <div className="text-sm font-bold text-rose-700">Cancelar a admissão de {p.nome}</div>
+        <Field label="Motivo"><Select value={canc.motivo} onChange={e=>setCanc({...canc,motivo:e.target.value})}>{MOTIVOS_CANCEL_ADM.map(m=><option key={m}>{m}</option>)}</Select></Field>
+        <Field label={"Observação"+(canc.motivo==="Outro motivo"?" *":" (opcional)")}><textarea value={canc.obs} onChange={e=>setCanc({...canc,obs:e.target.value})} rows={2} className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-sm bg-white" placeholder="Ex.: avisou pelo WhatsApp em 27/10 que aceitou outra proposta"/></Field>
+        <label className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={canc.avisar} onChange={e=>setCanc({...canc,avisar:e.target.checked})} className="w-4 h-4 accent-green-700"/>Avisar a contabilidade por e-mail{!env?" (ainda não foi enviada)":""}</label>
+        {canc.avisar && <Field label="E-mail da contabilidade"><Input value={canc.para} onChange={e=>setCanc({...canc,para:e.target.value})} placeholder="contabilidade@escritorio.com.br"/></Field>}
+        <p className="text-xs text-slate-500">O cadastro do colaborador continua em <b>Colaboradores CLT</b> (com os documentos). Se ele não for mais trabalhar, tire da escala ou exclua o cadastro por lá.</p>
+        <div className="flex gap-2"><Btn variant="ghost" onClick={()=>setCanc(null)}>Voltar</Btn>
+          <Btn variant="danger" className="flex-1" icon={I.x} disabled={(canc.motivo==="Outro motivo" && !canc.obs.trim()) || (canc.avisar && !canc.para.trim())} onClick={cancelar}>{canc.avisar?"Cancelar admissão e abrir e-mail":"Cancelar admissão"}</Btn></div>
+      </div>}
     </div>
   </Modal>;
 }
