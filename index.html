@@ -298,17 +298,27 @@ function usePersist(key, initial){
       }, function(){ /* sem permissão/erro — segue com local */ });
     }catch(e){ return; }
   },[key]);
+  const vRef=useRef(v); vRef.current=v;
   const setBoth=(upd)=>{
+    const funcional = typeof upd==="function";
     setV(prev=>{
-      const nv = typeof upd==="function" ? upd(prev) : upd;
+      const nv = funcional ? upd(prev) : upd;
       try{ localStorage.setItem(tKey(key), JSON.stringify(nv)); }catch{}
-      // Sempre grava no banco. (Antes, a 1ª alteração feita depois de uma atualização vinda de outro
-      // aparelho NÃO era salva no servidor — edições "voltavam" e a escala acumulava marcações órfãs.)
-      // Não há eco em loop: a atualização remota chega por setV direto e não passa por aqui.
-      const db=window.__WPDB;
-      if(db){ try{ tDoc(key).set({v:nv}); }catch(e){} }
       return nv;
     });
+    // Grava no banco. Alterações do tipo "pega a lista e muda um item" são aplicadas, numa transação, sobre a
+    // versão que está no SERVIDOR — e não sobre a cópia deste aparelho. Assim um aparelho com a lista
+    // desatualizada (ou que ainda está carregando) não apaga o que outro aparelho acabou de incluir.
+    const db=window.__WPDB; if(!db) return;
+    const ref=tDoc(key);
+    const gravar=(nv)=>{ try{ ref.set({v:nv}); }catch(e){} };
+    if(funcional && typeof db.runTransaction==="function"){
+      db.runTransaction(function(t){ return t.get(ref).then(function(snap){
+        const d=snap && snap.exists ? snap.data() : null;
+        const base = d && Object.prototype.hasOwnProperty.call(d,"v") ? d.v : vRef.current;
+        t.set(ref,{v:upd(base)}); }); })
+        .catch(function(){ gravar(upd(vRef.current)); });   // sem conexão: grava a versão local (comportamento anterior)
+    } else gravar(funcional ? upd(vRef.current) : upd);
   };
   return [v,setBoth,pronto];
 }
@@ -1706,18 +1716,18 @@ function EscalaVisual() {
   const onDrop=(dia)=>{
     if(!drag||!editavel) return;
     setDiaData(drag.from, arr=>arr.filter(a=>a.id!==drag.aloc.id));
-    setDiaData(dia, arr=>[...arr, {...drag.aloc}]);
+    setDiaData(dia, arr=>[...arr, {...drag.aloc, manualFolga:true}]);
     toast(`${nome(drag.aloc.pid,drag.aloc.tipo)} movido para ${labelDiaFull(dia)}`);
     setDrag(null); setOver(null);
   };
   const remover=(dia,id)=>setDiaData(dia, arr=>arr.filter(a=>a.id!==id));
   const setMarca=(dia,id,marca)=>setDiaData(dia, arr=>arr.map(a=>a.id===id?{...a,marca}:a));
-  const setTurnoTo=(dia,id,turno)=>setDiaData(dia, arr=>arr.map(a=>a.id===id?{...a,turno,marca:turno==="folga"?null:a.marca}:a));
+  const setTurnoTo=(dia,id,turno)=>setDiaData(dia, arr=>arr.map(a=>a.id===id?{...a,turno,marca:turno==="folga"?null:a.marca,manualFolga:true}:a));   // escolha manual vale mais que o rodízio da cor
   const setHorario=(dia,id,h)=>setDiaData(dia, arr=>arr.map(a=>a.id===id?{...a,h}:a));
   const [editH,setEditH]=useState(null); // {di,id,hi,hf}
   const [addTurno,setAddTurno]=useState(null);   // turno sugerido pelo "+FL" da grade
   const addColab=(dia,pid,tipo,turnoForcado)=>{ const turno=turnoForcado||addTurno||(tipo==="free"?"noite":turnoPorDia(dia));
-    setDiaData(dia, arr=>[...arr,{id:(tipo==="clt"?"c":tipo==="pj"?"p":"f")+Date.now()+Math.floor(Math.random()*1000),pid,tipo,turno}]); setAdd(null); setAddTurno(null); toast("Colaborador inserido na escala do dia "+labelDiaFull(dia)); };
+    setDiaData(dia, arr=>[...arr,{id:(tipo==="clt"?"c":tipo==="pj"?"p":"f")+Date.now()+Math.floor(Math.random()*1000),pid,tipo,turno,manualFolga:true}]); setAdd(null); setAddTurno(null); toast("Colaborador inserido na escala do dia "+labelDiaFull(dia)); };
   const [modo,setModo]=useState(()=>{ try{ return localStorage.getItem("wp_escala_modo")||"grade"; }catch(e){ return "grade"; } });
   const trocaModo=(m)=>{ setModo(m); setMenu(null); try{ localStorage.setItem("wp_escala_modo",m); }catch(e){} };
 
@@ -5098,7 +5108,7 @@ function RSPage(){
   const [acao,setAcao]=useState(null);
   const eu=(acesso&&acesso.email)||(((window.__WPAUTH&&window.__WPAUTH.currentUser)||{}).email)||"";
   // quem fez o teste como freelancer e já enviou os documentos (virou CLT) sai da lista de freelancers ativos
-  useEffect(()=>{ (cands||[]).forEach(c=>{ if(!c.freelaId || !c.conviteDocs) return; const virouClt=clts.some(p=>p.conviteId===c.conviteDocs); const fr=freelas.find(x=>String(x.id)===String(c.freelaId));
+  useEffect(()=>{ if(!cands) return; cands.forEach(c=>{ if(!c.freelaId || !c.conviteDocs) return; const virouClt=clts.some(p=>p.conviteId===c.conviteDocs); const fr=freelas.find(x=>String(x.id)===String(c.freelaId));
     if(virouClt && fr && !fr.efetivadoCLT) salvarFreela({...fr, status:"inativo", efetivadoCLT:true}); }); },[cands,clts,freelas]);   // eslint-disable-line
   if(!pode) return <Card className="p-10 text-center text-slate-500">A aba Recrutamento & Seleção é exclusiva do time de R&S.</Card>;
   const brutos=cands||[];
