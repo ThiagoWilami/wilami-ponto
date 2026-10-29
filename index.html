@@ -1722,9 +1722,14 @@ function EscalaVisual() {
   };
   const remover=(dia,id)=>setDiaData(dia, arr=>arr.filter(a=>a.id!==id));
   const setMarca=(dia,id,marca)=>setDiaData(dia, arr=>arr.map(a=>a.id===id?{...a,marca}:a));
-  const setTurnoTo=(dia,id,turno)=>setDiaData(dia, arr=>arr.map(a=>a.id===id?{...a,turno,marca:turno==="folga"?null:a.marca,manualFolga:true}:a));   // escolha manual vale mais que o rodízio da cor
-  const setHorario=(dia,id,h)=>setDiaData(dia, arr=>arr.map(a=>a.id===id?{...a,h}:a));
-  const [editH,setEditH]=useState(null); // {di,id,hi,hf}
+  const setTurnoTo=(dia,id,turno)=>setDiaData(dia, arr=>arr.map(a=>{ if(a.id!==id) return a; const o={...a,turno,marca:turno==="folga"?null:a.marca,manualFolga:true}; if(a.turno!==turno) delete o.h; return o; }));   // escolha manual vale mais que o rodízio da cor
+  const turnoPelaHora=(hi)=>{ const hh=Number(String(hi).slice(0,2)); return hh>=5&&hh<12?"manha":hh>=12&&hh<17?"tarde":"noite"; };
+  const setHorario=(dia,id,h,turno)=>setDiaData(dia, arr=>arr.map(a=>a.id===id?{...a,h,manualFolga:true,...(turno?{turno,marca:a.turno==="folga"?null:a.marca}:{})}:a));
+  const [editH,setEditH]=useState(null); // {di,id,hi,hf,porHora}
+  // muda a entrada mantendo a duração da jornada (ex.: 08:00–16:20 → 11:00–19:20)
+  const entradaNova=(eh,hi)=>{ const m=(t)=>{ const [a,b]=String(t||"0:0").split(":").map(Number); return a*60+(b||0); }; let dur=m(eh.hf)-m(eh.hi); if(dur<=0) dur+=1440; if(!(dur>0&&dur<1440)) dur=8*60+20;
+    const f=(m(hi)+dur)%1440; return {...eh, hi, hf:String(Math.floor(f/60)).padStart(2,"0")+":"+String(f%60).padStart(2,"0")}; };
+  const abrirHorario=(di,a)=>{ const t=TURNOS[a.turno]||TURNOS.manha; const cur=(a.h||t.h||"").split("–"); setEditH({di,id:a.id,hi:cur[0]||"08:00",hf:cur[1]||"16:00"}); };
   const [addTurno,setAddTurno]=useState(null);   // turno sugerido pelo "+FL" da grade
   const addColab=(dia,pid,tipo,turnoForcado)=>{ const turno=turnoForcado||addTurno||(tipo==="free"?"noite":turnoPorDia(dia));
     setDiaData(dia, arr=>[...arr,{id:(tipo==="clt"?"c":tipo==="pj"?"p":"f")+Date.now()+Math.floor(Math.random()*1000),pid,tipo,turno,manualFolga:true}]); setAdd(null); setAddTurno(null); toast("Colaborador inserido na escala do dia "+labelDiaFull(dia)); };
@@ -1767,7 +1772,7 @@ function EscalaVisual() {
   const ordemTipo={clt:0,pj:1,free:2};
   const setoresGrade=SETORES.filter(([k])=>setorF==="todos"||setorF===k).map(([sk,sl,sc])=>{
     const doSetor=Object.values(pessoasSemana).filter(o=>setorDe(o.p)===sk);
-    const grupos=GRUPOS_TURNO.map(([tk,tl,ti])=>({tk,tl,ti,rows:doSetor.filter(o=>turnoBase(o)===tk).sort((x,y)=>(ordemTipo[x.tipo]-ordemTipo[y.tipo])||String(nome(x.pid,x.tipo)).localeCompare(nome(y.pid,y.tipo)))})).filter(g=>g.rows.length);
+    const grupos=GRUPOS_TURNO.map(([tk,tl,ti])=>({tk,tl,ti,rows:doSetor.filter(o=>turnoBase(o)===tk || (o.cont[tk]||0)>0).sort((x,y)=>(ordemTipo[x.tipo]-ordemTipo[y.tipo])||String(nome(x.pid,x.tipo)).localeCompare(nome(y.pid,y.tipo)))})).filter(g=>g.rows.length);
     return {sk,sl,sc,grupos};
   }).filter(s=>s.grupos.length);
   const horaEntrada=(a)=> String(a.h||(TURNOS[a.turno]||{}).h||"").split("–")[0];
@@ -1861,14 +1866,18 @@ function EscalaVisual() {
                         <span className="inline-block max-w-full truncate px-2 py-0.5 rounded-md text-[11px] font-bold" style={{background:cor,color:tx}} title={nm}>{o.tipo==="pj"?nm:nomeSobrenome(nm)}</span>
                         <div className="text-[10px] text-slate-400 truncate mt-0.5">{o.tipo==="free"?"Freela · ":o.tipo==="pj"?"PJ · ":""}{(o.p&&(o.p.cargo||o.p.servico))||""}</div>
                       </td>
-                      {[0,1,2,3,4,5,6].map(di=>{ const as=alocsDe(o,di);
+                      {[0,1,2,3,4,5,6].map(di=>{ const base=turnoBase(o)===g.tk; const todas=alocsDe(o,di);
+                        // cada turno mostra só as alocações dele; a folga aparece na linha do turno principal
+                        const as=todas.filter(a=> a.turno===g.tk || (a.turno==="folga"&&base) || (base && !GRUPOS_TURNO.some(([k])=>k===a.turno) && a.turno!=="folga"));
+                        if(!as.length && todas.length) return <td key={di} className={cx("px-1 py-1.5 border-b border-slate-100", ehHoje(di)&&"bg-amber-50/50")}/>;
                         return <td key={di} className={cx("px-1 py-1.5 border-b border-slate-100 text-center align-middle", ehHoje(di)&&"bg-amber-50/50")}>
                           {as.length===0 ? (editavel ? <button onClick={()=>addColab(di,o.pid,o.tipo,g.tk)} title={"Escalar "+nm+" em "+labelDiaFull(di)} className="no-print w-full h-8 rounded-lg border border-dashed border-transparent text-slate-300 hover:border-slate-300 hover:text-slate-500 opacity-0 group-hover:opacity-100 focus:opacity-100 transition">+</button> : <span className="text-slate-200">—</span>)
                           : as.map(a=> a.turno==="folga"
                             ? <button key={a.id} onClick={e=>abrirMenuGrade(e,di,a)} className="inline-flex flex-col items-center px-2 py-0.5 rounded-md bg-rose-50 text-rose-500 font-bold leading-tight"><span className="text-[11px]">folga</span></button>
                             : <button key={a.id} onClick={e=>abrirMenuGrade(e,di,a)} className="inline-flex flex-col items-center leading-tight m-0.5">
                                 <span className={cx("px-2 py-0.5 rounded-md text-[11px] font-bold", a.marca==="faltou"&&"line-through opacity-60")} style={{background:cor,color:tx}}>{o.tipo==="pj"?String(nm).split(" ").slice(0,2).join(" "):String(nm).split(" ")[0]}</span>
-                                <span className="text-[10px] text-slate-500 tabular-nums">{a.turno!==g.tk?(TURNOS[a.turno]||{}).l+" ":""}{horaEntrada(a)}</span>
+                                <span role={editavel?"button":undefined} title={editavel?"Alterar horário":undefined} onClick={editavel?(e=>{ e.stopPropagation(); setMenu(null); abrirHorario(di,a); }):undefined}
+                                  className={cx("text-[10px] text-slate-500 tabular-nums rounded px-1", editavel&&"hover:bg-brand-50 hover:text-brand-700 underline decoration-dotted underline-offset-2 cursor-pointer")}>{horaEntrada(a)}</span>
                                 {a.marca==="faltou" && <span className="text-[9px] font-bold text-rose-600">faltou</span>}
                                 {a.marca==="atrasou" && <span className="text-[9px] font-bold text-amber-600">atrasou</span>}
                               </button>)}
@@ -1926,13 +1935,19 @@ function EscalaVisual() {
           <button onClick={()=>setEditH(null)} className="text-slate-400 hover:text-slate-600"><Icon d={I.x}/></button>
         </div>
         <div className="flex items-end gap-3">
-          <Field label="Entrada"><Input type="time" value={editH.hi} onChange={e=>setEditH({...editH,hi:e.target.value})}/></Field>
+          <Field label="Entrada"><Input type="time" value={editH.hi} onChange={e=>setEditH(entradaNova(editH,e.target.value))} aria-label="Entrada"/></Field>
           <span className="pb-3 text-slate-400">até</span>
-          <Field label="Saída"><Input type="time" value={editH.hf} onChange={e=>setEditH({...editH,hf:e.target.value})}/></Field>
+          <Field label="Saída"><Input type="time" value={editH.hf} onChange={e=>setEditH({...editH,hf:e.target.value})} aria-label="Saída"/></Field>
         </div>
+        <div className="mt-3"><div className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Entrada rápida</div>
+          <div className="flex flex-wrap gap-1.5">{["07:00","08:00","09:00","10:00","11:00","12:00","14:00","15:00","16:00","17:00","18:00","19:00"].map(h=>
+            <button key={h} type="button" onClick={()=>setEditH(entradaNova(editH,h))} className={cx("px-2.5 py-1.5 rounded-lg text-sm font-semibold border tabular-nums", editH.hi===h?"bg-brand-600 text-white border-brand-600":"bg-white text-slate-600 border-slate-200 hover:border-brand-300")}>{h}</button>)}</div>
+          <p className="text-[11px] text-slate-400 mt-1.5">A saída acompanha a entrada, mantendo a mesma duração da jornada.</p></div>
+        <label className="flex items-center gap-2 text-sm text-slate-600 mt-3"><input type="checkbox" checked={editH.porHora!==false} onChange={e=>setEditH({...editH,porHora:e.target.checked})} className="w-4 h-4 accent-green-700"/>
+          Mover para o turno do horário ({TURNOS[turnoPelaHora(editH.hi)].l})</label>
         <div className="flex gap-2 mt-5">
           <Btn variant="ghost" className="flex-1" onClick={()=>setEditH(null)}>Cancelar</Btn>
-          <Btn className="flex-1" icon={I.check} onClick={()=>{ setHorario(editH.di,editH.id,`${editH.hi}–${editH.hf}`); setEditH(null); toast("Horário atualizado"); }}>Salvar horário</Btn>
+          <Btn className="flex-1" icon={I.check} onClick={()=>{ const tn=editH.porHora!==false?turnoPelaHora(editH.hi):null; setHorario(editH.di,editH.id,`${editH.hi}–${editH.hf}`,tn); setEditH(null); toast("Horário atualizado"+(tn?" · "+TURNOS[tn].l:"")); }}>Salvar horário</Btn>
         </div>
       </div>}
     </Modal>
