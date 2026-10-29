@@ -1835,6 +1835,10 @@ function EscalaVisual() {
     const grupos=GRUPOS_TURNO.map(([tk,tl,ti])=>({tk,tl,ti,rows:doSetor.filter(o=>turnoBase(o)===tk || (o.cont[tk]||0)>0).sort((x,y)=>(ordemTipo[x.tipo]-ordemTipo[y.tipo])||String(nome(x.pid,x.tipo)).localeCompare(nome(y.pid,y.tipo)))})).filter(g=>g.rows.length);
     return {sk,sl,sc,grupos};
   }).filter(s=>s.grupos.length);
+  // cor da folga de cada dia no cabeçalho: considera a casa inteira → igual em manhã, tarde e noite
+  const folgaCab=[0,1,2,3,4,5,6].map(di=>{ const f=Object.values(pessoasSemana).filter(o=>alocsDe(o,di).some(a=>a.turno==="folga"));
+    const cores=f.map(o=>corPessoaEscala(o.p,o.tipo,o.pid)); const bg=fundoFolga(cores);
+    return {bg, txt:bg?(new Set(cores).size===1?textoSobreCor(cores[0]):"#fff"):null, nomes:f.map(o=>nome(o.pid,o.tipo))}; });
   const horaEntrada=(a)=> String(a.h||(TURNOS[a.turno]||{}).h||"").split("–")[0];
   const abrirMenuGrade=(e,di,a)=>{ e.stopPropagation(); if(!editavel) return; const r=e.currentTarget.getBoundingClientRect(); const x=Math.min(r.left, window.innerWidth-190), y=(r.bottom+300>window.innerHeight)? Math.max(8,r.top-300) : r.bottom+4; setMenu(menu&&menu.id===a.id&&menu.di===di?null:{di,id:a.id,grade:true,x,y}); };
   const alocMenu = menu&&menu.grade ? (semanaListas[menu.di]||[]).find(a=>a.id===menu.id) : null;
@@ -1906,23 +1910,22 @@ function EscalaVisual() {
           return <div key={g.tk} className="mb-3">
             <div className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mb-1 flex items-center gap-1">{g.ti} {g.tl}</div>
             <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
-              <table className="w-full min-w-[760px] border-collapse text-xs table-fixed">
+              <table className="w-full min-w-[680px] border-collapse text-xs table-fixed">
                 <thead><tr>
-                  <th className="sticky left-0 z-10 bg-slate-50 w-[130px] sm:w-[170px] text-left px-2.5 py-2 font-semibold text-slate-500 border-b border-r border-slate-200">Colaborador</th>
-                  {[0,1,2,3,4,5,6].map(di=>{ const folgas=g.rows.filter(o=>alocsDe(o,di).some(a=>a.turno==="folga")).map(o=>corPessoaEscala(o.p,o.tipo,o.pid));
-                    const bg=fundoFolga(folgas); const trab=g.rows.filter(o=>alocsDe(o,di).some(a=>a.turno!=="folga")).length; const d=datasSemana[di];
-                    const txt=bg?(new Set(folgas).size===1?textoSobreCor(folgas[0]):"#fff"):null;
-                    return <th key={di} className={cx("relative px-1 py-1.5 border-b border-slate-200 font-semibold align-top", ehHoje(di)&&"ring-2 ring-inset ring-amber-400")} style={bg?{background:bg,color:txt}:{background:ehHoje(di)?"#fffbeb":"#f8fafc"}} title={folgas.length?"Folga: "+g.rows.filter(o=>alocsDe(o,di).some(a=>a.turno==="folga")).map(o=>nome(o.pid,o.tipo)).join(", "):""}>
-                      <div className={cx("text-base font-extrabold leading-tight", !bg&&"text-slate-800")}>{d.getDate()}/{String(d.getMonth()+1).padStart(2,"0")}</div>
-                      <div className={cx("text-[10px] uppercase", !bg&&"text-slate-400")}>{DIAS[di]}{ehHoje(di)?" · hoje":""}</div>
-                      <div className={cx("text-[10px] font-normal", !bg&&"text-slate-400")}>{trab} na escala</div>
-                      {editavel && <button onClick={()=>{ setAddTurno(g.tk); setAdd(di); }} title="Incluir freelancer neste turno" className="no-print mt-1 text-[9px] font-bold px-1.5 py-0.5 rounded-md bg-white/85 text-slate-600 hover:bg-white border border-slate-200">+FL</button>}
+                  <th className="sticky left-0 z-10 bg-slate-50 w-[120px] sm:w-[150px] text-left px-2.5 py-1 text-[10px] uppercase font-bold text-slate-400 border-b border-r border-slate-200">Colaborador</th>
+                  {[0,1,2,3,4,5,6].map(di=>{ const {bg,txt,nomes}=folgaCab[di]; const d=datasSemana[di];
+                    return <th key={di} className={cx("relative px-1 py-1 border-b border-slate-200 font-semibold", ehHoje(di)&&"ring-2 ring-inset ring-amber-400")} style={bg?{background:bg,color:txt}:{background:ehHoje(di)?"#fffbeb":"#f8fafc"}} title={nomes.length?"Folga: "+nomes.join(", "):""}>
+                      <div className="flex items-center justify-center gap-1 leading-none">
+                        <span className={cx("text-[10px] uppercase font-bold", !bg&&"text-slate-400")}>{DIAS[di]}</span>
+                        <span className={cx("text-xs font-extrabold tabular-nums", !bg&&"text-slate-800")}>{d.getDate()}/{String(d.getMonth()+1).padStart(2,"0")}</span>
+                        {editavel && <button onClick={()=>{ setAddTurno(g.tk); setAdd(di); }} title="Incluir freelancer neste turno" aria-label="Incluir freelancer" className="no-print ml-0.5 w-4 h-4 grid place-items-center rounded text-[11px] font-bold bg-white/85 text-slate-600 hover:bg-white border border-slate-200 leading-none">+</button>}
+                      </div>
                     </th>; })}
                 </tr></thead>
                 <tbody>
                   {g.rows.map(o=>{ const cor=corPessoaEscala(o.p,o.tipo,o.pid); const tx=textoSobreCor(cor); const nm=nome(o.pid,o.tipo);
                     return <tr key={o.k} className="group">
-                      <td className="sticky left-0 z-10 bg-white px-2 py-1.5 border-b border-r border-slate-100">
+                      <td className="sticky left-0 z-10 bg-white px-2 py-1 border-b border-r border-slate-100">
                         <span className="inline-block max-w-full truncate px-2 py-0.5 rounded-md text-[11px] font-bold" style={{background:cor,color:tx}} title={nm}>{o.tipo==="pj"?nm:nomeSobrenome(nm)}</span>
                         <div className="text-[10px] text-slate-400 truncate mt-0.5">{o.tipo==="free"?"Freela · ":o.tipo==="pj"?"PJ · ":""}{(o.p&&(o.p.cargo||o.p.servico))||""}</div>
                       </td>
@@ -1930,7 +1933,7 @@ function EscalaVisual() {
                         // cada turno mostra só as alocações dele; a folga aparece na linha do turno principal
                         const as=todas.filter(a=> a.turno===g.tk || (a.turno==="folga"&&base) || (base && !GRUPOS_TURNO.some(([k])=>k===a.turno) && a.turno!=="folga"));
                         if(!as.length && todas.length) return <td key={di} className={cx("px-1 py-1.5 border-b border-slate-100", ehHoje(di)&&"bg-amber-50/50")}/>;
-                        return <td key={di} className={cx("px-1 py-1.5 border-b border-slate-100 text-center align-middle", ehHoje(di)&&"bg-amber-50/50")}>
+                        return <td key={di} className={cx("px-1 py-1 border-b border-slate-100 text-center align-middle", ehHoje(di)&&"bg-amber-50/50")}>
                           {as.length===0 ? (editavel ? <button onClick={()=>addColab(di,o.pid,o.tipo,g.tk)} title={"Escalar "+nm+" em "+labelDiaFull(di)} className="no-print w-full h-8 rounded-lg border border-dashed border-transparent text-slate-300 hover:border-slate-300 hover:text-slate-500 opacity-0 group-hover:opacity-100 focus:opacity-100 transition">+</button> : <span className="text-slate-200">—</span>)
                           : as.map(a=> a.turno==="folga"
                             ? <button key={a.id} onClick={e=>abrirMenuGrade(e,di,a)} className="inline-flex flex-col items-center px-2 py-0.5 rounded-md bg-rose-50 text-rose-500 font-bold leading-tight"><span className="text-[11px]">folga</span></button>
