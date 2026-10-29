@@ -1200,8 +1200,8 @@ function StoreProvider({children}) {
   const podeSigilo = semAuth || ehDono || papelKey==="diretor" || papelKey==="financeira";
   const acesso={ pronto:acessoPronto, ehDono, tenantBind, semAcesso, email:meuEmail, minhaChave, nome:meuNome, papel:meuPapel, papelKey, podeSigilo, casa:casaRestrita };
   // Listas expostas = base (admin) + auto-cadastros do celular (mesclados por vínculo)
-  const clts=useMemo(()=>[...cltsBase, ...cadAuto.filter(c=>c.tipo==="clt")],[cltsBase,cadAuto]);
-  const freelas=useMemo(()=>[...freelasBase, ...cadAuto.filter(c=>c.tipo==="free")],[freelasBase,cadAuto]);
+  const clts=useMemo(()=>[...cltsBase, ...cadAuto.filter(c=>c.tipo==="clt")].map(comNomeBonito),[cltsBase,cadAuto]);
+  const freelas=useMemo(()=>[...freelasBase, ...cadAuto.filter(c=>c.tipo==="free")].map(comNomeBonito),[freelasBase,cadAuto]);
   const [escala,setEscala,escalaPronta]=usePersist("escala",SEED_ESCALA);            // padrão semanal (repete toda semana)
   const [escalaOv,setEscalaOv,escalaOvPronta]=usePersist("escalaOv",{});              // exceções por DATA: {unidade:{"AAAA-MM-DD":[...]}}
   const [escalaSeed,setEscalaSeed]=usePersist("escalaSeed",{});         // pids já semeados na auto-escala (nunca re-semear)
@@ -1235,7 +1235,7 @@ function StoreProvider({children}) {
   const logado = !!authUser || !window.__WPAUTH;
   const [arquivos]=useArquivosMeta(logado);                            // metadados dos arquivos (só no painel)
   const [acessosColab]=useAcessosColab(logado);                        // PINs do app do colaborador (hash)
-  const pjsTodos=useMemo(()=>[...pjsBase, ...cadAuto.filter(c=>c.tipo==="pj")],[pjsBase,cadAuto]);
+  const pjsTodos=useMemo(()=>[...pjsBase, ...cadAuto.filter(c=>c.tipo==="pj")].map(comNomeBonito),[pjsBase,cadAuto]);
   useMemo(()=>{ const cont={}; Object.values(escala||{}).forEach(dias=>Object.values(dias||{}).forEach(arr=>(arr||[]).forEach(a=>{ if(!a||a.turno==="folga"||a.tipo==="free") return; const k=chaveVig(a.tipo,a.pid); (cont[k]=cont[k]||{})[a.turno]=((cont[k]||{})[a.turno]||0)+1; })));
     const t={}; Object.entries(cont).forEach(([k,c])=>{ t[k]=Object.entries(c).sort((x,y)=>y[1]-x[1])[0][0]; }); GRUPO_FOLGA.turno=t; },[escala]);
   useMemo(()=>{ const m={}; clts.forEach(p=>{ const g=grupoFolgaDe(p,"clt"); if(g) m[chaveVig("clt",p.id)]=g; }); pjsTodos.forEach(p=>{ const g=grupoFolgaDe(p,"pj"); if(g) m[chaveVig("pj",p.id)]=g; }); GRUPO_FOLGA.map=m; },[clts,pjsTodos]);
@@ -1697,6 +1697,18 @@ const CORES_ESCALA=["#3B82F6","#22C55E","#8B5CF6","#EF4444","#FB923C","#EAB308",
 const hashStr=(s)=>{ let x=0; s=String(s); for(let i=0;i<s.length;i++){ x=((x<<5)-x+s.charCodeAt(i))|0; } return Math.abs(x); };
 const corPessoaEscala=(p,tipo,pid)=>{ const g=grupoFolgaDe(p,tipo); if(g) return GRUPOS_FOLGA[g].cor; return (p&&p.cor) || CORES_ESCALA[hashStr((tipo||"clt")+"-"+pid)%CORES_ESCALA.length]; };
 const textoSobreCor=(hex)=>{ const m=/^#?([0-9a-f]{6})$/i.exec(hex||""); if(!m) return "#fff"; const n=parseInt(m[1],16); const r=n>>16,g=(n>>8)&255,b=n&255; return (0.299*r+0.587*g+0.114*b)>165?"#1a1a1a":"#fff"; };
+// Nome digitado todo em MAIÚSCULAS (caps lock / documento) → "Nome Sobrenome". Siglas de empresa ficam em maiúsculas.
+const NOME_MINUSC=new Set(["da","de","do","das","dos","e","di","du"]);
+const NOME_SIGLAS=new Set(["ME","MEI","EPP","LTDA","EIRELI","SLU","SA","S/A","II","III","IV"]);
+function nomeBonito(s){ s=String(s==null?"":s).replace(/\s+/g," ").trim(); if(!s) return s;
+  const letras=s.replace(/[^A-Za-zÀ-ÖØ-öø-ÿ]/g,""); const maius=letras.replace(/[^A-ZÀ-ÖØ-Þ]/g,"").length;
+  if(letras.length<3 || maius/letras.length<0.7) return s;
+  return s.toLowerCase().split(" ").map((w,i)=>{ const W=w.toUpperCase().replace(/[.,]$/,""); if(NOME_SIGLAS.has(W)) return w.toUpperCase();
+    if(i>0 && NOME_MINUSC.has(w)) return w; return w.replace(/(^|[-'])([a-zà-öø-ÿ])/g,(m,a,b)=>a+b.toUpperCase()); }).join(" "); }
+const comNomeBonito=(x)=>{ if(!x||typeof x.nome!=="string") return x; const n=nomeBonito(x.nome); return n===x.nome?x:{...x,nome:n}; };
+// PJ na escala: só o nome da pessoa (sem o número do CNPJ do MEI nem ME/LTDA)
+function nomePJEscala(p){ const limpa=(t)=>nomeBonito(String(t||"").replace(/^[\d.\-\/\s]+/,"").replace(/[\s,.-]+(ME|MEI|EPP|LTDA|EIRELI|SLU|S\/?A)\.?$/i,"").trim());
+  return limpa(p&&p.responsavel) || limpa(p&&p.nome) || nomeBonito(p&&p.nome) || ""; }
 const fundoFolga=(cores)=>{ cores=[...new Set(cores)]; if(!cores.length) return null; if(cores.length===1) return cores[0]; const st=cores.map((c,i)=>`${c} ${Math.round(i*100/cores.length)}% ${Math.round((i+1)*100/cores.length)}%`).join(","); return `linear-gradient(135deg,${st})`; };
 const GRUPOS_TURNO=[["manha","Manhã","☀️"],["tarde","Tarde","🌤️"],["noite","Noite","🌙"]];
 // Selo de vigência: aguardando admissão · começa em dd/mm · contrato encerrado
@@ -1766,7 +1778,7 @@ function EscalaVisual() {
   const [setorF,setSetorF]=useState("todos");
   const [menu,setMenu]=useState(null); // {di,id}
   const editavel=can("escala");
-  const nome=(pid,tipo)=>pessoaNome(pid,tipo,clts,freelas,pjs);
+  const nome=(pid,tipo)=>{ if(tipo==="pj"){ const p=(pjs||[]).find(x=>String(x.id)===String(pid)); return p?nomePJEscala(p):"—"; } return pessoaNome(pid,tipo,clts,freelas,pjs); };
   const pessoaDe=(a)=>(a.tipo==="clt"?clts:a.tipo==="pj"?pjs:freelas).find(p=>String(p.id)===String(a.pid));
   const passaSetor=(a)=> setorF==="todos" || setorDe(pessoaDe(a))===setorF;
   // Esconde alocações órfãs (colaborador que não existe mais → aparecia como "—")
@@ -1926,7 +1938,7 @@ function EscalaVisual() {
                   {g.rows.map(o=>{ const cor=corPessoaEscala(o.p,o.tipo,o.pid); const tx=textoSobreCor(cor); const nm=nome(o.pid,o.tipo);
                     return <tr key={o.k} className="group">
                       <td className="sticky left-0 z-10 bg-white px-2 py-1 border-b border-r border-slate-100">
-                        <span className="inline-block max-w-full truncate px-2 py-0.5 rounded-md text-[11px] font-bold" style={{background:cor,color:tx}} title={nm}>{o.tipo==="pj"?nm:nomeSobrenome(nm)}</span>
+                        <span className="inline-block max-w-full truncate px-2 py-0.5 rounded-md text-[11px] font-bold" style={{background:cor,color:tx}} title={nm}>{nomeSobrenome(nm)}</span>
                         <div className="text-[10px] text-slate-400 truncate mt-0.5">{o.tipo==="free"?"Freela · ":o.tipo==="pj"?"PJ · ":""}{(o.p&&(o.p.cargo||o.p.servico))||""}</div>
                       </td>
                       {[0,1,2,3,4,5,6].map(di=>{ const base=turnoBase(o)===g.tk; const todas=alocsDe(o,di);
@@ -1938,7 +1950,7 @@ function EscalaVisual() {
                           : as.map(a=> a.turno==="folga"
                             ? <button key={a.id} onClick={e=>abrirMenuGrade(e,di,a)} className="inline-flex flex-col items-center px-2 py-0.5 rounded-md bg-rose-50 text-rose-500 font-bold leading-tight"><span className="text-[11px]">folga</span></button>
                             : <button key={a.id} onClick={e=>abrirMenuGrade(e,di,a)} className="inline-flex flex-col items-center leading-tight m-0.5">
-                                <span className={cx("px-2 py-0.5 rounded-md text-[11px] font-bold", a.marca==="faltou"&&"line-through opacity-60")} style={{background:cor,color:tx}}>{o.tipo==="pj"?String(nm).split(" ").slice(0,2).join(" "):String(nm).split(" ")[0]}</span>
+                                <span className={cx("px-2 py-0.5 rounded-md text-[11px] font-bold", a.marca==="faltou"&&"line-through opacity-60")} style={{background:cor,color:tx}}>{String(nm).split(" ")[0]}</span>
                                 <span role={editavel?"button":undefined} title={editavel?"Alterar horário":undefined} onClick={editavel?(e=>{ e.stopPropagation(); setMenu(null); abrirHorario(di,a); }):undefined}
                                   className={cx("text-[10px] text-slate-500 tabular-nums rounded px-1", editavel&&"hover:bg-brand-50 hover:text-brand-700 underline decoration-dotted underline-offset-2 cursor-pointer")}>{horaEntrada(a)}</span>
                                 {a.marca==="faltou" && <span className="text-[9px] font-bold text-rose-600">faltou</span>}
@@ -2767,7 +2779,7 @@ function ColabForm({ tipo, inicial, onSalvar, onClose, vinculo }) {
       </div>
     </div>}
     <div className="grid sm:grid-cols-2 gap-3">
-      <div className="sm:col-span-2"><Field label={req("Nome e sobrenome")}><Input value={f.nome} onChange={e=>set("nome",e.target.value)} placeholder="Ex.: João da Silva"/></Field></div>
+      <div className="sm:col-span-2"><Field label={req("Nome e sobrenome")}><Input value={f.nome} onChange={e=>set("nome",e.target.value)} onBlur={e=>set("nome",nomeBonito(e.target.value))} placeholder="Ex.: João da Silva"/></Field></div>
       {ehConf ? <>
         <Field label="Cargo (confiança)"><Select value={f.cargo} onChange={e=>set("cargo",e.target.value)}>{["Gerente","Gerente geral","Diretor","Diretora Financeira","Coordenador","Sócio","Supervisor"].map(c=><option key={c}>{c}</option>)}</Select></Field>
         <Field label="Unidade (casa)"><Select value={f.unidade} onChange={e=>set("unidade",e.target.value==="todas"?"todas":Number(e.target.value))}>
@@ -5000,9 +5012,9 @@ function PjForm({inicial,onSalvar,onClose}){
       <h3 className="text-base font-bold text-slate-900 ml-1">{inicial?"Editar prestador PJ":"Novo prestador PJ"}</h3></div>
     <div className="mb-4 p-3 rounded-xl bg-brand-50 text-brand-800 text-sm flex items-start gap-2"><Icon d={I.briefcase} className="w-4 h-4 mt-0.5 shrink-0"/><span>O prestador PJ <b>entra na escala</b> (sem bater ponto), recebe o <b>valor mensal</b> na folha de pagamentos e nos relatórios financeiros, e tem uma pasta para o contrato e as notas fiscais.</span></div>
     <div className="grid sm:grid-cols-2 gap-3">
-      <Field label="Razão social / nome *"><Input value={f.nome} onChange={e=>set("nome",e.target.value)}/></Field>
+      <Field label="Razão social / nome *"><Input value={f.nome} onChange={e=>set("nome",e.target.value)} onBlur={e=>set("nome",nomeBonito(e.target.value))}/></Field>
       <Field label="CNPJ *"><Input value={f.cnpj} onChange={e=>set("cnpj",e.target.value)} placeholder="00.000.000/0000-00"/></Field>
-      <Field label="Responsável (quem assina)"><Input value={f.responsavel} onChange={e=>set("responsavel",e.target.value)}/></Field>
+      <Field label="Responsável (quem assina)"><Input value={f.responsavel} onChange={e=>set("responsavel",e.target.value)} onBlur={e=>set("responsavel",nomeBonito(e.target.value))}/></Field>
       <Field label="CPF do responsável"><Input value={f.cpf} onChange={e=>set("cpf",e.target.value)} placeholder="000.000.000-00"/></Field>
       <Field label="RG do responsável"><Input value={f.rg||""} onChange={e=>set("rg",e.target.value)}/></Field>
       <Field label="Endereço (sai no contrato)"><Input value={f.endereco||""} onChange={e=>set("endereco",e.target.value)} placeholder="Rua, nº, bairro, cidade/UF, CEP"/></Field>
@@ -5147,7 +5159,7 @@ function Candidatura({onClose}){
   const falta=[]; if(String(f.nome).trim().split(/\s+/).length<2) falta.push("nome completo"); if(!cpfValido(f.cpf)) falta.push("CPF válido"); if(soDigitos(f.tel).length<10) falta.push("WhatsApp com DDD");
   if(!f.cargo) falta.push("cargo"); if(!f.horarios.length) falta.push("preferência de horário"); if(!aceite) falta.push("autorização LGPD");
   const enviar=async()=>{ setEtapa("enviando"); setErro("");
-    try{ await nCol("candidatos").doc().set({ nome:f.nome.trim(), cpf:f.cpf, tel:f.tel, email:f.email.trim().toLowerCase(), cargoPretendido:f.cargo, unidadePref:f.unidade, horarios:f.horarios, fimSemana:f.fimSemana,
+    try{ await nCol("candidatos").doc().set({ nome:nomeBonito(f.nome), cpf:f.cpf, tel:f.tel, email:f.email.trim().toLowerCase(), cargoPretendido:f.cargo, unidadePref:f.unidade, horarios:f.horarios, fimSemana:f.fimSemana,
         pretensao:f.pretensao, experiencia:f.experiencia.trim(), fonte:f.fonte, etapa:"inscrito", origem:"link", vinculoCandidato:ref||null, inscritoEm:Date.now(), criadoEm:Date.now(),
         historico:[{em:Date.now(),txt:"Candidatura enviada pelo link"}] });
       setEtapa("ok"); }
@@ -5163,7 +5175,7 @@ function Candidatura({onClose}){
     <h2 className="text-xl font-extrabold text-slate-900 mt-1 mb-1">Cadastro de candidato</h2>
     <p className="text-sm text-slate-500 mb-4">Leva 2 minutos e não precisa de documentos agora. Se você for aprovado, pediremos os documentos depois.</p>
     <div className="grid sm:grid-cols-2 gap-3">
-      <div className="sm:col-span-2"><Field label="Nome completo *"><Input value={f.nome} onChange={e=>set("nome",e.target.value)} autoComplete="name"/></Field></div>
+      <div className="sm:col-span-2"><Field label="Nome completo *"><Input value={f.nome} onChange={e=>set("nome",e.target.value)} onBlur={e=>set("nome",nomeBonito(e.target.value))} autoComplete="name"/></Field></div>
       <Field label="CPF *"><Input inputMode="numeric" value={f.cpf} onChange={e=>set("cpf",e.target.value)} placeholder="000.000.000-00"/>{f.cpf&&soDigitos(f.cpf).length===11&&!cpfValido(f.cpf)&&<span className="block text-xs text-rose-500 mt-1 normal-case font-normal tracking-normal">CPF inválido</span>}</Field>
       <Field label="WhatsApp *"><Input inputMode="tel" value={f.tel} onChange={e=>set("tel",e.target.value)} placeholder="(11) 90000-0000" autoComplete="tel"/></Field>
       <div className="sm:col-span-2"><Field label="E-mail"><Input type="email" value={f.email} onChange={e=>set("email",e.target.value)} autoComplete="email"/></Field></div>
@@ -5329,7 +5341,7 @@ function RSPage(){
       {form && <div className="p-6">
         <h3 className="text-lg font-bold text-slate-900 mb-4">{form.id?"Avaliar entrevista":"Registrar entrevista"}</h3>
         <div className="grid sm:grid-cols-2 gap-3">
-          <Field label="Nome do candidato *"><Input value={form.nome} onChange={e=>setForm({...form,nome:e.target.value})}/></Field>
+          <Field label="Nome do candidato *"><Input value={form.nome} onChange={e=>setForm({...form,nome:e.target.value})} onBlur={e=>setForm({...form,nome:nomeBonito(e.target.value)})}/></Field>
           <Field label="WhatsApp *"><Input value={form.tel} onChange={e=>setForm({...form,tel:e.target.value})} placeholder="(11) 90000-0000"/></Field>
           <Field label="Cargo da vaga"><Select value={form.cargo} onChange={e=>{ const ci=cargoInfo(e.target.value); setForm({...form,cargo:e.target.value,turnoIdx:0,salario:ci&&ci.salarioBase?ci.salarioBase:form.salario}); }}>{[...new Set([...cargosLista,form.cargo].filter(Boolean))].map(c=><option key={c}>{c}</option>)}</Select></Field>
           {(()=>{ const tns=turnosDe(cargoInfo(form.cargo)); return <Field label="Horário de trabalho">{tns.length ? <Select value={Number(form.turnoIdx)||0} onChange={e=>setForm({...form,turnoIdx:Number(e.target.value)})}>{tns.map((t,i)=><option key={i} value={i}>{rotuloTurno(t)||"Padrão"}</option>)}</Select>
@@ -7953,7 +7965,7 @@ function ConviteCadastro({onClose}){
     }catch(e){ setErro("Não foi possível enviar agora. Verifique sua internet e tente novamente."); setEtapa("termo"); }
   };
   const Campo=({k,l,tipoInput,col})=> <Field label={<span className="flex items-center gap-1">{l}{auto[k]&&f[k]&&<span className="text-[10px] normal-case font-bold text-brand-600 bg-brand-50 px-1.5 rounded">lido do documento</span>}</span>}>
-    <Input type={tipoInput||"text"} value={f[k]||""} onChange={e=>set(k,e.target.value)} className={cx(col, auto[k]&&f[k]?"!border-brand-200 bg-brand-50/30":"")}/></Field>;
+    <Input type={tipoInput||"text"} value={f[k]||""} onChange={e=>set(k,e.target.value)} onBlur={k==="nome"?(e=>set(k,nomeBonito(e.target.value))):undefined} className={cx(col, auto[k]&&f[k]?"!border-brand-200 bg-brand-50/30":"")}/></Field>;
 
   const casca=(conteudo)=> <div className="min-h-screen grad-ink grad-hero flex items-start justify-center p-4 py-8"><div className="w-full max-w-2xl"><div className="flex justify-center mb-5"><Logo light/></div><Card className="p-6">{conteudo}</Card></div></div>;
   if(conv===undefined || !rascOk) return casca(<div className="py-10 text-center"><div className="w-8 h-8 mx-auto rounded-full border-2 border-slate-200 border-t-brand-600 animate-spin"/></div>);
