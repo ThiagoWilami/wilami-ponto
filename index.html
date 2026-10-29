@@ -413,6 +413,50 @@ function extrasDe(trabalhado, tipo, ehFolga){
   const saldo = trabalhado - JORNADA_CLT;
   return { extras: saldo>TOL?saldo:0, extras100:0, atraso: saldo<-TOL?-saldo:0 };
 }
+// ===================== APURAÇÃO LEGAL DA FOLHA (CLT) =====================
+// • Hora extra 50% (CF art. 7º XVI): acima de 8h no dia (art. 58) e acima de 44h na semana (CF art. 7º XIII),
+//   com a tolerância de 10 min/dia do art. 58 §1º.
+// • Hora extra 100%: trabalho em dia de FOLGA da escala (repouso) ou FERIADO sem compensação (Lei 605/49, Súm. 146 TST).
+// • Adicional noturno 20% das 22h às 5h (art. 73), com a hora noturna reduzida de 52min30s (art. 73 §1º);
+//   jornada cumprida no período noturno e prorrogada após as 5h também recebe o adicional (Súm. 60, II, TST).
+// • Hora extra noturna: o adicional noturno integra a base da extra (OJ 97 SDI-1) → hora × 1,2 × (1 + %HE).
+// • DSR sobre horas extras e adicional noturno (Lei 605/49 art. 7º, Súm. 172 TST):
+//   (extras + noturno) ÷ dias úteis do período × (domingos + feriados do período).
+const NOT_FATOR=60/52.5;                       // 1 hora de relógio à noite vale 1h08m34s
+const SEMANA_CLT=44*60;
+const pascoa=(y)=>{ const a=y%19,b=Math.floor(y/100),c=y%100,d=Math.floor(b/4),e=b%4,f=Math.floor((b+8)/25),g=Math.floor((b-f+1)/3),h=(19*a+b-d-g+15)%30,i=Math.floor(c/4),k=c%4,l=(32+2*e+2*i-h-k)%7,m=Math.floor((a+11*h+22*l)/451),mes=Math.floor((h+l-7*m+114)/31),dia=((h+l-7*m+114)%31)+1; return new Date(y,mes-1,dia); };
+// Feriados nacionais (Lei 662/49, 6.802/80, 14.759/23) + os da cidade/estado cadastrados (AAAA-MM-DD ou MM-DD).
+function feriadosDoAno(y, extras){
+  const fixos=["01-01","04-21","05-01","09-07","10-12","11-02","11-15","11-20","12-25"].map(md=>y+"-"+md);
+  const sextaSanta=ymd(addDias(pascoa(y),-2));
+  const outros=String(extras||"").split(/[\s,;]+/).map(x=>x.trim()).filter(Boolean).map(x=>/^\d{2}-\d{2}$/.test(x)?y+"-"+x:x).filter(x=>/^\d{4}-\d{2}-\d{2}$/.test(x)&&x.startsWith(y+"-"));
+  return new Set([...fixos,sextaSanta,...outros]);
+}
+const ehFeriado=(ds,extras)=> feriadosDoAno(Number(String(ds).slice(0,4)),extras).has(ds);
+// Um dia de trabalho a partir das batidas → minutos reais, legais (com hora noturna reduzida) e extras.
+function apurarDiaCLT(punches, {folga, feriado}={}){
+  const g=a=>{ const p=(punches||[]).find(x=>x.acao===a); return p?p.min:null; };
+  const ent=g("Entrada"), sai=g("Saída"); if(ent==null||sai==null) return null;
+  const fim=sai<ent?sai+1440:sai;
+  let ii=g("Início intervalo"), fi=g("Fim intervalo");
+  if(ii!=null&&fi!=null){ if(ii<ent) ii+=1440; if(fi<ii) fi+=1440; } else { ii=fi=null; }
+  const trabalha=(m)=> !(ii!=null && m>=ii && m<fi);
+  // prorrogação da jornada noturna: trabalhou das 22h até depois das 5h → minutos após as 5h também são noturnos
+  const prorroga = ent<=1320 && fim>=1440+300;
+  const noturno=(m)=> ehMinNoturno(m) || (prorroga && m>=1440+300 && m<fim);
+  const mins=[]; for(let m=ent;m<fim;m++) if(trabalha(m)) mins.push(m);
+  const real=mins.length;
+  const notRel=mins.filter(noturno).length;
+  const legal=Math.round(real + notRel*(NOT_FATOR-1));
+  let ext50=0, ext100=0, atraso=0;
+  if(folga||feriado) ext100=legal;
+  else { const saldo=legal-JORNADA_CLT; if(saldo>TOL) ext50=saldo; else if(saldo<-TOL) atraso=-saldo; }
+  // quanto das extras caiu à noite (as extras são as últimas horas da jornada)
+  const ext=ext50+ext100; let acc=0, extNotRel=0;
+  for(let i=mins.length-1;i>=0 && acc<ext;i--){ const n=noturno(mins[i]); acc+= n?NOT_FATOR:1; if(n) extNotRel++; }
+  const extNotLeg=Math.round(extNotRel*NOT_FATOR);
+  return { real, legal, notRel, notLeg:Math.round(notRel*NOT_FATOR), ext50, ext100, extNot50:ext100?0:extNotLeg, extNot100:ext100?extNotLeg:0, atraso, folga:!!folga, feriado:!!feriado };
+}
 // folgaDe(grupo) → true se aquele colaborador estava de FOLGA naquele dia (opcional)
 function apurarHoras(registros, folgaDe){ // agrupa por nome+dia e calcula
   const grupos={};
@@ -620,17 +664,29 @@ function diasTrabalhoNoPeriodo(p,ini,fim,escala,escalaOv){
 function calcFolhaLinha(c, ctx){
   const {apurCLT, cltExtraAjuste, ymRef, getDossie, naData, faltasCtx}=ctx; const gorjetasCLT=ctx.gorjetasCLT||{};
   const meus=apurCLT.filter(x=>x.nome===c.nome);
-  const extrasMin=meus.reduce((s,x)=>s+(x.extras||0),0);
-  const extras100Min=meus.reduce((s,x)=>s+(x.extras100||0),0);
-  const notMin=meus.reduce((s,x)=>s+minutosNoturnos(x.punches||[]),0);
+  // dia a dia: folga da escala e feriado viram 100%; hora noturna reduzida; extras noturnas
+  const fc=faltasCtx||{}; const feriados=ctx.feriados||"";
+  const folgaNoDia=(ds)=>{ if(!fc.escala||c.unidade==null) return false; const a=diaEscala(fc.escala,fc.escalaOv,c.unidade,ds,wdDe(ds)).find(x=>String(x.pid)===String(c.id)&&x.tipo==="clt"); return !!(a&&a.turno==="folga"); };
+  const dias=meus.map(x=>{ const ds=String(x.dia||""); const r=/^\d{4}-\d{2}-\d{2}$/.test(ds)?apurarDiaCLT(x.punches,{folga:folgaNoDia(ds),feriado:ehFeriado(ds,feriados)}):null; return r?{...r,data:ds,punches:x.punches}:null; })
+    .filter(Boolean).sort((a,b)=>a.data.localeCompare(b.data));
+  // limite semanal de 44h: o que passar (fora o que já foi extra no dia) também é extra 50%
+  const porSemana={}; dias.forEach(d=>{ if(d.folga||d.feriado) return; const [y,m,dd]=d.data.split("-").map(Number); const k=ymd(segDaSemana(new Date(y,m-1,dd))); porSemana[k]=(porSemana[k]||0)+Math.min(d.legal-d.ext50, JORNADA_CLT); });
+  const extSemanal=Object.values(porSemana).reduce((s,v)=>s+Math.max(0,v-SEMANA_CLT),0);
+  const somaD=(k)=>dias.reduce((s,d)=>s+(d[k]||0),0);
+  const extrasMin=somaD("ext50")+extSemanal, extras100Min=somaD("ext100"), notMin=somaD("notLeg"), notRelMin=somaD("notRel"), extNot50Min=somaD("extNot50"), extNot100Min=somaD("extNot100");
   const salario=Number(c.salario||0);
   const vHora=salario? salario/220 : 0;              // hora normal (44h/sem → 220h/mês)
   const vDia =salario? salario/30  : 0;              // valor do dia (base da falta e do DSR)
-  const extrasCalc=(extrasMin/60)*vHora*1.5 + (extras100Min/60)*vHora*2;
+  const he50Val=(extrasMin/60)*vHora*1.5, he100Val=(extras100Min/60)*vHora*2;
+  const heNotVal=(extNot50Min/60)*vHora*0.2*0.5 + (extNot100Min/60)*vHora*0.2*1;   // adicional noturno sobre a extra (OJ 97)
+  const extrasCalc=he50Val+he100Val+heNotVal;
   const extraOverride = cltExtraAjuste[c.id+"|"+ymRef];
   const extrasVal = extraOverride!=null ? Number(extraOverride) : extrasCalc;
   const extrasEditado = extraOverride!=null;
-  const notVal=(notMin/60)*vHora*0.2;               // adicional noturno 20% (Art. 73 CLT)
+  const notVal=(notMin/60)*vHora*0.2;               // adicional noturno 20% sobre a hora noturna reduzida (art. 73)
+  // DSR sobre extras e adicional noturno: (extras + noturno) ÷ dias úteis × (domingos + feriados) do período
+  let diasUteis=0, diasDSR=0; if(fc.ini&&fc.fim) datasEntre(fc.ini,fc.fim).forEach(ds=>{ if(wdDe(ds)===6||ehFeriado(ds,feriados)) diasDSR++; else diasUteis++; });
+  const dsrReflexo = diasUteis>0 ? Math.round(((extrasVal+notVal)/diasUteis*diasDSR)*100)/100 : 0;
   const dos=getDossie("clt-"+c.id);
   const faltasManuais=(dos.faltas||[]).filter(x=>x.tipo==="falta" && x.descontar && naData(x.data)).map(x=>x.data);
   const atrasosD=(dos.faltas||[]).filter(x=>x.tipo==="atraso" && x.descontar && naData(x.data));
@@ -670,11 +726,13 @@ function calcFolhaLinha(c, ctx){
   // Salário combinado com a Diretoria: se salário + extras + adicional noturno + gorjetas do mês não alcançarem o combinado, a diferença vira "reposição".
   const gorjeta=Number(gorjetasCLT[c.id+"|"+ymRef]||0);
   const combinado=Number(c.salarioCombinado||0);
-  const recebido=salario+extrasVal+notVal+gorjeta;
+  const recebido=salario+extrasVal+notVal+dsrReflexo+gorjeta;
   const reposicao=combinado>0 ? Math.max(0, Math.round((combinado-recebido)*100)/100) : 0;
-  const liquido=salario+extrasVal+notVal+reposicao-descontos;
+  const liquido=salario+extrasVal+notVal+dsrReflexo+reposicao-descontos;
   return { id:c.id, nome:c.nome, foto:c.foto, pix:c.pix, escala:c.escala, salario, vHora, gorjeta, combinado, recebido, reposicao,
-    extrasMin, extras100Min, extrasHoras:extrasMin+extras100Min, extrasVal, extrasEditado, notMin, notVal,
+    extrasMin, extras100Min, extrasHoras:extrasMin+extras100Min, extrasVal, extrasEditado, notMin, notRelMin, notVal, extSemanal, extNot50Min, extNot100Min,
+    he50Val, he100Val, heNotVal, dsrReflexo, diasUteis, diasDSR, dias, cpf:c.cpf||"", cargo:c.cargo||"", admissao:c.admissao||"", unidade:c.unidade, vinculo:c.vinculo||"clt",
+    atrasosDatas:atrasosD.map(x=>x.data), atrasosHoras:atrasosD.reduce((s,x)=>s+(Number(x.horas)||0),0), descAtrasos,
     faltasQtd:nFaltas, dsrQtd:nDSR, faltaDatas, descFaltas, descDSR, atrasosQtd:atrasosD.length,
     vt, vtDesconto, vtDia, vtDias, vtPorDia:vtDiaCad>0, vtFaltasAnt, vtMesAnt, descVTFaltas, descontos, liquido, semSalario:!salario };
 }
@@ -1167,6 +1225,7 @@ function StoreProvider({children}) {
   const [modeloContratoPJ,setModeloContratoPJ]=usePersist("modeloContratoPJ",null);   // null = modelo padrão
   const [empresaContratante,setEmpresaContratante]=usePersist("empresaContratante",{});
   const [envContab,setEnvContab]=usePersist("envioContabilidade",{});   // admissões enviadas à contabilidade
+  const [apontContab,setApontContab]=usePersist("apontamentosContab",[]);   // apontamentos da folha enviados à contabilidade
   const [finCfg,setFinCfg]=usePersist("financeiroCfg",{});             // e-mails do financeiro (aviso de nota fiscal PJ)
   const [contabCfg,setContabCfg]=usePersist("contabilidadeCfg",{});     // e-mail da contabilidade, empresa/CNPJ por unidade
   const [pcmso,setPcmso]=usePersist("pcmsoDados",{});                   // ajustes da planilha PCMSO
@@ -1323,6 +1382,7 @@ function StoreProvider({children}) {
   // Data de início do desconto automático de faltas (evita descontar retroativamente dias antes da adoção).
   // Padrão: hoje (só desconta faltas de hoje em diante); faltas marcadas manualmente pelo gestor contam sempre.
   const [faltaDescontoDesde,setFaltaDescontoDesde]=usePersist("faltaDescontoDesde","");
+  const [feriadosExtras,setFeriadosExtras]=usePersist("feriadosExtras","");   // feriados estaduais/municipais (AAAA-MM-DD ou MM-DD)
   useEffect(()=>{ if(!faltaDescontoDesde) setFaltaDescontoDesde(hojeStr()); },[]); // eslint-disable-line
   // Dia do mês em que o Vale Transporte é pago (global para todos os CLTs). Padrão: dia 5.
   const [vtDiaPagamento,setVtDiaPagamento]=usePersist("vtDiaPagamento",5);
@@ -1426,9 +1486,9 @@ function StoreProvider({children}) {
   const registrosVis = casaRestrita!=null ? registros.filter(r=>_nomesVis.has(r.nome)) : registros;
 
   const value={ unidades:unidadesVis,salvarUnidade,excluirUnidade, clts:cltsVis,freelas:freelasVis,freelasComPagamentos:freelasPagVis,salvarClt,salvarFreela,excluirColab,cadastrarPublico, anexarDoc,
-    escala,setEscala, escalaOv,setEscalaOv, registros:registrosVis,addRegistro, pontoHist, freelancerEscaladoHoje, valorFreela, setFreelaAjuste, cltExtraAjuste,setCltExtra, gorjetasCLT,setGorjetaCLT, pagamentosFreela,addPagamentoFreela,removePagamentoFreela, pagamentosCLT,addPagamentoCLT,removePagamentoCLT, faltaDescontoDesde,setFaltaDescontoDesde, vtDiaPagamento,setVtDiaPagamento,
+    escala,setEscala, escalaOv,setEscalaOv, registros:registrosVis,addRegistro, pontoHist, freelancerEscaladoHoje, valorFreela, setFreelaAjuste, cltExtraAjuste,setCltExtra, gorjetasCLT,setGorjetaCLT, pagamentosFreela,addPagamentoFreela,removePagamentoFreela, pagamentosCLT,addPagamentoCLT,removePagamentoCLT, faltaDescontoDesde,setFaltaDescontoDesde, feriadosExtras,setFeriadosExtras, vtDiaPagamento,setVtDiaPagamento,
     cargosFreela,salvarCargoFreela,excluirCargoFreela, atestados,enviarAtestado, ajustes,enviarAjuste,resolverAjuste,
-    dossie,getDossie,addFalta,addFeedback,addAnexo, perfil,setPerfil, perms,setPerms, can, envContab,setEnvContab, contabCfg,setContabCfg, finCfg,setFinCfg, pcmso,setPcmso, cadastrosRS, cadOpsRS:cadOps, criarFreela, escalarNaData, tirarDaData,
+    dossie,getDossie,addFalta,addFeedback,addAnexo, perfil,setPerfil, perms,setPerms, can, envContab,setEnvContab, apontContab,setApontContab, contabCfg,setContabCfg, finCfg,setFinCfg, pcmso,setPcmso, cadastrosRS, cadOpsRS:cadOps, criarFreela, escalarNaData, tirarDaData,
     clientes,clienteAtivo,tenantAtual,criarCliente,trocarCliente,
     acesso,donos,setDonos,acessos,acessosOps,
     marca,setMarca, pjs:(casaRestrita!=null?pjsTodos.filter(x=>x.unidade==null||x.unidade==="todas"||_mesmaCasa(x.unidade)):pjsTodos), salvarPj,excluirPj, pagamentosPJ,addPagamentoPJ,removePagamentoPJ,
@@ -3059,7 +3119,7 @@ function Relatorios() {
 /* ============================ PAGAMENTOS (FREELANCERS) ============================ */
 // Pagamentos de SALARIADOS (CLT ou Cargos de confiança) — parcelado/adiantamento + saldo, modelo dos freelancers.
 function PagamentoSalariados({ modo, ini, fim, uni }){
-  const { clts, pjs, unidades, registros, pontoHist, getDossie, cltExtraAjuste, gorjetasCLT, escala, escalaOv, atestados, acesso, pagamentosCLT, addPagamentoCLT, removePagamentoCLT, pagamentosPJ, addPagamentoPJ, removePagamentoPJ, faltaDescontoDesde } = useStore();
+  const { clts, pjs, unidades, registros, pontoHist, getDossie, cltExtraAjuste, gorjetasCLT, escala, escalaOv, atestados, acesso, pagamentosCLT, addPagamentoCLT, removePagamentoCLT, pagamentosPJ, addPagamentoPJ, removePagamentoPJ, faltaDescontoDesde, feriadosExtras } = useStore();
   const ehPJ = modo==="pj";
   const pagMap = ehPJ ? pagamentosPJ : pagamentosCLT;
   const addPag = ehPJ ? addPagamentoPJ : addPagamentoCLT;
@@ -3074,7 +3134,7 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
   const _nowMin=_clock.getHours()*60+_clock.getMinutes();
   const apurCLT=apurarHoras([...pontoHist,...registros]).filter(x=>x.tipo==="clt"&&x.completo&&naData(x.dia));
   const faltasCtx={ escala, escalaOv, registros:[...pontoHist,...registros], atestados, ini, fim, hoje:hojeStr(), nowMin:_nowMin, desde:faltaDescontoDesde };
-  const folhaCtx={ apurCLT, cltExtraAjuste, gorjetasCLT, ymRef, getDossie, naData, faltasCtx };
+  const folhaCtx={ apurCLT, cltExtraAjuste, gorjetasCLT, ymRef, getDossie, naData, faltasCtx, feriados:feriadosExtras };
   const naCasa=(c)=> uni==="todas" || c.unidade===Number(uni) || ((modo==="confianca"||ehPJ) && (c.unidade==="todas"||c.unidade==null));
   const lista = (ehPJ
     ? (pjs||[]).filter(pj=>pjAtivoNoPeriodo(pj,ini,fim))
@@ -3595,7 +3655,7 @@ function LinksQR() {
 
 /* ============================ RELATÓRIOS FINANCEIROS ============================ */
 function Financeiro() {
-  const { freelasComPagamentos:freelas, clts, pjs, pagamentosPJ, unidades, registros, pontoHist, getDossie, cltExtraAjuste, setCltExtra, gorjetasCLT, setGorjetaCLT, acesso, escala, escalaOv, atestados, faltaDescontoDesde, vtDiaPagamento } = useStore();
+  const { freelasComPagamentos:freelas, clts, pjs, pagamentosPJ, unidades, registros, pontoHist, getDossie, cltExtraAjuste, setCltExtra, gorjetasCLT, setGorjetaCLT, acesso, escala, escalaOv, atestados, faltaDescontoDesde, vtDiaPagamento, feriadosExtras, setFeriadosExtras, empresaContratante } = useStore();
   const podeSigilo = !acesso || acesso.podeSigilo;   // sem contexto (offline) → mostra tudo
   const _clock=useClock(60000);
   const toast=useContext(ToastCtx);
@@ -3614,7 +3674,7 @@ function Financeiro() {
   const ymRef=(ini||hojeStr()).slice(0,7);
   const _nowMin=_clock.getHours()*60+_clock.getMinutes();
   const faltasCtx={ escala, escalaOv, registros:[...pontoHist,...registros], atestados, ini, fim, hoje:hojeStr(), nowMin:_nowMin, desde:faltaDescontoDesde };
-  const folhaCtx={ apurCLT, cltExtraAjuste, gorjetasCLT, ymRef, getDossie, naData, faltasCtx };
+  const folhaCtx={ apurCLT, cltExtraAjuste, gorjetasCLT, ymRef, getDossie, naData, faltasCtx, feriados:feriadosExtras };
   const folhaDe=(lista)=> lista.filter(c=>uni==="todas"||c.unidade===Number(uni)).map(c=>calcFolhaLinha(c, folhaCtx));
   const cltsReais = clts.filter(c=>c.vinculo!=="fixo" && c.vinculo!=="confianca");
   const fixos = clts.filter(c=>c.vinculo==="fixo");
@@ -3694,17 +3754,17 @@ function Financeiro() {
     // helper: escreve uma folha (CLT ou Freela Fixo) com salário + extras
     const addFolha=(nomeAba,titulo,linhas,cabecor)=>{
       const wc=wb.addWorksheet(nomeAba);
-      wc.columns=[{width:30},{width:16},{width:14},{width:18},{width:16},{width:14},{width:16},{width:16},{width:18},{width:22}];
-      wc.mergeCells("A1:J1"); const tc=wc.getCell("A1"); tc.value=`${titulo} — ${uNome}`; tc.font={bold:true,size:15,color:{argb:"FF1E1B4B"}};
-      wc.mergeCells("A2:J2"); wc.getCell("A2").value=`Período: ${fmtDataBR(ini)} a ${fmtDataBR(fim)}`; wc.getCell("A2").font={italic:true,color:{argb:"FF64748B"}};
-      const hc=wc.addRow(["Colaborador","Salário base","Horas extras","Valor extras","Adic. noturno","Gorjetas","Reposição","Descontos","Líquido a pagar","Pix"]);
+      wc.columns=[{width:30},{width:16},{width:12},{width:12},{width:16},{width:16},{width:16},{width:14},{width:16},{width:16},{width:18},{width:22}];
+      wc.mergeCells("A1:L1"); const tc=wc.getCell("A1"); tc.value=`${titulo} — ${uNome}`; tc.font={bold:true,size:15,color:{argb:"FF1E1B4B"}};
+      wc.mergeCells("A2:L2"); wc.getCell("A2").value=`Período: ${fmtDataBR(ini)} a ${fmtDataBR(fim)}`; wc.getCell("A2").font={italic:true,color:{argb:"FF64748B"}};
+      const hc=wc.addRow(["Colaborador","Salário base","HE 50% (h)","HE 100% (h)","Valor extras","Adic. noturno","DSR s/ HE e AN","Gorjetas","Reposição","Descontos","Líquido a pagar","Pix"]);
       hc.eachCell(cell=>{ cell.font={bold:true,color:{argb:"FFFFFFFF"}}; cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:cabecor}}; cell.alignment={horizontal:"center"}; });
-      linhas.forEach(l=>{ const r=wc.addRow([l.nome,l.salario,fmtHoras(l.extrasHoras),l.extrasVal,l.notVal,l.gorjeta||0,l.reposicao||0,-l.descontos,l.liquido,l.pix||""]);
-        [2,4,5,6,7,8,9].forEach(i=>r.getCell(i).numFmt='"R$" #,##0.00'); r.getCell(9).font={bold:true}; });
+      linhas.forEach(l=>{ const r=wc.addRow([l.nome,l.salario,fmtHoras(l.extrasMin),fmtHoras(l.extras100Min),l.extrasVal,l.notVal,l.dsrReflexo||0,l.gorjeta||0,l.reposicao||0,-l.descontos,l.liquido,l.pix||""]);
+        [2,5,6,7,8,9,10,11].forEach(i=>r.getCell(i).numFmt='"R$" #,##0.00'); r.getCell(11).font={bold:true}; });
       const T=linhas.reduce((s,l)=>s+l.liquido,0), S=linhas.reduce((s,l)=>s+l.salario,0), E=linhas.reduce((s,l)=>s+l.extrasVal,0);
       const RP=linhas.reduce((s,l)=>s+(l.reposicao||0),0);
-      const tot=wc.addRow(["TOTAL",S,"",E,"","",RP,"",T,""]); tot.eachCell(cell=>{ cell.font={bold:true}; cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:cinza}}; });
-      [2,4,7,9].forEach(i=>tot.getCell(i).numFmt='"R$" #,##0.00');
+      const tot=wc.addRow(["TOTAL",S,"","",E,"","","",RP,"",T,""]); tot.eachCell(cell=>{ cell.font={bold:true}; cell.fill={type:"pattern",pattern:"solid",fgColor:{argb:cinza}}; });
+      [2,5,9,11].forEach(i=>tot.getCell(i).numFmt='"R$" #,##0.00');
     };
     addFolha("Folha CLT","Folha de fechamento CLT",linhasCLTreais,"FF6366F1");
     addFolha("Freela Fixo","Folha Freela Fixo",linhasFixo,"FFEA580C");
@@ -3752,10 +3812,19 @@ function Financeiro() {
     toast("Excel gerado: Folha CLT + Freela Fixo + Freelancers + Diretoria + PJ + Resumo geral");
   };
 
+  /* ===================== PDF individual / ZIP do grupo ===================== */
+  const metaPdf={ empresa:empresaEfetiva(empresaContratante).razao||"", unidade:uNome, ini, fim };
+  const nomeArqPessoa=(l)=>"Folha "+(ini||"").slice(0,7)+" - "+String(l.nome).replace(/[\\/:*?"<>|]/g,"").trim()+".pdf";
+  const baixarPdfPessoa=async(l)=>{ try{ const bytes=await pdfDemonstrativoFolha(l,metaPdf); baixarBlob(new Blob([bytes],{type:"application/pdf"}),nomeArqPessoa(l)); }catch(e){ toast("Não foi possível gerar o PDF: "+e.message); } };
+  const baixarZipGrupo=async()=>{ if(!linhasCLT.length){ toast("Nenhum colaborador nesta folha"); return; }
+    try{ const z=new JSZip(); for(const l of linhasCLT){ z.file(nomeArqPessoa(l), await pdfDemonstrativoFolha(l,metaPdf)); }
+      baixarBlob(await z.generateAsync({type:"blob"}), "Folha "+rotuloFolha+" "+(ini||"").slice(0,7)+" - "+uNome.replace(/[\\/:*?"<>|]/g,"")+".zip"); toast(linhasCLT.length+" demonstrativo(s) no ZIP"); }
+    catch(e){ toast("Não foi possível gerar o ZIP: "+e.message); } };
   const abas=[["clt","Folha CLT"],["fixo","Freela Fixo"],["confianca","Gerência & Diretoria"],["freela","Pagamento freelancers"],["pj","Prestadores PJ"]];
   return <div className="fade-in">
     <PageHeader title="Relatórios financeiros" sub="Folha CLT · Freela Fixo · Gerência & Diretoria · freelancers · prestadores PJ · filtro por período e casa · Excel · WhatsApp">
       <Btn variant="ghost" icon={I.copy} onClick={copiarTodos}>Copiar p/ WhatsApp</Btn>
+      {(aba==="clt"||aba==="fixo") && <Btn variant="ghost" icon={I.download} onClick={baixarZipGrupo}>Baixar PDFs (ZIP)</Btn>}
       <Btn icon={I.download} onClick={exportarExcel}>Exportar Excel</Btn>
     </PageHeader>
     <div className="flex flex-wrap gap-2 mb-3">
@@ -3768,7 +3837,10 @@ function Financeiro() {
       <Field label="Casa (unidade)"><Select value={uni} onChange={e=>setUni(e.target.value)}>
         <option value="todas">Todas as casas</option>{unidades.map(u=><option key={u.id} value={u.id}>{u.nome}</option>)}
       </Select></Field>
-    </div></Card>
+      {(aba==="clt"||aba==="fixo") && <div className="flex-1 min-w-[240px]"><Field label="Feriados da cidade/estado (além dos nacionais)"><Input value={feriadosExtras||""} onChange={e=>setFeriadosExtras(e.target.value)} placeholder="Ex.: 01-25, 07-09, 2026-06-04" aria-label="Feriados da cidade/estado"/></Field></div>}
+    </div>
+    {(aba==="clt"||aba==="fixo") && <p className="text-[11px] text-slate-400 mt-2">Extras 50% acima de 8h/dia e de 44h/semana (tolerância 10 min) · 100% em folga da escala e feriado · adicional noturno 20% das 22h às 5h com hora de 52m30s e prorrogação · DSR sobre extras e noturno · faltas da escala descontadas com o DSR da semana.</p>}
+    </Card>
 
     <Card className="p-4 mb-4">
       <div className="flex flex-wrap items-baseline justify-between gap-2 mb-3">
@@ -3819,7 +3891,7 @@ function Financeiro() {
         <StatCard icon={I.refresh} label="Reposição (salário combinado)" value={fmtBRL(cltReposicao)} tone={cltReposicao>0?"amber":"green"}/>
       </div>
       <Card className="overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm min-w-[1100px]">
-        <thead><tr className="text-left text-slate-400 border-b border-slate-100">{["Colaborador","Salário base","Horas extras","Adic. noturno","Gorjetas","Reposição","VT","Descontos","Líquido a pagar","Pix","WhatsApp"].map(h=><th key={h} className="px-4 py-3 font-semibold">{h}</th>)}</tr></thead>
+        <thead><tr className="text-left text-slate-400 border-b border-slate-100">{["Colaborador","Salário base","Horas extras","Adic. noturno","DSR s/ HE e AN","Gorjetas","Reposição","VT","Descontos","Líquido a pagar","Pix",""].map(h=><th key={h} className="px-4 py-3 font-semibold">{h}</th>)}</tr></thead>
         <tbody className="divide-y divide-slate-50">
           {linhasCLT.map(l=><tr key={l.id} className="hover:bg-slate-50/70">
             <td className="px-4 py-3"><div className="flex items-center gap-2"><Avatar name={l.nome} src={l.foto} tone="brand" size="w-7 h-7"/><div><div className="font-semibold text-slate-800">{l.nome}</div>{l.semSalario && <div className="text-[11px] text-amber-600">defina o salário no cadastro</div>}</div></div></td>
@@ -3829,8 +3901,10 @@ function Financeiro() {
                 <span className="text-slate-400 text-xs">R$</span>
                 <input type="number" defaultValue={Math.round(l.extrasVal*100)/100} key={l.extrasVal} onBlur={e=>setCltExtra(l.id,(ini||hojeStr()).slice(0,7), e.target.value)} title="Valor das horas extras (editável)" className={cx("w-20 px-2 py-1 rounded-lg border text-sm", l.extrasEditado?"border-amber-300 bg-amber-50":"border-slate-200")}/>
                 {l.extrasEditado && <span className="text-[10px] text-amber-600" title="Ajustado manualmente">editado</span>}
-              </div></td>
-            <td className="px-4 py-3 tabular-nums text-slate-600">{l.notVal>0?fmtBRL(l.notVal):"—"}</td>
+              </div>
+              {(l.extrasMin>0||l.extras100Min>0) && <div className="text-[10px] text-slate-400 mt-0.5">{l.extrasMin>0?"50%: "+fmtHoras(l.extrasMin):""}{l.extrasMin>0&&l.extras100Min>0?" · ":""}{l.extras100Min>0?"100%: "+fmtHoras(l.extras100Min):""}{l.extSemanal>0?" (inclui "+fmtHoras(l.extSemanal)+" acima de 44h/sem)":""}</div>}</td>
+            <td className="px-4 py-3 tabular-nums text-slate-600">{l.notVal>0?<div>{fmtBRL(l.notVal)}<div className="text-[10px] text-slate-400">{fmtHoras(l.notMin)} (hora reduzida)</div></div>:"—"}</td>
+            <td className="px-4 py-3 tabular-nums text-slate-600">{l.dsrReflexo>0?fmtBRL(l.dsrReflexo):"—"}</td>
             <td className="px-4 py-3 tabular-nums"><div className="flex items-center gap-1"><span className="text-slate-400 text-xs">R$</span>
               <input type="number" min="0" defaultValue={l.gorjeta||""} key={"g"+l.id+ymRef+l.gorjeta} placeholder="0" onBlur={e=>setGorjetaCLT(l.id,ymRef,e.target.value)} title="Gorjetas do mês" className="w-20 px-2 py-1 rounded-lg border border-slate-200 text-sm"/></div></td>
             <td className="px-4 py-3 tabular-nums" title={l.combinado>0?`Combinado ${fmtBRL(l.combinado)} − recebido ${fmtBRL(l.recebido)} (salário + extras + noturno + gorjetas)`:""}>
@@ -3843,13 +3917,13 @@ function Financeiro() {
             </td>
             <td className="px-4 py-3 font-extrabold text-slate-900 tabular-nums">{fmtBRL(l.liquido)}</td>
             <td className="px-4 py-3 font-mono text-xs text-slate-500">{l.pix||"—"}</td>
-            <td className="px-4 py-3"><Btn size="sm" variant="soft" icon={I.copy} onClick={()=>copiarUm(whatsCLT(l))}>Copiar</Btn></td>
+            <td className="px-4 py-3"><div className="flex gap-1.5"><Btn size="sm" variant="ghost" icon={I.download} onClick={()=>baixarPdfPessoa(l)} title={"Demonstrativo de "+l.nome}>PDF</Btn><Btn size="sm" variant="soft" icon={I.copy} onClick={()=>copiarUm(whatsCLT(l))}>Copiar</Btn></div></td>
           </tr>)}
-          {linhasCLT.length===0 && <tr><td colSpan="11" className="px-4 py-8 text-center text-slate-400">Nenhum {aba==="fixo"?"freela fixo":"colaborador CLT"} nesta casa.</td></tr>}
+          {linhasCLT.length===0 && <tr><td colSpan="12" className="px-4 py-8 text-center text-slate-400">Nenhum {aba==="fixo"?"freela fixo":"colaborador CLT"} nesta casa.</td></tr>}
         </tbody>
         {linhasCLT.length>0 && <tfoot><tr className="border-t-2 border-slate-100 bg-slate-50/60">
           <td className="px-4 py-3 font-bold">Total</td><td className="px-4 py-3 font-bold tabular-nums">{fmtBRL(cltSalarios)}</td>
-          <td className="px-4 py-3 font-bold text-emerald-700 tabular-nums">{fmtBRL(cltExtras)}</td><td/>
+          <td className="px-4 py-3 font-bold text-emerald-700 tabular-nums">{fmtBRL(cltExtras)}</td><td/><td/>
           <td className="px-4 py-3 font-bold text-slate-600 tabular-nums">{cltGorjetas>0?fmtBRL(cltGorjetas):""}</td>
           <td className="px-4 py-3 font-bold text-amber-600 tabular-nums">{cltReposicao>0?fmtBRL(cltReposicao):""}</td>
           <td className="px-4 py-3 font-bold text-slate-600 tabular-nums">{cltVT>0?fmtBRL(cltVT):""}</td>
@@ -7029,6 +7103,65 @@ function dadosAdmissao(p,{unidades,cargoInfo,empresaPadrao,cfg}){
     cpf:p.cpf||"", admissao:p.admissao||"", obs:"" };
 }
 // PDF da ficha no modelo da contabilidade
+// Demonstrativo individual da folha (apontamentos do período + valores) — PDF para conferência/arquivo
+async function pdfDemonstrativoFolha(l, meta){
+  const L=await carregarPdfLib(); const doc=await L.PDFDocument.create();
+  const f=await doc.embedFont(L.StandardFonts.Helvetica), b=await doc.embedFont(L.StandardFonts.HelveticaBold);
+  const limpo=(t)=>String(t??"").replace(/[^\x20-\x7E\u00A0-\u00FF]/g,"");
+  const verde=L.rgb(0.18,0.44,0.16), claro=L.rgb(0.93,0.96,0.92), cinza=L.rgb(0.4,0.4,0.4);
+  let pg, y;
+  const nova=()=>{ pg=doc.addPage([595,842]); y=800; };
+  const txt=(t,x,yy,o={})=>pg.drawText(limpo(t),{x,y:yy,size:o.size||9,font:o.bold?b:f,color:o.cor||L.rgb(0.1,0.1,0.1)});
+  const hm=(m)=> m==null?"":String(Math.floor(((m%1440)+1440)%1440/60)).padStart(2,"0")+":"+String(((m%1440)+1440)%1440%60).padStart(2,"0");
+  const hh=(min)=> min?fmtHoras(min):"";
+  nova();
+  pg.drawRectangle({x:40,y:772,width:515,height:44,color:verde});
+  txt("DEMONSTRATIVO DE APONTAMENTOS E FOLHA",52,798,{bold:true,size:13,cor:L.rgb(1,1,1)});
+  txt((meta.empresa||"")+(meta.unidade?" · "+meta.unidade:""),52,782,{size:9,cor:L.rgb(1,1,1)});
+  y=752;
+  const par=[["Colaborador",l.nome],["CPF",l.cpf||"—"],["Cargo",l.cargo||"—"],["Admissão",l.admissao?fmtDataBR(l.admissao):"—"],["Vínculo",l.vinculo==="fixo"?"Freela Fixo (CLT)":"CLT"],["Período",fmtDataBR(meta.ini)+" a "+fmtDataBR(meta.fim)]];
+  par.forEach(([k,v],i)=>{ const x=i%2?310:40; if(i%2===0&&i) y-=15; txt(k+":",x,y,{bold:true}); txt(v,x+(b.widthOfTextAtSize(k+":",9)+4),y); }); y-=24;
+  // tabela diária
+  const cols=[["Data",40],["Entrada",108],["Intervalo",152],["Saída",222],["Trabalh.",262],["Noturno*",310],["Extra 50%",360],["Extra 100%",418],["Obs.",478]];
+  const cab=()=>{ pg.drawRectangle({x:40,y:y-4,width:515,height:16,color:claro}); cols.forEach(([t,x])=>txt(t,x+2,y,{bold:true,size:8})); y-=16; };
+  cab();
+  const DS=["seg","ter","qua","qui","sex","sáb","dom"];
+  (l.dias||[]).forEach(d=>{ if(y<90){ nova(); cab(); }
+    const g=a=>{ const p=(d.punches||[]).find(x=>x.acao===a); return p?p.min:null; };
+    const ii=g("Início intervalo"), fi=g("Fim intervalo");
+    const v=[fmtDataBR(d.data).slice(0,5)+" "+DS[wdDe(d.data)], hm(g("Entrada")), ii!=null&&fi!=null?hm(ii)+"-"+hm(fi):"", hm(g("Saída")), fmtHoras(d.real), hh(d.notLeg), hh(d.ext50), hh(d.ext100), d.feriado?"Feriado":d.folga?"Folga trab.":""];
+    cols.forEach(([,x],i)=>txt(v[i],x+2,y,{size:8})); y-=13; });
+  if(!(l.dias||[]).length){ txt("Sem batidas de ponto no período.",42,y,{size:8,cor:cinza}); y-=13; }
+  if(l.extSemanal>0){ txt("+ "+fmtHoras(l.extSemanal)+" de extra 50% por passar de 44h semanais.",42,y,{size:8,cor:cinza}); y-=13; }
+  txt("* Noturno em hora reduzida de 52m30s (22h às 5h, art. 73 CLT).",42,y,{size:7.5,cor:cinza}); y-=18;
+  if(y<250){ nova(); }
+  // faltas e atrasos
+  txt("Faltas (da escala, sem batida de ponto e sem atestado): "+(l.faltaDatas&&l.faltaDatas.length?l.faltaDatas.map(d=>fmtDataBR(d).slice(0,5)).join(", "):"nenhuma"),40,y,{size:9}); y-=13;
+  if(l.dsrQtd) { txt("DSR perdido: "+l.dsrQtd+" semana(s) com falta",40,y,{size:9}); y-=13; }
+  if(l.atrasosQtd) { txt("Atrasos descontados: "+l.atrasosQtd+" ("+fmtHoras(Math.round((l.atrasosHoras||0)*60))+")",40,y,{size:9}); y-=13; }
+  y-=8;
+  // valores
+  const linhaV=(rot,val,neg,neg2)=>{ txt(rot,48,y,{size:9.5,bold:neg2}); const s=(neg?"- ":"")+fmtBRL(Math.abs(val||0)); txt(s,555-f.widthOfTextAtSize(limpo(s),9.5)-8,y,{size:9.5,bold:neg2}); y-=14; };
+  pg.drawRectangle({x:40,y:y-4,width:515,height:16,color:claro}); txt("Valores do período",48,y,{bold:true}); y-=18;
+  linhaV("Salário base",l.salario);
+  if(l.extrasEditado) linhaV("Horas extras (valor ajustado manualmente)",l.extrasVal);
+  else { if(l.extrasMin) linhaV("Horas extras 50% ("+fmtHoras(l.extrasMin)+")",l.he50Val); if(l.extras100Min) linhaV("Horas extras 100% ("+fmtHoras(l.extras100Min)+")",l.he100Val); if(l.heNotVal>0.004) linhaV("Adicional noturno sobre horas extras",l.heNotVal); }
+  if(l.notVal>0.004) linhaV("Adicional noturno 20% ("+fmtHoras(l.notMin)+")",l.notVal);
+  if(l.dsrReflexo>0.004) linhaV("DSR sobre extras e adicional noturno",l.dsrReflexo);
+  if(l.gorjeta) linhaV("Gorjetas",l.gorjeta);
+  if(l.reposicao) linhaV("Reposição (salário combinado)",l.reposicao);
+  if(l.descFaltas) linhaV("Faltas ("+l.faltasQtd+" dia(s))",l.descFaltas,true);
+  if(l.descDSR) linhaV("DSR perdido ("+l.dsrQtd+")",l.descDSR,true);
+  if(l.descAtrasos) linhaV("Atrasos",l.descAtrasos,true);
+  if(l.vtDesconto) linhaV("Vale-transporte (6%)",l.vtDesconto,true);
+  if(l.descVTFaltas) linhaV("VT de faltas do mês anterior",l.descVTFaltas,true);
+  pg.drawLine({start:{x:40,y:y+8},end:{x:555,y:y+8},thickness:0.6,color:cinza});
+  linhaV("LÍQUIDO ESTIMADO",l.liquido,false,true);
+  if(l.vt) { txt("Vale-transporte a receber: "+fmtBRL(l.vt)+(l.vtPorDia?" ("+l.vtDias+" dias x "+fmtBRL(l.vtDia)+")":""),48,y,{size:8.5,cor:cinza}); y-=13; }
+  txt("Valores para conferência dos apontamentos. Encargos e impostos (INSS, IRRF) são calculados pela contabilidade.",40,48,{size:7.5,cor:cinza});
+  txt("Gerado pelo Wilami Ponto & RH em "+new Date().toLocaleString("pt-BR"),40,36,{size:7.5,cor:cinza});
+  return await doc.save();
+}
 async function pdfFichaAdmissao(d){
   const L=await carregarPdfLib(); const doc=await L.PDFDocument.create(); const pg=doc.addPage([595,842]);
   const f=await doc.embedFont(L.StandardFonts.Helvetica), b=await doc.embedFont(L.StandardFonts.HelveticaBold);
@@ -7056,6 +7189,107 @@ async function zipAdmissao(d,arqsSel){
 const baixarBlob=(blob,nome)=>{ const u=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=u; a.download=nome; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(u); a.remove(); },1500); };
 
 const STATUS_CONTAB={ enviado:["Enviado","blue"], recebido:["Recebido pela contabilidade","amber"], concluido:["Admissão concluída","green"] };
+// Folha do período (CLT + Freela Fixo) com o mesmo cálculo do Financeiro — usada nos apontamentos da contabilidade
+function useFolhaPeriodo(ini, fim, uni){
+  const { clts, registros, pontoHist, getDossie, cltExtraAjuste, gorjetasCLT, escala, escalaOv, atestados, faltaDescontoDesde, feriadosExtras } = useStore();
+  const naData=(d)=> (!ini||d>=ini) && (!fim||d<=fim);
+  const apurCLT=apurarHoras([...(pontoHist||[]),...(registros||[])]).filter(x=>x.tipo==="clt" && x.completo && naData(x.dia));
+  const agora=new Date();
+  const faltasCtx={ escala, escalaOv, registros:[...(pontoHist||[]),...(registros||[])], atestados, ini, fim, hoje:hojeStr(), nowMin:agora.getHours()*60+agora.getMinutes(), desde:faltaDescontoDesde };
+  const folhaCtx={ apurCLT, cltExtraAjuste, gorjetasCLT, ymRef:(ini||hojeStr()).slice(0,7), getDossie, naData, faltasCtx, feriados:feriadosExtras };
+  return (clts||[]).filter(c=>c.vinculo!=="confianca" && c.status!=="inativo" && (uni==="todas"||String(c.unidade)===String(uni)))
+    .map(c=>calcFolhaLinha(c,folhaCtx)).sort((a,b)=>String(a.nome).localeCompare(String(b.nome)));
+}
+const hhmm=(min)=> min? Math.floor(min/60)+":"+String(Math.round(min%60)).padStart(2,"0") : "";
+// Planilha de apontamentos para a contabilidade (horas e ocorrências por colaborador + conferência de valores + diário)
+async function planilhaApontamentos(linhas, meta){
+  const wb=new ExcelJS.Workbook(); const verde="FF2F6F2A";
+  const cab=(ws,titulo,cols)=>{ ws.columns=cols.map(([,w])=>({width:w}));
+    ws.mergeCells(1,1,1,cols.length); ws.getCell("A1").value=titulo; ws.getCell("A1").font={bold:true,size:14};
+    ws.mergeCells(2,1,2,cols.length); ws.getCell("A2").value=`${meta.empresa||""} · ${meta.unidade} · competência ${fmtCompetencia(meta.comp)} (${fmtDataBR(meta.ini)} a ${fmtDataBR(meta.fim)})`; ws.getCell("A2").font={italic:true,color:{argb:"FF64748B"}};
+    const h=ws.addRow(cols.map(([t])=>t)); h.eachCell(c=>{ c.font={bold:true,color:{argb:"FFFFFFFF"}}; c.fill={type:"pattern",pattern:"solid",fgColor:{argb:verde}}; c.alignment={horizontal:"center",vertical:"middle",wrapText:true}; }); h.height=30; };
+  const ws=wb.addWorksheet("Apontamentos");
+  cab(ws,"Apontamentos da folha",[["Colaborador",30],["CPF",16],["Cargo",20],["Vínculo",12],["Admissão",12],["Salário base",14],["Dias trabalhados",11],["Faltas",8],["Datas das faltas",26],["DSR perdidos",9],["Atrasos (h)",10],["HE 50% (h)",10],["HE 100% (h)",10],["Adic. noturno (h)",11],["HE noturnas (h)",11],["Gorjetas",12],["VT do mês",12],["Desc. VT faltas mês ant.",13],["Observações",30]]);
+  linhas.forEach(l=>{ const obs=[l.extSemanal>0?`inclui ${hhmm(l.extSemanal)} acima de 44h/sem`:"", l.extrasEditado?"valor de extras ajustado manualmente":"", l.reposicao>0?`reposição salário combinado ${fmtBRL(l.reposicao)}`:""].filter(Boolean).join("; ");
+    const r=ws.addRow([l.nome,l.cpf,l.cargo,l.vinculo==="fixo"?"Freela Fixo":"CLT",l.admissao?fmtDataBR(l.admissao):"",l.salario,(l.dias||[]).length,l.faltasQtd,(l.faltaDatas||[]).map(d=>fmtDataBR(d).slice(0,5)).join(", "),l.dsrQtd,
+      l.atrasosHoras?hhmm(Math.round(l.atrasosHoras*60)):"",hhmm(l.extrasMin),hhmm(l.extras100Min),hhmm(l.notMin),hhmm((l.extNot50Min||0)+(l.extNot100Min||0)),l.gorjeta||0,l.vt||0,l.descVTFaltas||0,obs]);
+    [6,16,17,18].forEach(i=>r.getCell(i).numFmt='"R$" #,##0.00'); });
+  ws.addRow([]); ws.addRow(["Horas no formato h:mm. Adicional noturno em hora reduzida (52m30s). HE 100% = folga da escala ou feriado. Faltas = dias escalados sem batida de ponto e sem atestado."]).getCell(1).font={italic:true,size:9,color:{argb:"FF64748B"}};
+  const wv=wb.addWorksheet("Valores (conferência)");
+  cab(wv,"Valores calculados pelo sistema (para conferência)",[["Colaborador",30],["Salário base",14],["HE 50%",12],["HE 100%",12],["Adic. noturno",12],["Adic. not. s/ HE",12],["DSR s/ HE e AN",13],["Gorjetas",12],["Reposição",12],["Desc. faltas",12],["Desc. DSR",12],["Desc. atrasos",12],["VT 6%",11],["Desc. VT faltas",12],["Líquido estimado",15]]);
+  linhas.forEach(l=>{ const r=wv.addRow([l.nome,l.salario,l.extrasEditado?l.extrasVal:l.he50Val,l.extrasEditado?0:l.he100Val,l.notVal,l.extrasEditado?0:l.heNotVal,l.dsrReflexo,l.gorjeta||0,l.reposicao||0,-l.descFaltas,-l.descDSR,-(l.descAtrasos||0),-l.vtDesconto,-(l.descVTFaltas||0),l.liquido]);
+    for(let i=2;i<=15;i++) r.getCell(i).numFmt='"R$" #,##0.00'; r.getCell(15).font={bold:true}; });
+  const wd=wb.addWorksheet("Diário");
+  cab(wd,"Batidas e apuração por dia",[["Colaborador",28],["Data",12],["Entrada",9],["Intervalo",14],["Saída",9],["Trabalhado",11],["Noturno (h)",11],["Extra 50%",10],["Extra 100%",10],["Ocorrência",14]]);
+  const hm=(m)=> m==null?"":String(Math.floor(((m%1440)+1440)%1440/60)).padStart(2,"0")+":"+String(((m%1440)+1440)%1440%60).padStart(2,"0");
+  linhas.forEach(l=>{ (l.dias||[]).forEach(d=>{ const g=a=>{ const p=(d.punches||[]).find(x=>x.acao===a); return p?p.min:null; }; const ii=g("Início intervalo"), fi=g("Fim intervalo");
+      wd.addRow([l.nome,fmtDataBR(d.data),hm(g("Entrada")),ii!=null&&fi!=null?hm(ii)+" - "+hm(fi):"",hm(g("Saída")),hhmm(d.real),hhmm(d.notLeg),hhmm(d.ext50),hhmm(d.ext100),d.feriado?"Feriado":d.folga?"Folga trabalhada":""]); });
+    (l.faltaDatas||[]).forEach(ds=>wd.addRow([l.nome,fmtDataBR(ds),"","","","","","","","Falta"])); });
+  const buf=await wb.xlsx.writeBuffer(); return new Uint8Array(buf);
+}
+function ApontamentosContab({souContab}){
+  const { unidades, arquivos, contabCfg, apontContab, setApontContab, empresaContratante, acesso } = useStore();
+  const toast=useContext(ToastCtx);
+  const h=new Date(); const [comp,setComp]=useState(compDe(new Date(h.getFullYear(),h.getMonth()-1,1)));
+  const [uni,setUni]=useState("todas"); const [gerando,setGerando]=useState(false);
+  const [y,m]=comp.split("-").map(Number); const ini=comp+"-01", fim=ymd(new Date(y,m,0));
+  const linhas=useFolhaPeriodo(ini,fim,uni);
+  const uniNome=uni==="todas"?"Todas as casas":unidadeNome(Number(uni),unidades);
+  const envios=[...(apontContab||[])].sort((a,b)=>(b.em||0)-(a.em||0));
+  const arq=(id)=>(arquivos||[]).find(a=>a.id===id);
+  const baixar=(id)=>{ const a=arq(id); if(!a){ toast("Arquivo ainda carregando — tente de novo"); return; } arqBaixar(a).catch(e=>toast(e.message)); };
+  const tot=(k)=>linhas.reduce((s,l)=>s+(Number(l[k])||0),0);
+  const gerar=async()=>{ if(!linhas.length){ toast("Nenhum colaborador nesta seleção"); return; } if(!window.ExcelJS){ toast("Biblioteca Excel não carregada — verifique a conexão"); return; }
+    setGerando(true);
+    // abre a aba do e-mail já no clique (depois do await o navegador bloquearia o pop-up)
+    const aba=contabCfg && contabCfg.email ? window.open("about:blank","_blank") : null;
+    try{ const meta={ empresa:empresaEfetiva(empresaContratante).razao||"", unidade:uniNome, comp, ini, fim };
+      const xlsx=await planilhaApontamentos(linhas,meta);
+      const z=new JSZip(); for(const l of linhas){ z.file("Folha "+comp+" - "+String(l.nome).replace(/[\\/:*?"<>|]/g,"").trim()+".pdf", await pdfDemonstrativoFolha(l,meta)); }
+      const zip=await z.generateAsync({type:"uint8array"});
+      const base={ donoKey:"contabilidade", donoTipo:"contabilidade", donoId:"apontamentos", donoNome:"Contabilidade", pasta:"Apontamentos da folha", categoria:"apontamentos", competencia:comp, visivelColab:false, origem:"apontamentos" };
+      const nomeBase="Apontamentos "+comp+" - "+uniNome.replace(/[\\/:*?"<>|]/g,"");
+      const xlsxId=await arqSalvar({...base, nome:nomeBase+".xlsx"}, bytesParaDataUrl(xlsx,"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
+      const zipId=await arqSalvar({...base, nome:"Demonstrativos "+comp+" - "+uniNome.replace(/[\\/:*?"<>|]/g,"")+".zip"}, bytesParaDataUrl(zip,"application/zip"));
+      const rec={ id:Math.random().toString(36).slice(2), comp, ini, fim, unidade:uni, uniNome, em:Date.now(), por:(acesso&&acesso.email)||"", xlsxId, zipId, qtd:linhas.length,
+        resumo:{ faltas:tot("faltasQtd"), he50:tot("extrasMin"), he100:tot("extras100Min"), noturno:tot("notMin") }, status:"enviado" };
+      setApontContab(prev=>[rec,...(prev||[])]);
+      toast("Apontamentos enviados para a contabilidade");
+      if(contabCfg && contabCfg.email){ const corpo=`Olá! Os apontamentos da folha de ${fmtCompetencia(comp)} (${uniNome}) estão na aba Contabilidade do Wilami:\n\n• ${linhas.length} colaborador(es)\n• Faltas: ${rec.resumo.faltas}\n• HE 50%: ${hhmm(rec.resumo.he50)||"0:00"} · HE 100%: ${hhmm(rec.resumo.he100)||"0:00"}\n• Adicional noturno: ${hhmm(rec.resumo.noturno)||"0:00"} (hora reduzida)\n\nPlanilha de apontamentos (Excel) e demonstrativos individuais (PDF):\n${comTenantUrl(location.origin+location.pathname,"")}`;
+        const url="https://mail.google.com/mail/?view=cm&fs=1&to="+encodeURIComponent(contabCfg.email)+"&su="+encodeURIComponent("Apontamentos da folha — "+fmtCompetencia(comp))+"&body="+encodeURIComponent(corpo);
+        if(aba) aba.location.href=url; else window.open(url,"_blank"); }
+    }catch(e){ if(aba) aba.close(); toast("Não foi possível gerar: "+erroBanco(e)); }
+    setGerando(false); };
+  const marcar=(id,status)=>setApontContab(prev=>(prev||[]).map(r=>r.id===id?{...r,status,[status+"Em"]:Date.now()}:r));
+  return <div className="space-y-4">
+    {!souContab && <Card className="p-4">
+      <div className="flex flex-wrap items-end gap-3">
+        <Field label="Competência"><Input type="month" value={comp} onChange={e=>e.target.value&&setComp(e.target.value)} aria-label="Competência"/></Field>
+        <Field label="Casa (unidade)"><Select value={uni} onChange={e=>setUni(e.target.value)} aria-label="Casa"><option value="todas">Todas as casas</option>{unidades.map(u=><option key={u.id} value={u.id}>{u.nome}</option>)}</Select></Field>
+        <div className="flex-1"/>
+        <Btn icon={gerando?null:I.arrow} disabled={gerando||!linhas.length} onClick={gerar}>{gerando?"Gerando…":"Enviar apontamentos para a contabilidade"}</Btn>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mt-3 text-sm">
+        {[["Colaboradores",linhas.length],["Faltas (da escala)",tot("faltasQtd")],["HE 50%",hhmm(tot("extrasMin"))||"0:00"],["HE 100%",hhmm(tot("extras100Min"))||"0:00"],["Adic. noturno",hhmm(tot("notMin"))||"0:00"]].map(([l,v])=>
+          <div key={l} className="p-2.5 rounded-xl bg-slate-50"><div className="text-[11px] font-bold uppercase text-slate-400">{l}</div><div className="font-extrabold text-slate-900">{v}</div></div>)}
+      </div>
+      <p className="text-xs text-slate-500 mt-2">Envia a planilha de apontamentos (horas extras 50% e 100%, adicional noturno, faltas da escala, DSR perdido, atrasos, gorjetas e VT) e os demonstrativos individuais em PDF. {contabCfg&&contabCfg.email?"O e-mail da contabilidade abre já preenchido.":"Cadastre o e-mail da contabilidade na seção Admissões para avisar por e-mail."}</p>
+    </Card>}
+    <Card className="divide-y divide-slate-100">
+      <div className="p-3 text-xs font-bold uppercase text-slate-400">Apontamentos enviados</div>
+      {envios.length===0 && <p className="p-6 text-center text-sm text-slate-400">Nenhum apontamento enviado ainda.</p>}
+      {envios.map(r=><div key={r.id} className="p-3 flex flex-wrap items-center gap-3">
+        <div className="w-10 h-10 rounded-xl grad-brand text-white grid place-items-center shrink-0"><Icon d={I.receipt} className="w-5 h-5"/></div>
+        <div className="flex-1 min-w-[200px]"><div className="text-sm font-semibold text-slate-800">{fmtCompetencia(r.comp)} · {r.uniNome}</div>
+          <div className="text-xs text-slate-400">{r.qtd} colaborador(es) · {r.resumo?`${r.resumo.faltas} falta(s) · HE 50% ${hhmm(r.resumo.he50)||"0:00"} · HE 100% ${hhmm(r.resumo.he100)||"0:00"} · noturno ${hhmm(r.resumo.noturno)||"0:00"}`:""} · enviado em {new Date(r.em).toLocaleString("pt-BR")}</div></div>
+        <Badge tone={r.status==="recebido"?"green":"blue"}>{r.status==="recebido"?"Recebido pela contabilidade":"Enviado"}</Badge>
+        <Btn size="sm" variant="soft" icon={I.download} onClick={()=>baixar(r.xlsxId)}>Planilha</Btn>
+        <Btn size="sm" variant="ghost" icon={I.download} onClick={()=>baixar(r.zipId)}>PDFs</Btn>
+        {souContab && r.status!=="recebido" && <Btn size="sm" icon={I.check} onClick={()=>marcar(r.id,"recebido")}>Marcar recebido</Btn>}
+      </div>)}
+    </Card>
+  </div>;
+}
 function ContabilidadePage(){
   const { clts, unidades, arquivos, cargoInfo, empresaContratante, contabCfg, setContabCfg, envContab, setEnvContab, acesso, can } = useStore();
   const toast=useContext(ToastCtx);
@@ -7072,8 +7306,11 @@ function ContabilidadePage(){
     .sort((a,b)=>String(b.admissao||"").localeCompare(String(a.admissao||"")));
   const docsResumo=(p)=>{ const d=docsDaPessoa(p,arquivos); return DOCS_ADMISSAO.map(x=>[x,d[x.k].length]); };
   const pAberto=sel && clts.find(p=>chave(p)===sel);
+  const [secao,setSecao]=useState("admissoes");
   return <div className="space-y-4 fade-in">
-    <PageHeader title="Contabilidade" sub={souContab?"Novos funcionários enviados para admissão — baixe os dados e os documentos":"Envie os dados e documentos dos novos CLT para a contabilidade fazer a admissão"}/>
+    <PageHeader title="Contabilidade" sub={secao==="apontamentos"?(souContab?"Apontamentos da folha enviados — baixe a planilha e os demonstrativos":"Envie os apontamentos da folha do mês para a contabilidade"):(souContab?"Novos funcionários enviados para admissão — baixe os dados e os documentos":"Envie os dados e documentos dos novos CLT para a contabilidade fazer a admissão")}/>
+    <div className="flex gap-2">{[["admissoes","Admissões"],["apontamentos","Apontamentos da folha"]].map(([k,l])=><button key={k} onClick={()=>setSecao(k)} className={cx("px-4 py-2 rounded-xl text-sm font-semibold border transition", secao===k?"grad-brand text-white border-transparent shadow-glow":"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>{l}</button>)}</div>
+    {secao==="apontamentos" ? <ApontamentosContab souContab={souContab}/> : <>
     {!souContab && <Card className="p-4 flex flex-wrap items-end gap-3">
       <div className="flex-1 min-w-[220px]"><Field label="E-mail da contabilidade (para avisar quando enviar)"><Input value={contabCfg.email||""} onChange={e=>setContabCfg({...contabCfg,email:e.target.value.trim()})} placeholder="contabilidade@escritorio.com.br"/></Field></div>
       <p className="text-xs text-slate-500 max-w-md">A contabilidade entra com login próprio e vê só esta aba: crie em <b>Gerentes & acessos</b> com o papel <b>Contabilidade</b>.</p>
@@ -7096,6 +7333,7 @@ function ContabilidadePage(){
         </div>; })}
     </Card>
     {pAberto && <AdmissaoModal p={pAberto} ctx={ctx} souContab={souContab} onClose={()=>setSel(null)}/>}
+    </>}
   </div>;
 }
 function AdmissaoModal({p,ctx,souContab,onClose}){
