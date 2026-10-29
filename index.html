@@ -8509,6 +8509,24 @@ function Onboarding({ onClose }){
     </div>
   </div>;
 }
+// Versão nova publicada → o quiosque do ponto recarrega sozinho (quando ninguém está usando); o painel mostra um aviso.
+function AvisoNovaVersao({kiosk}){
+  const [nova,setNova]=useState(false);
+  useEffect(()=>{ const m=document.querySelector('meta[name="wp-build"]'); const atual=m&&m.content; if(!atual) return;
+    const checar=()=>{ fetch(location.pathname+"?v="+Date.now(),{cache:"no-store"}).then(r=>r.ok?r.text():"").then(t=>{ const x=/<meta name="wp-build" content="([^"]+)"/.exec(t||""); if(x && x[1]!==atual) setNova(x[1]); }).catch(()=>{}); };
+    const id=setInterval(checar,5*60*1000); const vis=()=>{ if(document.visibilityState==="visible") checar(); };
+    document.addEventListener("visibilitychange",vis); window.addEventListener("focus",vis);
+    return ()=>{ clearInterval(id); document.removeEventListener("visibilitychange",vis); window.removeEventListener("focus",vis); }; },[]);
+  useEffect(()=>{ if(!nova||!kiosk) return; const tentar=()=>{ const ae=document.activeElement; const ocupado=(ae&&/^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)&&ae.value) || document.querySelector("video");
+      if(ocupado) return; let ja=null; try{ ja=sessionStorage.getItem("wp_reload_para"); sessionStorage.setItem("wp_reload_para",nova); }catch(e){}
+      if(ja!==nova) location.reload(); };   // no máximo 1 recarga por versão (evita loop se o navegador servir a página antiga do cache)
+    tentar(); const t=setInterval(tentar,15000); return ()=>clearInterval(t); },[nova,kiosk]);
+  if(!nova || kiosk) return null;
+  return <div className="no-print fixed bottom-4 left-1/2 -translate-x-1/2 z-[90] flex items-center gap-3 px-4 py-2.5 rounded-2xl bg-slate-900 text-white text-sm shadow-lg">
+    <span>Nova versão do sistema disponível</span>
+    <button onClick={()=>location.reload()} className="px-3 py-1 rounded-lg bg-white text-slate-900 font-semibold">Atualizar</button>
+  </div>;
+}
 function App() {
   const [localLogged,setLocalLogged]=useState(false);
   const [user,setUser]=useState(null);
@@ -8530,6 +8548,7 @@ function App() {
      : logged ? <Shell onLogout={logout}/>
      : <LoginScreen onLogin={()=>setLocalLogged(true)}/>}
     {onboard && !pontoMode && !logged && <Onboarding onClose={fecharOnboard}/>}
+    <AvisoNovaVersao kiosk={pontoMode==="clt"||pontoMode==="free"}/>
   </StoreProvider>;
 }
 ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
