@@ -770,7 +770,7 @@ const escalaInicial = () => {
 // Esses documentos não têm o campo "ts" (é guardado como "_ts"), então NÃO aparecem na lista de
 // ajustes de ponto, que é ordenada por "ts".
 const COL_HOSPEDEIRA="ajustes";
-const COL_VIRTUAL={ arquivos:["arq_","arquivo"], arquivos_partes:["arqp_","arquivo_parte"], acessosColab:["pin_","pin"], convites:["conv_","convite"], termos:["ter_","termo_pedido"], entregas:["ent_","entrega"], assinaturas:["ass_","assinatura_env"], assinaturas_provas:["assp_","assinatura_prova"], notas:["nf_","nota_fiscal"], candidatos:["cand_","candidato"] };
+const COL_VIRTUAL={ arquivos:["arq_","arquivo"], arquivos_partes:["arqp_","arquivo_parte"], acessosColab:["pin_","pin"], convites:["conv_","convite"], termos:["ter_","termo_pedido"], entregas:["ent_","entrega"], assinaturas:["ass_","assinatura_env"], assinaturas_provas:["assp_","assinatura_prova"], notas:["nf_","nota_fiscal"], candidatos:["cand_","candidato"], pontoIdx:["pidx_","ponto_indice"] };
 const _vEntrada=(nome,data)=>{ const o={...data, _t:COL_VIRTUAL[nome][1]}; if("ts" in o){ o._ts=o.ts; delete o.ts; } return o; };
 const _vSaida=(data)=>{ const o={...(data||{})}; if("_ts" in o){ o.ts=o._ts; delete o._ts; } delete o._t; return o; };
 function nCol(nome){
@@ -947,6 +947,11 @@ function useAcessosColab(ativo){
 async function pinHash(cpf,pin){
   const txt="wilami|"+(WP_TENANT||"")+"|"+soDigitos(cpf)+"|"+String(pin||"").trim();
   const buf=await crypto.subtle.digest("SHA-256", new TextEncoder().encode(txt));
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");
+}
+// CPF "embaralhado" para o índice público do ponto: o CPF em si nunca fica na lista que o celular lê sem login
+async function cpfHashPonto(cpf){
+  const buf=await crypto.subtle.digest("SHA-256", new TextEncoder().encode("wilami-ponto|"+(WP_TENANT||"")+"|"+soDigitos(cpf)));
   return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");
 }
 function gerarPin(){ const a=new Uint32Array(1); crypto.getRandomValues(a); return String(a[0]%1000000).padStart(6,"0"); }
@@ -1157,16 +1162,24 @@ function StoreProvider({children}) {
   // (dados pessoais e documentos). O painel publica aqui só o necessário para achar a pessoa pelo CPF e conferir
   // a escala — sem documentos, sem foto, sem banco/Pix.
   const [pontoIdx,setPontoIdx]=usePersist("pontoIndice",{});
+  const idxPublicadoRef=useRef(null);
   const cadIds=useMemo(()=>new Set(cadAuto.map(c=>c.id)),[cadAuto]);
   const doIndice=(tipo)=>(window.__WPAUTH && window.__WPAUTH.currentUser && !window.__WPAUTH.currentUser.isAnonymous) ? [] : Object.values(pontoIdx||{}).filter(x=>x && x.tipo===tipo && !cadIds.has(x.id)).map(x=>({...x,_auto:true,_indice:true}));
   useEffect(()=>{
     if(!cadPronto || !window.__WPDB) return;
     if(window.__WPAUTH && (!window.__WPAUTH.currentUser || window.__WPAUTH.currentUser.isAnonymous)) return;
-    const idx={}; cadAuto.forEach(c=>{ if(!c || !soDigitos(c.cpf) || (c.tipo!=="clt" && c.tipo!=="free")) return;
-      idx[c.id]=semUndefined({ id:c.id, tipo:c.tipo, nome:c.nome||"", cpf:c.cpf, unidade:c.unidade??null, vinculo:c.vinculo||"", cargo:c.cargo||"", setor:c.setor||"",
-        status:c.status||"ativo", admissao:c.admissao||"", fimContrato:c.fimContrato||"", origem:c.origem||"", grupoFolga:c.grupoFolga||"", escala:c.escala||"",
-        folgaDia:c.folgaDia??null, folgaDias:c.folgaDias||null }); });
-    if(JSON.stringify(idx)!==JSON.stringify(pontoIdx||{})) setPontoIdx(idx);
+    let vivo=true;
+    (async()=>{ const idx={};
+      for(const c of cadAuto){ if(!c || soDigitos(c.cpf).length!==11 || (c.tipo!=="clt" && c.tipo!=="free")) continue;
+        idx[c.id]=semUndefined({ id:c.id, tipo:c.tipo, nome:c.nome||"", h:await cpfHashPonto(c.cpf), unidade:c.unidade??null, vinculo:c.vinculo||"", cargo:c.cargo||"", setor:c.setor||"",
+          status:c.status||"ativo", admissao:c.admissao||"", fimContrato:c.fimContrato||"", origem:c.origem||"", grupoFolga:c.grupoFolga||"", escala:c.escala||"",
+          folgaDia:c.folgaDia??null, folgaDias:c.folgaDias||null }); }
+      if(!vivo) return; const txt=JSON.stringify(idx);
+      if(txt!==JSON.stringify(pontoIdx||{})) setPontoIdx(idx);
+      // cópia na coleção que o banco já libera para leitura sem login (garantia, caso o celular não consiga ler a outra)
+      if(idxPublicadoRef.current!==txt){ idxPublicadoRef.current=txt; try{ nCol("pontoIdx").doc("lista").set({v:idx, em:Date.now()}).catch(e=>avisoGravacao("Não foi possível publicar a lista do ponto: "+((e&&e.message)||"erro"))); }catch(e){} }
+    })().catch(()=>{});
+    return ()=>{ vivo=false; };
   },[cadPronto, cadAuto]); // eslint-disable-line
   const [atestados,atestadosOps]=useAtestados();
   const enviarAtestado=(obj)=>{ if(window.__WPDB) return atestadosOps.add(obj); return Promise.resolve(); };
@@ -2409,6 +2422,16 @@ function PontoKiosk({ mode, onClose }) {
   const [extraIdx,setExtraIdx]=useState([]);
   const listaModo=[...(mode==="clt"?clts:freelas), ...extraIdx.filter(x=>x.tipo===(mode==="clt"?"clt":"free"))];
   const ativos = mode==="clt" ? listaModo : listaModo.filter(f=>f.status==="ativo");
+  // CPF que não está nas listas deste aparelho → procura no índice do ponto, direto no servidor (duas cópias)
+  const tipoModo=mode==="clt"?"clt":"free";
+  const acharNoIndice=async(d)=>{ let total=null; let h=null; try{ h=await cpfHashPonto(d); }catch(e){}
+    // índice já sincronizado neste aparelho
+    const local=listaModo.find(y=>y && y._indice && h && y.h===h); if(local) return {p:{...local,cpf:d},total:null};
+    for(const ler of [()=>tDoc("pontoIndice").get().then(s=>(s&&s.exists&&s.data()&&s.data().v)||{}), ()=>nCol("pontoIdx").doc("lista").get().then(s=>(s&&s.exists&&s.data()&&s.data().v)||{})]){
+      try{ const v=await ler(); const lista=Object.values(v||{}); total=Math.max(total||0,lista.length);
+        const x=lista.find(y=>y && y.tipo===tipoModo && ((h && y.h===h) || (y.cpf && soDigitos(y.cpf)===d)));
+        if(x){ const p={...x,cpf:d,_auto:true,_indice:true}; setExtraIdx(prev=>prev.some(y=>y.id===p.id)?prev:[...prev,p]); return {p,total}; } }catch(e){} }
+    return {p:null,total}; };
   const [fluxo,setFluxo]=useState("escolha"); // escolha | registro | cadastro
   const [unidadeId,setUnidadeId]=useState(unidades[0]?.id);
   const [pid,setPid]=useState(null);
@@ -2438,25 +2461,18 @@ function PontoKiosk({ mode, onClose }) {
     }
     return false;
   };
-  const buscarCpf=()=>{
+  const buscarCpf=async()=>{
     const d=soDigitos(cpf);
     if(d.length<11){ setCpfErr("Digite os 11 números do CPF."); return; }
-    const p=ativos.find(x=>soDigitos(x.cpf)===d);
+    let p=ativos.find(x=>soDigitos(x.cpf)===d); let refIdx=null;
+    if(!p && window.__WPDB){ setCpfErr("Procurando seu cadastro…"); const r=await acharNoIndice(d); p=r.p; refIdx=r.total; }
     if(!p){
       // Já cadastrado no OUTRO vínculo? Orienta a abrir o link certo (em vez de pedir novo cadastro).
       const outra = mode==="clt" ? freelas : clts;
       const pOutro = outra.find(x=>soDigitos(x.cpf)===d);
       if(pOutro){ const ehFixo=pOutro.vinculo==="fixo"; const rot = mode==="clt" ? "Freelancer" : (ehFixo?"CLT (Freela Fixo)":"CLT");
         setCpfErr(pOutro.nome.split(" ")[0]+", seu cadastro é "+rot+". Abra o link de "+(mode==="clt"?"Freelancer":"CLT")+" para bater o ponto — não precisa cadastrar de novo."); return; }
-      // não está nas listas deste aparelho → confere direto no servidor (índice do ponto) antes de recusar
-      if(window.__WPDB && !extraIdx.some(x=>soDigitos(x.cpf)===d)){ setCpfErr("Procurando seu cadastro…");
-        tDoc("pontoIndice").get().then(function(snap){ const v=(snap&&snap.exists&&snap.data()&&snap.data().v)||{}; const lista=Object.values(v);
-          const achou=lista.find(x=>x&&soDigitos(x.cpf)===d);
-          if(achou){ setExtraIdx(prev=>[...prev,{...achou,_auto:true,_indice:true}]); setCpfErr("Cadastro encontrado — toque em Continuar."); }
-          else setCpfErr("CPF não encontrado. Use “Fazer cadastro (1º acesso)”. (ref. "+listaModo.length+"/"+lista.length+")"); })
-        .catch(function(e){ setCpfErr("CPF não encontrado. Use “Fazer cadastro (1º acesso)”. (ref. "+listaModo.length+"/sem acesso ao índice)"); });
-        return; }
-      setCpfErr("CPF não encontrado. Use “Fazer cadastro (1º acesso)”. (ref. "+listaModo.length+")"); return;
+      setCpfErr("CPF não encontrado. Use “Fazer cadastro (1º acesso)”. (ref. "+listaModo.length+"/"+(refIdx==null?"-":refIdx)+")"); return;
     }
     if(!escaladoHojePid(p)){ setCpfErr(p.nome.split(" ")[0]+", você não está na escala de hoje — não é possível registrar ponto."); return; }
     setPid(p.id); setUnidadeId(p.unidade||unidades[0]?.id); setCpfErr("");
@@ -2478,10 +2494,11 @@ function PontoKiosk({ mode, onClose }) {
   const [at,setAt]=useState({cpf:"",data:hojeStr(),horas:8,obs:"",arquivo:null,nomeArq:""});
   const [atStatus,setAtStatus]=useState(""); // "" | enviando | ok | erro
   const upAtestado=(file)=>{ if(!file) return; const rd=new FileReader(); rd.onload=async()=>{ const dados=file.type&&file.type.indexOf("image")===0?await compressImg(rd.result):rd.result; setAt(p=>({...p,arquivo:dados,nomeArq:file.name})); }; rd.readAsDataURL(file); };
-  const enviarAtestadoColab=()=>{
+  const enviarAtestadoColab=async()=>{
     const d=(at.cpf||"").replace(/\D/g,"");
-    const pessoa=listaModo.find(x=>(x.cpf||"").replace(/\D/g,"")===d);
+    let pessoa=listaModo.find(x=>(x.cpf||"").replace(/\D/g,"")===d);
     if(d.length<11){ setAtStatus("cpf"); return; }
+    if(!pessoa && window.__WPDB){ setAtStatus("enviando"); pessoa=(await acharNoIndice(d)).p; }
     if(!pessoa){ setAtStatus("naoencontrado"); return; }
     if(!at.arquivo){ setAtStatus("semarquivo"); return; }
     setAtStatus("enviando");
@@ -2493,10 +2510,11 @@ function PontoKiosk({ mode, onClose }) {
     : [["Entrada","Entrada"],["Início intervalo","Saída para almoço"],["Fim intervalo","Retorno do almoço"],["Saída","Saída final"]];
   const [aj,setAj]=useState({cpf:"",data:hojeStr(),acao:"Entrada",hora:"08:00",motivo:""});
   const [ajStatus,setAjStatus]=useState(""); // "" | cpf | naoencontrado | semmotivo | enviando | ok | erro
-  const enviarAjusteColab=()=>{
+  const enviarAjusteColab=async()=>{
     const d=(aj.cpf||"").replace(/\D/g,"");
-    const pessoa=listaModo.find(x=>(x.cpf||"").replace(/\D/g,"")===d);
+    let pessoa=listaModo.find(x=>(x.cpf||"").replace(/\D/g,"")===d);
     if(d.length<11){ setAjStatus("cpf"); return; }
+    if(!pessoa && window.__WPDB){ setAjStatus("enviando"); pessoa=(await acharNoIndice(d)).p; }
     if(!pessoa){ setAjStatus("naoencontrado"); return; }
     if(!(aj.motivo||"").trim()){ setAjStatus("semmotivo"); return; }
     const [hh,mm]=(aj.hora||"08:00").split(":").map(Number); const min=(hh||0)*60+(mm||0);
@@ -2959,9 +2977,11 @@ function ColaboradoresCLT() {
     const L=[]; const p=[...clts.map(x=>({...x,_l:x.vinculo==="fixo"?"Freela Fixo":"CLT"})),...freelas.map(x=>({...x,_l:"Freelancer"}))].find(x=>soDigitos(x.cpf)===d);
     L.push(p?"Cadastro: "+p.nome+" ("+p._l+(p._auto?", registro individual":", lista principal")+") · início "+(p.admissao?fmtDataBR(p.admissao):"NÃO definido")+" · "+(p.status||"ativo"):"Cadastro: NENHUM colaborador com esse CPF");
     if(p) L.push(p._l==="Freelancer"?"Link do ponto: FREELANCER":"Link do ponto: CLT (Freela Fixo também usa o link CLT)");
-    try{ const s=await tDoc("pontoIndice").get(); const v=(s&&s.exists&&s.data().v)||{}; const n=Object.keys(v).length; const no=Object.values(v).some(x=>x&&soDigitos(x.cpf)===d);
-      L.push(p&&!p._auto?"Índice do ponto: não precisa (está na lista principal)":no?"Índice do ponto: OK ("+n+" pessoas)":"Índice do ponto: NÃO está ("+n+" pessoas no índice)"); }
-    catch(e){ L.push("Índice do ponto: erro ao ler — "+e.message); }
+    const h=await cpfHashPonto(d);
+    for(const [rot,ler] of [["Índice do ponto",()=>tDoc("pontoIndice").get()],["Índice do ponto (reserva)",()=>nCol("pontoIdx").doc("lista").get()]]){
+      try{ const s=await ler(); const v=(s&&s.exists&&s.data().v)||{}; const n=Object.keys(v).length; const no=Object.values(v).some(x=>x&&x.h===h);
+        L.push(p&&!p._auto?rot+": não precisa (está na lista principal)":no?rot+": OK ("+n+" pessoas)":rot+": NÃO está ("+n+" pessoas)"); }
+      catch(e){ L.push(rot+": erro ao ler — "+e.message); } }
     if(p){ const hoje=hojeStr(); const uids=Object.keys({...(escala||{}),...(escalaOv||{})});
       const esc=uids.some(uid=>(diaEscala(escala,escalaOv,uid,hoje,HOJE_IDX)||[]).some(a=>String(a.pid)===String(p.id)&&a.turno!=="folga"));
       L.push(esc?"Escala de hoje: escalado(a) ✓":"Escala de hoje: NÃO escalado(a) hoje (folga, fora da escala ou antes da data de início)"); }
