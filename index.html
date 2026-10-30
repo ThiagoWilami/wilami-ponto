@@ -1057,7 +1057,7 @@ function useCadastros(){
     }catch(e){}
   },[]);
   const add=(obj)=>{ const db=window.__WPDB; if(!db) return Promise.reject(new Error("sem-banco")); return tCol("cadastros").add(obj); };
-  const update=(docId,patch)=>{ const db=window.__WPDB; if(db){ try{ tCol("cadastros").doc(docId).set(patch,{merge:true}); }catch(e){} } };
+  const update=(docId,patch)=>{ const db=window.__WPDB; if(db){ try{ const pr=tCol("cadastros").doc(docId).set(patch,{merge:true}); if(pr&&pr.catch) pr.catch(e=>avisoGravacao("Não foi possível salvar o cadastro: "+((e&&e.message)||"erro no banco"))); }catch(e){ avisoGravacao("Não foi possível salvar o cadastro: "+e.message); } } };
   const remove=(docId)=>{ const db=window.__WPDB; if(db){ try{ tCol("cadastros").doc(docId).delete(); }catch(e){} } };
   return [items,{add,update,remove},pronto];
 }
@@ -1316,21 +1316,34 @@ function StoreProvider({children}) {
       try{ ids[k]=await arqSalvar({ nome:rot+" - "+(v.nome||"documento"), donoKey:donoKeyDe(tipo,pessoa.id), donoTipo:tipo, donoId:pessoa.id, donoNome:pessoa.nome||"", cpf:soDigitos(pessoa.cpf||pessoa.cnpj||""),
         pasta:"Documentos pessoais", categoria:"documento", visivelColab:false, origem:"cadastro" }, v.dados); }
       catch(e){ avisoGravacao("Não foi possível guardar o documento "+rot+" de "+(pessoa.nome||"")+": "+e.message); } }
-    if(Object.keys(ids).length) setListaDe(tipo)(prev=>prev.map(x=>String(x.id)!==String(pessoa.id)?x:{...x,docs:Object.fromEntries(Object.entries(x.docs||{}).map(([k,d])=>ids[k]?[k,{nome:(d&&d.nome)||docs[k].nome||"documento",arquivoId:ids[k]}]:[k,d]))}));
+    if(!Object.keys(ids).length) return ids;
+    if(ehAuto(pessoa.id)){ const patch={}; Object.keys(ids).forEach(k=>{ patch[k]={nome:docs[k].nome||"documento",arquivoId:ids[k],enviando:false}; }); cadOps.update(docIdDe(pessoa.id),{docs:patch}); return ids; }
+    setListaDe(tipo)(prev=>prev.map(x=>String(x.id)!==String(pessoa.id)?x:{...x,docs:Object.fromEntries(Object.entries(x.docs||{}).map(([k,d])=>ids[k]?[k,{nome:(d&&d.nome)||docs[k].nome||"documento",arquivoId:ids[k]}]:[k,d]))}));
     return ids; };
+  // Cadastro NOVO feito no painel: cada pessoa vira um registro PRÓPRIO no banco (coleção "cadastros", como os
+  // convites) — não entra mais na lista única, que tem limite de tamanho. Retorna o id ("auto_…").
+  const novoCadastroIndividual=(tipo,dados)=>{
+    const ref=tCol("cadastros").doc(); const id="auto_"+ref.id;
+    const rec={...semDocsInline(dados), tipo, origem:"painel", criadoEm:Date.now(), status:dados.status||"ativo"}; delete rec.id; delete rec._docId; delete rec._auto;
+    ref.set(rec).catch(e=>avisoGravacao("Não foi possível salvar o cadastro de "+(dados.nome||"")+": "+((e&&e.message)||"erro no banco")));
+    subirDocsInline(tipo,{...dados,id});
+    return id; };
   const salvarClt=(c)=>{
-    if(ehAuto(c.id)){ const ant=cadAuto.find(x=>x.id===c.id); cadOps.update(c._docId||docIdDe(c.id), c);
+    if(ehAuto(c.id)){ const ant=cadAuto.find(x=>x.id===c.id); cadOps.update(c._docId||docIdDe(c.id), semDocsInline(c)); subirDocsInline("clt",c);
       if(ant && ((ant.grupoFolga||"")!==(c.grupoFolga||"") || String(ant.folgaDias||"")!==String(c.folgaDias||"")) && c.unidade!=null && c.admissao){ const tu=GRUPO_FOLGA.turno[chaveVig("clt",c.id)]||null; gerarEscalaFixa(c.id, c.escala||"6x1", c.unidade, false, folgaRefDe(c), "clt", tu); } return; }
     if(c.id){ const ant=cltsBase.find(x=>x.id===c.id); setClts(prev=>prev.map(x=>x.id===c.id?{...x,...semDocsInline(c)}:x)); subirDocsInline("clt",c);
       if(ant && ((ant.grupoFolga||"")!==(c.grupoFolga||"") || String(ant.folgaDias||"")!==String(c.folgaDias||"")) && c.vinculo!=="confianca" && c.unidade!=null){ const tu=GRUPO_FOLGA.turno[chaveVig("clt",c.id)]||null; gerarEscalaFixa(c.id, c.escala||"6x1", c.unidade, false, folgaRefDe(c), "clt", tu); } }
-    else { const novo={...semDocsInline(c),id:nextId(cltsBase.length?cltsBase:[{id:0}]),banco:"+00h00",extras:"0h00",atrasos:"0h00",docs:c.docs||{contrato:false,exames:false,ctps:false,rg:false},status:"ativo"};
-      setClts(prev=>[...prev, prev.some(x=>String(x.id)===String(novo.id)) ? {...novo,id:nextId(prev)} : novo]); subirDocsInline("clt",{...c,id:novo.id});
+    else { const base={...c,extras:"0h00",atrasos:"0h00",docs:c.docs||{},status:"ativo"};   // "banco" é o NOME do banco (não o banco de horas)
+      let novoId;
+      if(window.__WPDB) novoId=novoCadastroIndividual("clt",base);
+      else { novoId=nextId(cltsBase.length?cltsBase:[{id:0}]); setClts(prev=>[...prev,{...base,id:novoId}]); }
       // Cargo de confiança NÃO entra na escala (não bate ponto). CLT/Freela Fixo entram normalmente.
-      if(c.vinculo!=="confianca") gerarEscalaFixa(novo.id, c.escala||"6x1", c.unidade, false, folgaRefDe(c)); }
+      if(c.vinculo!=="confianca") gerarEscalaFixa(novoId, c.escala||"6x1", c.unidade, false, folgaRefDe(c)); }
   };
   const salvarFreela=(f)=>{
-    if(ehAuto(f.id)){ cadOps.update(f._docId||docIdDe(f.id), f); return; }
+    if(ehAuto(f.id)){ cadOps.update(f._docId||docIdDe(f.id), semDocsInline(f)); subirDocsInline("free",f); return; }
     if(f.id){ setFreelas(prev=>prev.map(x=>x.id===f.id?{...x,...semDocsInline(f)}:x)); subirDocsInline("free",f); }
+    else if(window.__WPDB){ novoCadastroIndividual("free",{...f,jornadasHist:[]}); }
     else { const id=Math.max(100,...freelasBase.map(x=>Number(x.id)||0))+1;
       setFreelas(prev=>[...prev,{...semDocsInline(f),id:prev.some(x=>String(x.id)===String(id))?(prev.reduce((m,x)=>Math.max(m,Number(x.id)||0),100))+1:id,status:"ativo",jornadasHist:[]}]); subirDocsInline("free",{...f,id}); }
   };
@@ -1752,7 +1765,9 @@ function nomeBonito(s){ s=String(s==null?"":s).replace(/\s+/g," ").trim(); if(!s
   if(letras.length<3 || maius/letras.length<0.7) return s;
   return s.toLowerCase().split(" ").map((w,i)=>{ const W=w.toUpperCase().replace(/[.,]$/,""); if(NOME_SIGLAS.has(W)) return w.toUpperCase();
     if(i>0 && NOME_MINUSC.has(w)) return w; return w.replace(/(^|[-'])([a-zà-öø-ÿ])/g,(m,a,b)=>a+b.toUpperCase()); }).join(" "); }
-const comNomeBonito=(x)=>{ if(!x||typeof x.nome!=="string") return x; const n=nomeBonito(x.nome); return n===x.nome?x:{...x,nome:n}; };
+const BANCO_HORAS_RE=/^[+-]?\d{1,3}h\d{2}$/;   // cadastros antigos gravavam o banco de HORAS ("+00h00") no campo do nome do banco
+const comNomeBonito=(x)=>{ if(!x||typeof x.nome!=="string") return x; const n=nomeBonito(x.nome); const bh=typeof x.banco==="string"&&BANCO_HORAS_RE.test(x.banco.trim());
+  return n===x.nome&&!bh?x:{...x,nome:n,...(bh?{banco:""}:{})}; };
 // PJ na escala: só o nome da pessoa (sem o número do CNPJ do MEI nem ME/LTDA)
 function nomePJEscala(p){ const limpa=(t)=>nomeBonito(String(t||"").replace(/^[\d.\-\/\s]+/,"").replace(/[\s,.-]+(ME|MEI|EPP|LTDA|EIRELI|SLU|S\/?A)\.?$/i,"").trim());
   return limpa(p&&p.responsavel) || limpa(p&&p.nome) || nomeBonito(p&&p.nome) || ""; }
