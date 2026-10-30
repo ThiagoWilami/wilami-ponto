@@ -2405,7 +2405,10 @@ function PontoLive() {
 /* ============================ QUIOSQUE DE PONTO ============================ */
 function PontoKiosk({ mode, onClose }) {
   const { unidades, clts, freelas, escala, escalaOv, registros, freelancerEscaladoHoje, addRegistro, salvarClt, salvarFreela, cadastrarPublico, enviarAtestado, enviarAjuste } = useStore();
-  const ativos = mode==="clt" ? clts : freelas.filter(f=>f.status==="ativo");
+  // pessoas achadas direto no índice do servidor (cadastro feito há pouco / lista ainda não sincronizada)
+  const [extraIdx,setExtraIdx]=useState([]);
+  const listaModo=[...(mode==="clt"?clts:freelas), ...extraIdx.filter(x=>x.tipo===(mode==="clt"?"clt":"free"))];
+  const ativos = mode==="clt" ? listaModo : listaModo.filter(f=>f.status==="ativo");
   const [fluxo,setFluxo]=useState("escolha"); // escolha | registro | cadastro
   const [unidadeId,setUnidadeId]=useState(unidades[0]?.id);
   const [pid,setPid]=useState(null);
@@ -2417,7 +2420,7 @@ function PontoKiosk({ mode, onClose }) {
   const escaladoHojePid=(p)=>{
     if(!p) return false;
     const hoje=hojeStr();
-    const alvoId=String(p.id); const alvoCpf=soDigitos(p.cpf); const lista=mode==="clt"?clts:freelas;
+    const alvoId=String(p.id); const alvoCpf=soDigitos(p.cpf); const lista=listaModo;
     const alvoNome=(p.nome||"").trim().toLowerCase();
     const uids=new Set([...Object.keys(escala||{}), ...Object.keys(escalaOv||{})]);
     for(const uid of uids){
@@ -2445,7 +2448,15 @@ function PontoKiosk({ mode, onClose }) {
       const pOutro = outra.find(x=>soDigitos(x.cpf)===d);
       if(pOutro){ const ehFixo=pOutro.vinculo==="fixo"; const rot = mode==="clt" ? "Freelancer" : (ehFixo?"CLT (Freela Fixo)":"CLT");
         setCpfErr(pOutro.nome.split(" ")[0]+", seu cadastro é "+rot+". Abra o link de "+(mode==="clt"?"Freelancer":"CLT")+" para bater o ponto — não precisa cadastrar de novo."); return; }
-      setCpfErr("CPF não encontrado. Use “Fazer cadastro (1º acesso)”."); return;
+      // não está nas listas deste aparelho → confere direto no servidor (índice do ponto) antes de recusar
+      if(window.__WPDB && !extraIdx.some(x=>soDigitos(x.cpf)===d)){ setCpfErr("Procurando seu cadastro…");
+        tDoc("pontoIndice").get().then(function(snap){ const v=(snap&&snap.exists&&snap.data()&&snap.data().v)||{}; const lista=Object.values(v);
+          const achou=lista.find(x=>x&&soDigitos(x.cpf)===d);
+          if(achou){ setExtraIdx(prev=>[...prev,{...achou,_auto:true,_indice:true}]); setCpfErr("Cadastro encontrado — toque em Continuar."); }
+          else setCpfErr("CPF não encontrado. Use “Fazer cadastro (1º acesso)”. (ref. "+listaModo.length+"/"+lista.length+")"); })
+        .catch(function(e){ setCpfErr("CPF não encontrado. Use “Fazer cadastro (1º acesso)”. (ref. "+listaModo.length+"/sem acesso ao índice)"); });
+        return; }
+      setCpfErr("CPF não encontrado. Use “Fazer cadastro (1º acesso)”. (ref. "+listaModo.length+")"); return;
     }
     if(!escaladoHojePid(p)){ setCpfErr(p.nome.split(" ")[0]+", você não está na escala de hoje — não é possível registrar ponto."); return; }
     setPid(p.id); setUnidadeId(p.unidade||unidades[0]?.id); setCpfErr("");
@@ -2469,7 +2480,7 @@ function PontoKiosk({ mode, onClose }) {
   const upAtestado=(file)=>{ if(!file) return; const rd=new FileReader(); rd.onload=async()=>{ const dados=file.type&&file.type.indexOf("image")===0?await compressImg(rd.result):rd.result; setAt(p=>({...p,arquivo:dados,nomeArq:file.name})); }; rd.readAsDataURL(file); };
   const enviarAtestadoColab=()=>{
     const d=(at.cpf||"").replace(/\D/g,"");
-    const pessoa=(mode==="clt"?clts:freelas).find(x=>(x.cpf||"").replace(/\D/g,"")===d);
+    const pessoa=listaModo.find(x=>(x.cpf||"").replace(/\D/g,"")===d);
     if(d.length<11){ setAtStatus("cpf"); return; }
     if(!pessoa){ setAtStatus("naoencontrado"); return; }
     if(!at.arquivo){ setAtStatus("semarquivo"); return; }
@@ -2484,7 +2495,7 @@ function PontoKiosk({ mode, onClose }) {
   const [ajStatus,setAjStatus]=useState(""); // "" | cpf | naoencontrado | semmotivo | enviando | ok | erro
   const enviarAjusteColab=()=>{
     const d=(aj.cpf||"").replace(/\D/g,"");
-    const pessoa=(mode==="clt"?clts:freelas).find(x=>(x.cpf||"").replace(/\D/g,"")===d);
+    const pessoa=listaModo.find(x=>(x.cpf||"").replace(/\D/g,"")===d);
     if(d.length<11){ setAjStatus("cpf"); return; }
     if(!pessoa){ setAjStatus("naoencontrado"); return; }
     if(!(aj.motivo||"").trim()){ setAjStatus("semmotivo"); return; }
@@ -2499,7 +2510,7 @@ function PontoKiosk({ mode, onClose }) {
   const videoRef=useRef(null); const streamRef=useRef(null);
   const clock=useClock();
   const accent = mode==="clt"?"brand":"free";
-  const pSel=(mode==="clt"?clts:freelas).find(x=>x.id===pid);
+  const pSel=listaModo.find(x=>x.id===pid);
   // LOCAL DINÂMICO: a casa vem do cadastro do colaborador identificado pelo CPF (não é fixo).
   const unidade=(pSel && unidades.find(u=>u.id===pSel.unidade)) || unidades.find(u=>u.id===unidadeId) || unidades[0];
   const escalado = mode==="clt" || (pid && freelancerEscaladoHoje(pid));
@@ -2941,8 +2952,20 @@ function ColabForm({ tipo, inicial, onSalvar, onClose, vinculo }) {
 
 /* ============================ COLABORADORES CLT ============================ */
 function ColaboradoresCLT() {
-  const { clts, salvarClt, excluirColab, unidades, registros, pontoHist, can } = useStore();
+  const { clts, freelas, escala, escalaOv, salvarClt, excluirColab, unidades, registros, pontoHist, can } = useStore();
   const toast=useContext(ToastCtx);
+  // Diagnóstico: por que um CPF não consegue bater ponto?
+  const testarCpfPonto=async()=>{ const c=window.prompt("CPF para testar no ponto:"); if(!c) return; const d=soDigitos(c); if(d.length!==11){ alert("Digite os 11 números do CPF."); return; }
+    const L=[]; const p=[...clts.map(x=>({...x,_l:x.vinculo==="fixo"?"Freela Fixo":"CLT"})),...freelas.map(x=>({...x,_l:"Freelancer"}))].find(x=>soDigitos(x.cpf)===d);
+    L.push(p?"Cadastro: "+p.nome+" ("+p._l+(p._auto?", registro individual":", lista principal")+") · início "+(p.admissao?fmtDataBR(p.admissao):"NÃO definido")+" · "+(p.status||"ativo"):"Cadastro: NENHUM colaborador com esse CPF");
+    if(p) L.push(p._l==="Freelancer"?"Link do ponto: FREELANCER":"Link do ponto: CLT (Freela Fixo também usa o link CLT)");
+    try{ const s=await tDoc("pontoIndice").get(); const v=(s&&s.exists&&s.data().v)||{}; const n=Object.keys(v).length; const no=Object.values(v).some(x=>x&&soDigitos(x.cpf)===d);
+      L.push(p&&!p._auto?"Índice do ponto: não precisa (está na lista principal)":no?"Índice do ponto: OK ("+n+" pessoas)":"Índice do ponto: NÃO está ("+n+" pessoas no índice)"); }
+    catch(e){ L.push("Índice do ponto: erro ao ler — "+e.message); }
+    if(p){ const hoje=hojeStr(); const uids=Object.keys({...(escala||{}),...(escalaOv||{})});
+      const esc=uids.some(uid=>(diaEscala(escala,escalaOv,uid,hoje,HOJE_IDX)||[]).some(a=>String(a.pid)===String(p.id)&&a.turno!=="folga"));
+      L.push(esc?"Escala de hoje: escalado(a) ✓":"Escala de hoje: NÃO escalado(a) hoje (folga, fora da escala ou antes da data de início)"); }
+    alert(L.join("\n")); };
   const apurCltTodos=useMemo(()=>apurarHoras([...pontoHist, ...(registros||[])]).filter(x=>x.tipo==="clt"&&x.completo),[pontoHist,registros]);
   const bancoDe=(c)=>{ const meus=apurCltTodos.filter(x=>x.nome===c.nome);
     const extras=meus.reduce((s,x)=>s+(x.extras||0)+(x.extras100||0),0), atraso=meus.reduce((s,x)=>s+(x.atraso||0),0), not=meus.reduce((s,x)=>s+minutosNoturnos(x.punches||[]),0);
@@ -2964,6 +2987,7 @@ function ColaboradoresCLT() {
     <PageHeader title="Colaboradores CLT & Freela Fixo" sub="Escala fixa · salário mensal · cargos de confiança · pasta individual · cadastro, edição e exclusão">
       <Btn icon={I.plus} onClick={()=>setForm({})}>Contratar CLT</Btn>
       <Btn variant="free" icon={I.plus} onClick={()=>setForm({vinculo:"fixo"})}>Contratar Freela Fixo</Btn>
+      <Btn variant="ghost" icon={I.search} onClick={testarCpfPonto}>Testar CPF no ponto</Btn>
       <Btn variant="ghost" icon={I.shield} onClick={()=>setForm({vinculo:"confianca"})}>Cargo de confiança</Btn>
     </PageHeader>
     <div className="flex flex-wrap gap-2 mb-3">
