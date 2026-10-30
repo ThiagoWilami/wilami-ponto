@@ -558,6 +558,10 @@ const addDias=(base,n)=>{ const d=new Date(base); d.setDate(d.getDate()+n); retu
 const ymd=(d)=>{ const x=new Date(d); return x.getFullYear()+"-"+String(x.getMonth()+1).padStart(2,"0")+"-"+String(x.getDate()).padStart(2,"0"); };
 const MESES_CURTO=["jan","fev","mar","abr","mai","jun","jul","ago","set","out","nov","dez"];
 const turnoPorDia = (d)=> d%3===0?"manha":d%3===1?"tarde":"noite";
+// turno da escala pela hora de entrada (05–11h manhã · 12–16h tarde · demais noite)
+const turnoDaHora=(hi)=>{ const hh=Number(String(hi||"").slice(0,2)); return hh>=5&&hh<12?"manha":hh>=12&&hh<17?"tarde":"noite"; };
+const somaHora=(hi,min)=>{ const [a,b]=String(hi||"0:0").split(":").map(Number); const t=((a*60+(b||0)+min)%1440+1440)%1440; return String(Math.floor(t/60)).padStart(2,"0")+":"+String(t%60).padStart(2,"0"); };
+const horarioDoTexto=(t)=>{ const m=/(\d{1,2}:\d{2})\D+(\d{1,2}:\d{2})/.exec(String(t||"")); return m?[m[1].padStart(5,"0"),m[2].padStart(5,"0")]:null; };
 const folgaFixa = (t,d)=> t==="6x1"? d===6 : (t==="5x2"||t==="6x2")? d>=5 : false;
 // Escala POR UNIDADE: { [unidadeId]: { 0..6: [alocações] } }
 const escalaVaziaUnidade = ()=>{ const o={}; for(let d=0;d<7;d++) o[d]=[]; return o; };
@@ -1359,17 +1363,32 @@ function StoreProvider({children}) {
     ref.set(semUndefined(rec)).catch(e=>avisoGravacao("Não foi possível salvar o cadastro de "+(dados.nome||"")+": "+((e&&e.message)||"erro no banco")));
     subirDocsInline(tipo,{...dados,id});
     return id; };
+  // Horário fixo do cadastro → escala: muda o turno (pela hora de entrada) e o horário em TODO o padrão semanal
+  // e nas datas futuras já abertas. Ajustes manuais de um dia específico (feitos na grade) são mantidos.
+  const aplicarHorarioEscala=(pid,tipo,hi,hf)=>{ if(!hi||!hf) return; const h=hi+"–"+hf; const turno=turnoDaHora(hi);
+    const eu=(a)=>String(a.pid)===String(pid) && (tipo==="pj" ? a.tipo==="pj" : a.tipo===tipo);
+    const muda=(a)=> a.turno==="folga" ? {...a,h,turnoBase:turno} : {...a,turno,h};
+    setEscala(prev=>{ let m=false; const n={}; Object.keys(prev||{}).forEach(uid=>{ n[uid]={}; Object.keys(prev[uid]||{}).forEach(d=>{ n[uid][d]=(prev[uid][d]||[]).map(a=>{ if(!eu(a)) return a; m=true; return muda(a); }); }); }); return m?n:prev; });
+    const hj=hojeStr();
+    setEscalaOv(prev=>{ let m=false; const n={...(prev||{})}; Object.keys(n).forEach(uid=>{ const u={...(n[uid]||{})}; Object.keys(u).forEach(ds=>{ if(ds<hj) return; const arr=u[ds]||[]; if(!arr.some(a=>eu(a)&&!a.manualFolga)) return; u[ds]=arr.map(a=>{ if(!eu(a)||a.manualFolga) return a; m=true; return muda(a); }); }); n[uid]=u; }); return m?n:prev; });
+  };
+  const horarioMudou=(ant,c)=> !!(c.horaEntrada && c.horaSaida) && (!ant || ant.horaEntrada!==c.horaEntrada || ant.horaSaida!==c.horaSaida);
   const salvarClt=(c)=>{
     if(ehAuto(c.id)){ const ant=cadAuto.find(x=>x.id===c.id); cadOps.update(c._docId||docIdDe(c.id), semDocsInline(c)); subirDocsInline("clt",c);
-      if(ant && ((ant.grupoFolga||"")!==(c.grupoFolga||"") || String(ant.folgaDias||"")!==String(c.folgaDias||"")) && c.unidade!=null && c.admissao){ const tu=GRUPO_FOLGA.turno[chaveVig("clt",c.id)]||null; gerarEscalaFixa(c.id, c.escala||"6x1", c.unidade, false, folgaRefDe(c), "clt", tu); } return; }
+      const regen=ant && ((ant.grupoFolga||"")!==(c.grupoFolga||"") || String(ant.folgaDias||"")!==String(c.folgaDias||"")) && c.unidade!=null && c.admissao;
+      if(regen){ const tu=c.horaEntrada?turnoDaHora(c.horaEntrada):(GRUPO_FOLGA.turno[chaveVig("clt",c.id)]||null); gerarEscalaFixa(c.id, c.escala||"6x1", c.unidade, false, folgaRefDe(c), "clt", tu); }
+      if(c.horaEntrada && c.horaSaida && (regen || horarioMudou(ant,c))) aplicarHorarioEscala(c.id,"clt",c.horaEntrada,c.horaSaida); return; }
     if(c.id){ const ant=cltsBase.find(x=>x.id===c.id); setClts(prev=>prev.map(x=>x.id===c.id?{...x,...semDocsInline(c)}:x)); subirDocsInline("clt",c);
-      if(ant && ((ant.grupoFolga||"")!==(c.grupoFolga||"") || String(ant.folgaDias||"")!==String(c.folgaDias||"")) && c.vinculo!=="confianca" && c.unidade!=null){ const tu=GRUPO_FOLGA.turno[chaveVig("clt",c.id)]||null; gerarEscalaFixa(c.id, c.escala||"6x1", c.unidade, false, folgaRefDe(c), "clt", tu); } }
+      const regen=ant && ((ant.grupoFolga||"")!==(c.grupoFolga||"") || String(ant.folgaDias||"")!==String(c.folgaDias||"")) && c.vinculo!=="confianca" && c.unidade!=null;
+      if(regen){ const tu=c.horaEntrada?turnoDaHora(c.horaEntrada):(GRUPO_FOLGA.turno[chaveVig("clt",c.id)]||null); gerarEscalaFixa(c.id, c.escala||"6x1", c.unidade, false, folgaRefDe(c), "clt", tu); }
+      if(c.vinculo!=="confianca" && c.horaEntrada && c.horaSaida && (regen || horarioMudou(ant,c))) aplicarHorarioEscala(c.id,"clt",c.horaEntrada,c.horaSaida); }
     else { const base={...c,extras:"0h00",atrasos:"0h00",docs:c.docs||{},status:"ativo"};   // "banco" é o NOME do banco (não o banco de horas)
       let novoId;
       if(window.__WPDB) novoId=novoCadastroIndividual("clt",base);
       else { novoId=nextId(cltsBase.length?cltsBase:[{id:0}]); setClts(prev=>[...prev,{...base,id:novoId}]); }
       // Cargo de confiança NÃO entra na escala (não bate ponto). CLT/Freela Fixo entram normalmente.
-      if(c.vinculo!=="confianca") gerarEscalaFixa(novoId, c.escala||"6x1", c.unidade, false, folgaRefDe(c)); }
+      if(c.vinculo!=="confianca"){ gerarEscalaFixa(novoId, c.escala||"6x1", c.unidade, false, folgaRefDe(c), "clt", c.horaEntrada?turnoDaHora(c.horaEntrada):null);
+        if(c.horaEntrada && c.horaSaida) aplicarHorarioEscala(novoId,"clt",c.horaEntrada,c.horaSaida); } }
   };
   const salvarFreela=(f)=>{
     if(ehAuto(f.id)){ cadOps.update(f._docId||docIdDe(f.id), semDocsInline(f)); subirDocsInline("free",f); return; }
@@ -1488,7 +1507,9 @@ function StoreProvider({children}) {
         if(c.origem==="convite" && !c.admissao) return;   // espera o RH definir a data de admissão/início
         const jaTem=Object.values(escala||{}).some(dias=>Object.values(dias||{}).some(arr=>(arr||[]).some(a=>String(a.pid)===String(c.id))));
         const uid=c.unidade||unidades[0]?.id;
-        if(uid && !jaTem) gerarEscalaFixa(c.id, c.escala||"6x1", uid, true, folgaRefDe(c));   // só dias faltantes
+        const hr=(c.horaEntrada&&c.horaSaida)?[c.horaEntrada,c.horaSaida]:horarioDoTexto(c.horario);
+        if(uid && !jaTem){ gerarEscalaFixa(c.id, c.escala||"6x1", uid, true, folgaRefDe(c), "clt", hr?turnoDaHora(hr[0]):null);   // só dias faltantes
+          if(hr) aplicarHorarioEscala(c.id,"clt",hr[0],hr[1]); }
         setEscalaSeed(prev=> prev[String(c.id)]?prev:{...prev,[String(c.id)]:1});
       });
     }catch(e){}
@@ -2825,7 +2846,7 @@ function ColabForm({ tipo, inicial, onSalvar, onClose, vinculo }) {
   const ehConf = vinculo==="confianca" || inicial?.vinculo==="confianca"; // cargo de confiança: NÃO bate ponto, só salário na folha
   const { unidades, cargosFreela, cargosLista, cargoInfo } = useStore();
   const cg0 = cargosFreela[0];
-  const [f,setF]=useState(inicial || (ehConf
+  const [f,setF]=useState((inicial && !inicial.horaEntrada && horarioDoTexto(inicial.horario)) ? {...inicial, horaEntrada:horarioDoTexto(inicial.horario)[0], horaSaida:horarioDoTexto(inicial.horario)[1]} : inicial || (ehConf
     ? { nome:"", cargo:"Gerente", unidade:"todas", salario:0, sigiloso:false, cpf:"", tel:"", tipoPix:"CPF", pix:"", banco:"", foto:"" }
     : tipo==="clt"
     ? { nome:"", cargo:CARGOS[0], setor:"salao", escala:"6x1", folgaDia:6, unidade:unidades[0]?.id, admissao:"", salario:0, vt:0, cpf:"", tel:"", tipoPix:"CPF", pix:"", banco:"", foto:"", docs:{} }
@@ -2906,6 +2927,15 @@ function ColabForm({ tipo, inicial, onSalvar, onClose, vinculo }) {
         <Field label="Dia da folga (referência)"><Select value={f.folgaDia==null?"":f.folgaDia} onChange={e=>set("folgaDia",e.target.value===""?null:Number(e.target.value))}>
           {DIAS.map((d,i)=><option key={i} value={i}>{["Segunda","Terça","Quarta","Quinta","Sexta","Sábado","Domingo"][i]}</option>)}
         </Select></Field></>}
+        <div className="sm:col-span-2"><Field label="Horário na escala (entrada e saída)">
+          <div className="flex flex-wrap items-center gap-2">
+            <Input type="time" value={f.horaEntrada||""} onChange={e=>{ const v=e.target.value; setF(p=>({...p,horaEntrada:v,horaSaida:p.horaSaida||(v?somaHora(v,8*60+20):"")})); }} aria-label="Entrada na escala" className="w-32"/>
+            <span className="text-sm text-slate-400">às</span>
+            <Input type="time" value={f.horaSaida||""} onChange={e=>set("horaSaida",e.target.value)} aria-label="Saída na escala" className="w-32"/>
+            {["08:00","10:00","11:00","12:00","14:00","16:00","18:00"].map(h=><button key={h} type="button" onClick={()=>setF(p=>({...p,horaEntrada:h,horaSaida:somaHora(h,8*60+20)}))} className={cx("px-2 py-1 rounded-lg text-xs font-semibold border", f.horaEntrada===h?"grad-brand text-white border-transparent":"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>{h}</button>)}
+          </div>
+          <span className="block text-[11px] text-slate-500 mt-1 normal-case font-normal tracking-normal">{f.horaEntrada&&f.horaSaida ? <>Na escala: turno da <b>{TURNOS[turnoDaHora(f.horaEntrada)].l}</b>, {f.horaEntrada} às {f.horaSaida}. Pode mudar quando quiser — dias ajustados à mão na grade continuam como estão.</> : "Defina para a pessoa já entrar no turno certo da escala (Manhã, Tarde ou Noite)."}</span>
+        </Field></div>
         <Field label="Admissão / início na escala"><Input type="date" value={f.admissao} onChange={e=>set("admissao",e.target.value)}/></Field>
         <Field label="Válido até (fim do contrato, opcional)"><Input type="date" value={f.fimContrato||""} onChange={e=>set("fimContrato",e.target.value)}/></Field>
         {f.origem==="convite" && !f.admissao && <div className="sm:col-span-2 p-3 rounded-xl bg-amber-50 text-amber-800 text-sm flex items-start gap-2"><Icon d={I.calendar} className="w-4 h-4 mt-0.5 shrink-0"/><span>Cadastro recebido pelo convite. <b>Defina a data de admissão</b>: a pessoa só entra na escala (e só consegue bater ponto) a partir dessa data.</span></div>}
