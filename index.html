@@ -285,6 +285,9 @@ async function criarUsuarioAuth(email, senha){
 }
 
 // Aviso de gravação recusada pelo banco → vira um aviso na tela (antes o dado "sumia" em silêncio).
+// O banco recusa o documento INTEIRO se algum campo for undefined (ex.: {marca: undefined}) → remove antes de gravar.
+function semUndefined(x){ if(Array.isArray(x)) return x.map(v=>v===undefined?null:semUndefined(v));
+  if(x && typeof x==="object"){ const o={}; for(const k in x){ if(x[k]!==undefined) o[k]=semUndefined(x[k]); } return o; } return x; }
 function avisoGravacao(msg){ try{ window.dispatchEvent(new CustomEvent("wp-aviso-gravacao",{detail:String(msg||"")})); }catch(e){} }
 const erroGrande=(e)=> /exceeds the maximum|too large|maximum size|1048576|INVALID_ARGUMENT/i.test(String((e&&(e.message||e.code))||e||""));
 // Documento em base64 guardado DENTRO do cadastro (formato antigo) — deve ir para a pasta de arquivos da pessoa.
@@ -321,12 +324,12 @@ function usePersist(key, initial){
     const ref=tDoc(key);
     const voltarAoServidor=()=>{ try{ ref.get().then(function(s){ const d=s&&s.exists?s.data():null; if(d&&Object.prototype.hasOwnProperty.call(d,"v")) setV(d.v); }).catch(function(){}); }catch(e){} };
     const falhou=(e)=>{ avisoGravacao(erroGrande(e) ? "Não foi possível salvar — a lista ficou grande demais para o banco ("+key+"). Atualize a página e tente de novo; se continuar, avise o suporte." : "Não foi possível salvar ("+key+"): "+((e&&e.message)||"erro no banco")); voltarAoServidor(); };
-    const gravar=(nv)=>{ try{ const pr=ref.set({v:nv}); if(pr&&pr.catch) pr.catch(falhou); }catch(e){ falhou(e); } };
+    const gravar=(nv)=>{ try{ const pr=ref.set({v:semUndefined(nv)}); if(pr&&pr.catch) pr.catch(falhou); }catch(e){ falhou(e); } };
     if(funcional && typeof db.runTransaction==="function"){
       db.runTransaction(function(t){ return t.get(ref).then(function(snap){
         const d=snap && snap.exists ? snap.data() : null;
         const base = d && Object.prototype.hasOwnProperty.call(d,"v") ? d.v : vRef.current;
-        t.set(ref,{v:upd(base)}); }); })
+        t.set(ref,{v:semUndefined(upd(base))}); }); })
         .catch(function(e){ if(erroGrande(e)) falhou(e); else gravar(upd(vRef.current)); });   // sem conexão: grava a versão local (comportamento anterior)
     } else gravar(funcional ? upd(vRef.current) : upd);
   };
@@ -1056,8 +1059,8 @@ function useCadastros(){
       }, function(){ /* sem permissão/erro */ });
     }catch(e){}
   },[]);
-  const add=(obj)=>{ const db=window.__WPDB; if(!db) return Promise.reject(new Error("sem-banco")); return tCol("cadastros").add(obj); };
-  const update=(docId,patch)=>{ const db=window.__WPDB; if(db){ try{ const pr=tCol("cadastros").doc(docId).set(patch,{merge:true}); if(pr&&pr.catch) pr.catch(e=>avisoGravacao("Não foi possível salvar o cadastro: "+((e&&e.message)||"erro no banco"))); }catch(e){ avisoGravacao("Não foi possível salvar o cadastro: "+e.message); } } };
+  const add=(obj)=>{ const db=window.__WPDB; if(!db) return Promise.reject(new Error("sem-banco")); return tCol("cadastros").add(semUndefined(obj)); };
+  const update=(docId,patch)=>{ const db=window.__WPDB; if(db){ try{ const pr=tCol("cadastros").doc(docId).set(semUndefined(patch),{merge:true}); if(pr&&pr.catch) pr.catch(e=>avisoGravacao("Não foi possível salvar o cadastro: "+((e&&e.message)||"erro no banco"))); }catch(e){ avisoGravacao("Não foi possível salvar o cadastro: "+e.message); } } };
   const remove=(docId)=>{ const db=window.__WPDB; if(db){ try{ tCol("cadastros").doc(docId).delete(); }catch(e){} } };
   return [items,{add,update,remove},pronto];
 }
@@ -1325,7 +1328,7 @@ function StoreProvider({children}) {
   const novoCadastroIndividual=(tipo,dados)=>{
     const ref=tCol("cadastros").doc(); const id="auto_"+ref.id;
     const rec={...semDocsInline(dados), tipo, origem:"painel", criadoEm:Date.now(), status:dados.status||"ativo"}; delete rec.id; delete rec._docId; delete rec._auto;
-    ref.set(rec).catch(e=>avisoGravacao("Não foi possível salvar o cadastro de "+(dados.nome||"")+": "+((e&&e.message)||"erro no banco")));
+    ref.set(semUndefined(rec)).catch(e=>avisoGravacao("Não foi possível salvar o cadastro de "+(dados.nome||"")+": "+((e&&e.message)||"erro no banco")));
     subirDocsInline(tipo,{...dados,id});
     return id; };
   const salvarClt=(c)=>{
@@ -1856,9 +1859,9 @@ function EscalaVisual() {
   };
   const remover=(dia,id)=>setDiaData(dia, arr=>arr.filter(a=>a.id!==id));
   const setMarca=(dia,id,marca)=>setDiaData(dia, arr=>arr.map(a=>a.id===id?{...a,marca}:a));
-  const setTurnoTo=(dia,id,turno)=>setDiaData(dia, arr=>arr.map(a=>{ if(a.id!==id) return a; const o={...a,turno,marca:turno==="folga"?null:a.marca,manualFolga:true}; if(a.turno!==turno) delete o.h; return o; }));   // escolha manual vale mais que o rodízio da cor
+  const setTurnoTo=(dia,id,turno)=>setDiaData(dia, arr=>arr.map(a=>{ if(a.id!==id) return a; const o={...a,turno,marca:turno==="folga"?null:(a.marca||null),manualFolga:true}; if(a.turno!==turno) delete o.h; return o; }));   // escolha manual vale mais que o rodízio da cor
   const turnoPelaHora=(hi)=>{ const hh=Number(String(hi).slice(0,2)); return hh>=5&&hh<12?"manha":hh>=12&&hh<17?"tarde":"noite"; };
-  const setHorario=(dia,id,h,turno)=>setDiaData(dia, arr=>arr.map(a=>a.id===id?{...a,h,manualFolga:true,...(turno?{turno,marca:a.turno==="folga"?null:a.marca}:{})}:a));
+  const setHorario=(dia,id,h,turno)=>setDiaData(dia, arr=>arr.map(a=>a.id===id?{...a,h,manualFolga:true,...(turno?{turno,marca:a.turno==="folga"?null:(a.marca||null)}:{})}:a));
   const [editH,setEditH]=useState(null); // {di,id,hi,hf,porHora}
   // muda a entrada mantendo a duração da jornada (ex.: 08:00–16:20 → 11:00–19:20)
   const entradaNova=(eh,hi)=>{ const m=(t)=>{ const [a,b]=String(t||"0:0").split(":").map(Number); return a*60+(b||0); }; let dur=m(eh.hf)-m(eh.hi); if(dur<=0) dur+=1440; if(!(dur>0&&dur<1440)) dur=8*60+20;
