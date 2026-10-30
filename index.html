@@ -1153,6 +1153,21 @@ function StoreProvider({children}) {
   // Candidatos do R&S (link de cadastro do recrutamento) só viram colaborador depois de aprovados
   const cadAuto=useMemo(()=>cadTodos.filter(c=>!c.rsPendente),[cadTodos]);
   const cadastrosRS=useMemo(()=>cadTodos.filter(c=>c.rsCandidato),[cadTodos]);
+  // Índice PÚBLICO para o quiosque do ponto: quem bate ponto sem login não consegue ler a coleção "cadastros"
+  // (dados pessoais e documentos). O painel publica aqui só o necessário para achar a pessoa pelo CPF e conferir
+  // a escala — sem documentos, sem foto, sem banco/Pix.
+  const [pontoIdx,setPontoIdx]=usePersist("pontoIndice",{});
+  const cadIds=useMemo(()=>new Set(cadAuto.map(c=>c.id)),[cadAuto]);
+  const doIndice=(tipo)=>(window.__WPAUTH && window.__WPAUTH.currentUser && !window.__WPAUTH.currentUser.isAnonymous) ? [] : Object.values(pontoIdx||{}).filter(x=>x && x.tipo===tipo && !cadIds.has(x.id)).map(x=>({...x,_auto:true,_indice:true}));
+  useEffect(()=>{
+    if(!cadPronto || !window.__WPDB) return;
+    if(window.__WPAUTH && (!window.__WPAUTH.currentUser || window.__WPAUTH.currentUser.isAnonymous)) return;
+    const idx={}; cadAuto.forEach(c=>{ if(!c || !soDigitos(c.cpf) || (c.tipo!=="clt" && c.tipo!=="free")) return;
+      idx[c.id]=semUndefined({ id:c.id, tipo:c.tipo, nome:c.nome||"", cpf:c.cpf, unidade:c.unidade??null, vinculo:c.vinculo||"", cargo:c.cargo||"", setor:c.setor||"",
+        status:c.status||"ativo", admissao:c.admissao||"", fimContrato:c.fimContrato||"", origem:c.origem||"", grupoFolga:c.grupoFolga||"", escala:c.escala||"",
+        folgaDia:c.folgaDia??null, folgaDias:c.folgaDias||null }); });
+    if(JSON.stringify(idx)!==JSON.stringify(pontoIdx||{})) setPontoIdx(idx);
+  },[cadPronto, cadAuto]); // eslint-disable-line
   const [atestados,atestadosOps]=useAtestados();
   const enviarAtestado=(obj)=>{ if(window.__WPDB) return atestadosOps.add(obj); return Promise.resolve(); };
   const [ajustes,ajustesOps]=useAjustes();
@@ -1213,8 +1228,8 @@ function StoreProvider({children}) {
   const podeSigilo = semAuth || ehDono || papelKey==="diretor" || papelKey==="financeira";
   const acesso={ pronto:acessoPronto, ehDono, tenantBind, semAcesso, email:meuEmail, minhaChave, nome:meuNome, papel:meuPapel, papelKey, podeSigilo, casa:casaRestrita };
   // Listas expostas = base (admin) + auto-cadastros do celular (mesclados por vínculo)
-  const clts=useMemo(()=>[...cltsBase, ...cadAuto.filter(c=>c.tipo==="clt")].map(comNomeBonito),[cltsBase,cadAuto]);
-  const freelas=useMemo(()=>[...freelasBase, ...cadAuto.filter(c=>c.tipo==="free")].map(comNomeBonito),[freelasBase,cadAuto]);
+  const clts=useMemo(()=>[...cltsBase, ...cadAuto.filter(c=>c.tipo==="clt"), ...doIndice("clt")].map(comNomeBonito),[cltsBase,cadAuto,pontoIdx]); // eslint-disable-line
+  const freelas=useMemo(()=>[...freelasBase, ...cadAuto.filter(c=>c.tipo==="free"), ...doIndice("free")].map(comNomeBonito),[freelasBase,cadAuto,pontoIdx]); // eslint-disable-line
   const [escala,setEscala,escalaPronta]=usePersist("escala",SEED_ESCALA);            // padrão semanal (repete toda semana)
   const [escalaOv,setEscalaOv,escalaOvPronta]=usePersist("escalaOv",{});              // exceções por DATA: {unidade:{"AAAA-MM-DD":[...]}}
   const [escalaSeed,setEscalaSeed]=usePersist("escalaSeed",{});         // pids já semeados na auto-escala (nunca re-semear)
@@ -1481,7 +1496,7 @@ function StoreProvider({children}) {
       });
     }catch(e){}
   },[pjsTodos, escalaPronta, pjsPronto, cadPronto]); // eslint-disable-line
-  const aguardandoInicio=useMemo(()=>[...cadAuto.filter(c=>c.tipo==="clt"&&c.origem==="convite"&&!c.admissao), ...cadAuto.filter(c=>c.tipo==="pj"&&c.origem==="convite"&&!c.inicio)],[cadAuto]);
+  const aguardandoInicio=useMemo(()=>[...cadAuto.filter(c=>c.tipo==="clt"&&c.origem==="convite"&&!c.admissao), ...cadAuto.filter(c=>c.tipo==="pj"&&c.origem==="convite"&&!c.inicio)].map(comNomeBonito),[cadAuto]);
 
   // Migração 1x: freelas que estavam no PADRÃO SEMANAL (replicando) → viram exceção só da SEMANA ATUAL,
   // preservando quem já estava escalado esta semana e parando a replicação nas próximas.
