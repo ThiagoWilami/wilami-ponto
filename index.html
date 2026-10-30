@@ -284,6 +284,14 @@ async function criarUsuarioAuth(email, senha){
   }
 }
 
+// Aviso de gravação recusada pelo banco → vira um aviso na tela (antes o dado "sumia" em silêncio).
+function avisoGravacao(msg){ try{ window.dispatchEvent(new CustomEvent("wp-aviso-gravacao",{detail:String(msg||"")})); }catch(e){} }
+const erroGrande=(e)=> /exceeds the maximum|too large|maximum size|1048576|INVALID_ARGUMENT/i.test(String((e&&(e.message||e.code))||e||""));
+// Documento em base64 guardado DENTRO do cadastro (formato antigo) — deve ir para a pasta de arquivos da pessoa.
+const docInline=(v)=> !!(v && typeof v==="object" && typeof v.dados==="string" && v.dados.indexOf("data:")===0);
+const semDocsInline=(p)=>{ if(!p||!p.docs) return p; let m=false; const d={};
+  for(const k in p.docs){ const v=p.docs[k]; if(docInline(v)){ d[k]={nome:v.nome||"documento",enviando:true}; m=true; } else d[k]=v; } return m?{...p,docs:d}:p; };
+const FOTO_MAX_CHARS=45000;   // ~33 KB: a foto do cadastro fica pequena para caber muita gente na mesma lista
 function usePersist(key, initial){
   const [v,setV]=useState(()=>{ try{ const s=localStorage.getItem(tKey(key)); return s!=null?JSON.parse(s):initial; }catch{ return initial; } });
   const [pronto,setPronto]=useState(()=>!window.__WPDB);   // true quando a 1ª leitura do SERVIDOR chegou
@@ -311,13 +319,15 @@ function usePersist(key, initial){
     // desatualizada (ou que ainda está carregando) não apaga o que outro aparelho acabou de incluir.
     const db=window.__WPDB; if(!db) return;
     const ref=tDoc(key);
-    const gravar=(nv)=>{ try{ ref.set({v:nv}); }catch(e){} };
+    const voltarAoServidor=()=>{ try{ ref.get().then(function(s){ const d=s&&s.exists?s.data():null; if(d&&Object.prototype.hasOwnProperty.call(d,"v")) setV(d.v); }).catch(function(){}); }catch(e){} };
+    const falhou=(e)=>{ avisoGravacao(erroGrande(e) ? "Não foi possível salvar — a lista ficou grande demais para o banco ("+key+"). Atualize a página e tente de novo; se continuar, avise o suporte." : "Não foi possível salvar ("+key+"): "+((e&&e.message)||"erro no banco")); voltarAoServidor(); };
+    const gravar=(nv)=>{ try{ const pr=ref.set({v:nv}); if(pr&&pr.catch) pr.catch(falhou); }catch(e){ falhou(e); } };
     if(funcional && typeof db.runTransaction==="function"){
       db.runTransaction(function(t){ return t.get(ref).then(function(snap){
         const d=snap && snap.exists ? snap.data() : null;
         const base = d && Object.prototype.hasOwnProperty.call(d,"v") ? d.v : vRef.current;
         t.set(ref,{v:upd(base)}); }); })
-        .catch(function(){ gravar(upd(vRef.current)); });   // sem conexão: grava a versão local (comportamento anterior)
+        .catch(function(e){ if(erroGrande(e)) falhou(e); else gravar(upd(vRef.current)); });   // sem conexão: grava a versão local (comportamento anterior)
     } else gravar(funcional ? upd(vRef.current) : upd);
   };
   return [v,setBoth,pronto];
@@ -1243,7 +1253,9 @@ function StoreProvider({children}) {
   const salvarPj=(pj)=>{
     const ant=pj.id!=null ? pjsTodos.find(x=>String(x.id)===String(pj.id)) : null;
     if(ehAuto(pj.id)) cadOps.update(pj._docId||docIdDe(pj.id), pj);
-    else setPjs(prev=> pj.id ? prev.map(x=>x.id===pj.id?{...x,...pj}:x) : [...prev,{...pj,id:(prev.reduce((m,x)=>Math.max(m,x.id),500))+1,status:pj.status||"ativo",criadoEm:Date.now()}]);
+    else { const novoId=pj.id||Math.max(500,...pjsBase.map(x=>Number(x.id)||0))+1;
+      setPjs(prev=> pj.id ? prev.map(x=>x.id===pj.id?{...x,...semDocsInline(pj)}:x) : [...prev,{...semDocsInline(pj),id:prev.some(x=>String(x.id)===String(novoId))?(prev.reduce((m,x)=>Math.max(m,Number(x.id)||0),500))+1:novoId,status:pj.status||"ativo",criadoEm:Date.now()}]);
+      subirDocsInline("pj",{...pj,id:novoId}); }
     // mudou a cor/escala/folga/turno → refaz o padrão semanal nas casas onde o PJ já está na escala
     const mudou=ant && (["grupoFolga","escala","folgaDia","turnoEscala"].some(k=>String(ant[k]??"")!==String(pj[k]??"")) || String(ant.folgaDias||"")!==String(pj.folgaDias||""));
     if(mudou && pj.escala!=="nao") Object.keys(escala||{}).forEach(uid=>{
@@ -1293,20 +1305,34 @@ function StoreProvider({children}) {
 
   const ehAuto=(id)=> typeof id==="string" && id.indexOf("auto_")===0;
   const docIdDe=(id)=> String(id).replace(/^auto_/,"");
+  // ===== Documentos e fotos FORA da lista de cadastros =====
+  // A lista de CLT/freelas/PJ é um único registro no banco (limite de 1 MB). Documentos em base64 e fotos grandes
+  // estouravam esse limite: o banco recusava a gravação e o cadastro novo sumia. Agora cada documento vai para a
+  // pasta de arquivos da pessoa e o cadastro guarda só {nome, arquivoId}.
+  const setListaDe=(tipo)=> tipo==="clt"?setClts: tipo==="pj"?setPjs: setFreelas;
+  const subirDocsInline=async(tipo,pessoa)=>{ const docs=(pessoa&&pessoa.docs)||{}; const ids={};
+    if(!window.__WPDB || pessoa==null || pessoa.id==null) return ids;
+    for(const k of Object.keys(docs)){ const v=docs[k]; if(!docInline(v)) continue; const rot=(DOC_TIPOS.find(d=>d[0]===k)||[k,k])[1];
+      try{ ids[k]=await arqSalvar({ nome:rot+" - "+(v.nome||"documento"), donoKey:donoKeyDe(tipo,pessoa.id), donoTipo:tipo, donoId:pessoa.id, donoNome:pessoa.nome||"", cpf:soDigitos(pessoa.cpf||pessoa.cnpj||""),
+        pasta:"Documentos pessoais", categoria:"documento", visivelColab:false, origem:"cadastro" }, v.dados); }
+      catch(e){ avisoGravacao("Não foi possível guardar o documento "+rot+" de "+(pessoa.nome||"")+": "+e.message); } }
+    if(Object.keys(ids).length) setListaDe(tipo)(prev=>prev.map(x=>String(x.id)!==String(pessoa.id)?x:{...x,docs:Object.fromEntries(Object.entries(x.docs||{}).map(([k,d])=>ids[k]?[k,{nome:(d&&d.nome)||docs[k].nome||"documento",arquivoId:ids[k]}]:[k,d]))}));
+    return ids; };
   const salvarClt=(c)=>{
     if(ehAuto(c.id)){ const ant=cadAuto.find(x=>x.id===c.id); cadOps.update(c._docId||docIdDe(c.id), c);
       if(ant && ((ant.grupoFolga||"")!==(c.grupoFolga||"") || String(ant.folgaDias||"")!==String(c.folgaDias||"")) && c.unidade!=null && c.admissao){ const tu=GRUPO_FOLGA.turno[chaveVig("clt",c.id)]||null; gerarEscalaFixa(c.id, c.escala||"6x1", c.unidade, false, folgaRefDe(c), "clt", tu); } return; }
-    if(c.id){ const ant=cltsBase.find(x=>x.id===c.id); setClts(prev=>prev.map(x=>x.id===c.id?{...x,...c}:x));
+    if(c.id){ const ant=cltsBase.find(x=>x.id===c.id); setClts(prev=>prev.map(x=>x.id===c.id?{...x,...semDocsInline(c)}:x)); subirDocsInline("clt",c);
       if(ant && ((ant.grupoFolga||"")!==(c.grupoFolga||"") || String(ant.folgaDias||"")!==String(c.folgaDias||"")) && c.vinculo!=="confianca" && c.unidade!=null){ const tu=GRUPO_FOLGA.turno[chaveVig("clt",c.id)]||null; gerarEscalaFixa(c.id, c.escala||"6x1", c.unidade, false, folgaRefDe(c), "clt", tu); } }
-    else { const novo={...c,id:nextId(cltsBase.length?cltsBase:[{id:0}]),banco:"+00h00",extras:"0h00",atrasos:"0h00",docs:c.docs||{contrato:false,exames:false,ctps:false,rg:false},status:"ativo"};
-      setClts(prev=>[...prev,novo]);
+    else { const novo={...semDocsInline(c),id:nextId(cltsBase.length?cltsBase:[{id:0}]),banco:"+00h00",extras:"0h00",atrasos:"0h00",docs:c.docs||{contrato:false,exames:false,ctps:false,rg:false},status:"ativo"};
+      setClts(prev=>[...prev, prev.some(x=>String(x.id)===String(novo.id)) ? {...novo,id:nextId(prev)} : novo]); subirDocsInline("clt",{...c,id:novo.id});
       // Cargo de confiança NÃO entra na escala (não bate ponto). CLT/Freela Fixo entram normalmente.
       if(c.vinculo!=="confianca") gerarEscalaFixa(novo.id, c.escala||"6x1", c.unidade, false, folgaRefDe(c)); }
   };
   const salvarFreela=(f)=>{
     if(ehAuto(f.id)){ cadOps.update(f._docId||docIdDe(f.id), f); return; }
-    if(f.id){ setFreelas(prev=>prev.map(x=>x.id===f.id?{...x,...f}:x)); }
-    else { setFreelas(prev=>[...prev,{...f,id:(prev.reduce((m,x)=>Math.max(m,x.id),100))+1,status:"ativo",jornadasHist:[]}]); }
+    if(f.id){ setFreelas(prev=>prev.map(x=>x.id===f.id?{...x,...semDocsInline(f)}:x)); subirDocsInline("free",f); }
+    else { const id=Math.max(100,...freelasBase.map(x=>Number(x.id)||0))+1;
+      setFreelas(prev=>[...prev,{...semDocsInline(f),id:prev.some(x=>String(x.id)===String(id))?(prev.reduce((m,x)=>Math.max(m,Number(x.id)||0),100))+1:id,status:"ativo",jornadasHist:[]}]); subirDocsInline("free",{...f,id}); }
   };
   // R&S: candidato em teste vira freelancer (retorna o id) e entra/sai da escala numa data específica
   const criarFreela=(f)=>{ const id=Math.max(100,...freelasBase.map(x=>Number(x.id)||0))+1; setFreelas(prev=>[...prev,{...f,id,status:"ativo",jornadasHist:[]}]); return id; };
@@ -1475,6 +1501,27 @@ function StoreProvider({children}) {
     },4000);
     return ()=>clearTimeout(t);
   },[tudoCarregado, cltsBase, freelasBase, cadAuto, pjsTodos, escala, escalaOv]); // eslint-disable-line
+
+  // ---- Manutenção: tira documentos (base64) e fotos grandes de dentro das listas de cadastro ----
+  // Roda uma vez por sessão no painel logado. Libera espaço para novos cadastros caberem no banco.
+  const manutRef=useRef({rodando:false,feito:new Set()});
+  useEffect(()=>{
+    const M=manutRef.current; if(M.rodando || !tudoCarregado || !window.__WPDB) return;
+    if(window.__WPAUTH && (!window.__WPAUTH.currentUser || window.__WPAUTH.currentUser.isAnonymous)) return;
+    const pend=[["clt",cltsBase],["free",freelasBase],["pj",pjsBase]].map(([tipo,lista])=>[tipo,(lista||[]).filter(p=>p && !M.feito.has(tipo+"-"+p.id) &&
+      ((p.docs && Object.values(p.docs).some(docInline)) || (typeof p.foto==="string" && p.foto.length>FOTO_MAX_CHARS)))]).filter(([,l])=>l.length);
+    if(!pend.length) return;
+    M.rodando=true;
+    (async()=>{
+      for(const [tipo,lista] of pend){
+        const novas={};
+        for(const p of lista){ M.feito.add(tipo+"-"+p.id);
+          if(p.docs && Object.values(p.docs).some(docInline)) await subirDocsInline(tipo,p);
+          if(typeof p.foto==="string" && p.foto.length>FOTO_MAX_CHARS){ try{ const f=await compressImg(p.foto,320,0.7); if(f && f.length<p.foto.length) novas[p.id]=f; }catch(e){} } }
+        if(Object.keys(novas).length) setListaDe(tipo)(prev=>prev.map(x=>novas[x.id]&&x.foto&&x.foto.length>FOTO_MAX_CHARS?{...x,foto:novas[x.id]}:x));
+      }
+    })().catch(()=>{}).then(()=>{ M.rodando=false; });
+  },[tudoCarregado, cltsBase, freelasBase, pjsBase]); // eslint-disable-line
 
   // Gerente vinculado a uma CASA específica só enxerga os dados daquela casa (isolamento por unidade).
   const _mesmaCasa=(uid)=> String(uid)===String(casaRestrita);
@@ -2724,7 +2771,7 @@ function ColabForm({ tipo, inicial, onSalvar, onClose, vinculo }) {
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
   // Foto do colaborador no CADASTRO (referência facial). Usa input de arquivo/câmera:
   // funciona em file://, no PC e abre a câmera no celular (capture="user").
-  const upFoto=async(file)=>{ if(!file) return; try{ set("foto", await fotoDeArquivo(file)); }catch(e){ alert("Foto: "+e.message); } };
+  const upFoto=async(file)=>{ if(!file) return; try{ set("foto", await fotoDeArquivo(file,320,0.7)); }catch(e){ alert("Foto: "+e.message); } };
   const setCargoClt=(cg)=>setF(p=>{ const ci=cargoInfo(cg); return {...p,cargo:cg,setor:(ci&&ci.setor)||SETOR_POR_CARGO[cg]||p.setor, salario: (!Number(p.salario) && ci && Number(ci.salarioBase)) ? Number(ci.salarioBase) : p.salario}; });
   const setCargoFree=(nm)=>{ const c=cargosFreela.find(x=>x.nome===nm); setF(p=>({...p,cargo:nm,valor:c?c.valor:p.valor,setor:SETOR_POR_CARGO[nm]||p.setor})); };
   const upDoc=async(k,file)=>{ if(!file) return;
@@ -8442,7 +8489,8 @@ function Shell({ onLogout }) {
   useEffect(()=>{
     if(acesso && acesso.pronto && acesso.tenantBind!=null && acesso.tenantBind!==tenantAtual){ trocarCliente(acesso.tenantBind); }
   },[acesso&&acesso.pronto, acesso&&acesso.tenantBind, tenantAtual]);
-  const pushToast=(msg)=>{ const id=Math.random(); setToasts(t=>[...t,{id,msg}]); setTimeout(()=>setToasts(t=>t.filter(x=>x.id!==id)),2600); };
+  const pushToast=(msg,ms)=>{ const id=Math.random(); setToasts(t=>[...t,{id,msg}]); setTimeout(()=>setToasts(t=>t.filter(x=>x.id!==id)),ms||2600); };
+  useEffect(()=>{ const on=(e)=>pushToast("⚠️ "+e.detail,9000); window.addEventListener("wp-aviso-gravacao",on); return ()=>window.removeEventListener("wp-aviso-gravacao",on); },[]); // eslint-disable-line
   const abaRestrita = acesso && acesso.pronto && !acesso.ehDono ? ABA_DO_PAPEL[acesso.papelKey]||null : null;
   useEffect(()=>{ if(abaRestrita && view!==abaRestrita) setView(abaRestrita); },[abaRestrita,view]);
   // Portões de acesso (login independente por cliente)
