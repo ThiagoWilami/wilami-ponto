@@ -3546,9 +3546,9 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
       txt((empresaEfetiva(empresaContratante).razao||"")+" · "+uNome+" · competência "+fmtCompetencia(ymRef),42,H-54,{size:9,cor:L.rgb(1,1,1)});
       y=H-84; cab();
       for(const l of arr){ if(y<50){ nova(); cab(); }
-        txt(l.venc?fmtDataBR(l.venc):"-",40,y); txt(corta(l.nome,160,f,9),100,y); txt(corta(rotTipo(l.tipo),75,f,9),265,y,{cor:cinza}); txt(corta(l.desc,165,f,8),345,y,{size:8,cor:cinza});
+        txt(l.venc?fmtDataBR(l.venc):"-",40,y); txt(corta(l.nome,160,f,9),100,y); txt(corta(rotTipo(l.tipo),75,f,9),265,y,{cor:cinza}); txt(corta(l.desc,148,f,8),345,y,{size:8,cor:cinza});
         dir(fmtBRL(l.previsto),560,y); dir(l.pago?fmtBRL(l.pago):"-",630,y); dir(fmtBRL(Math.max(0,l.saldo)),700,y,{bold:true}); txt(corta(stTxt(l),W-30-712,f,8),712,y,{size:8}); y-=14; }
-      if(y<70) nova();
+      y-=10; if(y<70) nova();
       pg.drawRectangle({x:30,y:y-8,width:W-60,height:24,color:claro});
       txt("TOTAL",40,y,{bold:true,size:11}); dir(fmtBRL(soma(arr,"previsto")),560,y,{bold:true,size:10}); dir(fmtBRL(soma(arr,"pago")),630,y,{bold:true,size:10}); dir(fmtBRL(r2(arr.reduce((s,l)=>s+Math.max(0,l.saldo),0))),700,y,{bold:true,size:10}); y-=34;
       const pd=porData(arr); if(y<60+pd.length*13) nova();
