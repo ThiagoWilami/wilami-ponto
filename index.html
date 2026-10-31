@@ -643,6 +643,8 @@ function faltasAutoDe(pessoa, ctx){
   const dias=[];
   datasEntre(ini,fim).forEach(ds=>{
     if(ds>hoje) return;                                    // dia futuro nunca é falta
+    if(pessoa.admissao && ds<pessoa.admissao) return;      // antes da admissão não é falta
+    if(pessoa.fimContrato && ds>pessoa.fimContrato) return;
     const wd=wdDe(ds);
     const aloc=diaEscala(escala,escalaOv,uid,ds,wd).find(a=>String(a.pid)===casa && a.tipo==="clt");
     if(!aloc || aloc.turno==="folga") return;              // não escalado ou folga
@@ -746,11 +748,13 @@ function calcFolhaLinha(c, ctx){
   const descontos=descFaltas+descDSR+descAtrasos+vtDesconto+descVTFaltas;
   // Salário combinado com a Diretoria: se salário + extras + adicional noturno + gorjetas do mês não alcançarem o combinado, a diferença vira "reposição".
   const gorjeta=Number(gorjetasCLT[c.id+"|"+ymRef]||0);
-  const combinado=Number(c.salarioCombinado||0);
+  // o combinado também é proporcional aos dias de contrato no mês (quem entra no dia 27 não tem garantia do mês inteiro)
+  const combinadoMes=Number(c.salarioCombinado||0);
+  const combinado=(combinadoMes>0 && diasContrato<30) ? Math.round(combinadoMes*diasContrato/30*100)/100 : combinadoMes;
   const recebido=salario+extrasVal+notVal+dsrReflexo+gorjeta;
   const reposicao=combinado>0 ? Math.max(0, Math.round((combinado-recebido)*100)/100) : 0;
   const liquido=salario+extrasVal+notVal+dsrReflexo+reposicao-descontos;
-  return { id:c.id, nome:c.nome, foto:c.foto, pix:c.pix, escala:c.escala, salario, vHora, gorjeta, combinado, recebido, reposicao,
+  return { id:c.id, nome:c.nome, foto:c.foto, pix:c.pix, escala:c.escala, salario, vHora, gorjeta, combinado, combinadoMes, recebido, reposicao,
     extrasMin, extras100Min, extrasHoras:extrasMin+extras100Min, extrasVal, extrasEditado, notMin, notRelMin, notVal, extSemanal, extNot50Min, extNot100Min,
     he50Val, he100Val, heNotVal, dsrReflexo, diasUteis, diasDSR, dias, cpf:c.cpf||"", cargo:c.cargo||"", admissao:c.admissao||"", unidade:c.unidade, vinculo:c.vinculo||"clt",
     atrasosDatas:atrasosD.map(x=>x.data), atrasosHoras:atrasosD.reduce((s,x)=>s+(Number(x.horas)||0),0), descAtrasos,
@@ -3338,10 +3342,10 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
     clts.filter(c=>c.status!=="inativo").filter(naCasa).forEach(c=>{
       if(c.vinculo==="confianca"){ if(c.sigiloso && !podeSigilo) return; out.push({k:"conf-"+c.id, tipo:"conf", pid:c.id, nome:c.nome, desc:c.cargo||"Gerência", dias:null, previsto:Number(c.salario||0), venc:dataSal, pix:c.pix||"", unidade:c.unidade}); return; }
       const l=calcFolhaLinha(c,folhaCtx); const t=c.vinculo==="fixo"?"fixo":"clt";
-      out.push({k:t+"-"+c.id, tipo:t, pid:c.id, nome:c.nome, desc:(c.cargo||"")+" · salário", dias:(l.dias||[]).length, previsto:l.liquido, venc:dataSal, pix:c.pix||"", unidade:c.unidade});
+      out.push({k:t+"-"+c.id, tipo:t, pid:c.id, nome:c.nome, desc:(c.cargo||"")+" · salário · "+(l.dias||[]).length+" dia(s) trab."+(l.diasContrato<30?" ("+l.diasContrato+"/30 de contrato)":""), dias:(l.dias||[]).length, previsto:l.liquido, venc:dataSal, pix:c.pix||"", unidade:c.unidade});
       const ajVT=(aj["vt-"+c.id]||{}).valor; const temAjVT=ajVT!=null&&ajVT!==""&&Number(ajVT)>0;
       const temPgVT=(pagamentosCLT[String(c.id)]||[]).some(p=>p.tipo==="vt"&&p.comp===ymRef);
-      if(l.vt>0||temAjVT||temPgVT) out.push({k:"vt-"+c.id, tipo:"vt", pid:c.id, nome:c.nome, desc:l.vt>0?"VT · "+l.vtDias+" dia(s) de escala":"VT combinado do mês", dias:l.vtDias, previsto:l.vt||0, venc:dataVT, pix:c.pix||"", unidade:c.unidade}); });
+      if(l.vt>0||temAjVT||temPgVT) out.push({k:"vt-"+c.id, tipo:"vt", pid:c.id, nome:c.nome, desc:l.vt>0?"VT · "+l.vtDias+" dia(s) de escala":"VT combinado do mês", dias:l.vtDias, previsto:l.vt||0, venc:(c.admissao&&c.admissao>dataVT&&c.admissao<=(fim||"9999"))?c.admissao:dataVT, pix:c.pix||"", unidade:c.unidade}); });
     (pjs||[]).filter(pj=>pjAtivoNoPeriodo(pj,ini,fim)).filter(naCasa).forEach(pj=>{ const meses=pjMesesNoPeriodo(pj,ini,fim);
       out.push({k:"pj-"+pj.id, tipo:"pj", pid:pj.id, nome:pj.nome, desc:(pj.servico||"Prestação de serviço")+((pjValorNoPeriodo(pj,ini,fim).det.find(d=>!d.cheio))?" · proporcional "+pjValorNoPeriodo(pj,ini,fim).det.filter(d=>!d.cheio).map(d=>d.dias+" dia(s)").join(", "):""), dias:null, previsto:pjValorNoPeriodo(pj,ini,fim).total, venc:pjVencimento(pj,ymRef), pix:pj.pix||"", unidade:pj.unidade}); });
     (freelasComPagamentos||[]).forEach(f=>{ const js=(f.jornadasHist||[]).filter(j=>naData(j.data) && (uni==="todas"||Number(j.unidade)===Number(uni)));
@@ -3637,12 +3641,12 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
     {comVT && <div className="mb-3 p-3 rounded-xl bg-sky-50 text-sky-800 text-xs flex flex-wrap items-center gap-3"><Icon d={I.wallet} className="w-4 h-4"/><b>Vale-transporte de {fmtCompetencia(ymRef)}</b><span>pago: <b className="tabular-nums">{fmtBRL(vtPagoGeral)}</b></span><span>falta pagar: <b className={cx("tabular-nums",vtFaltaGeral>0?"text-amber-700":"text-emerald-700")}>{fmtBRL(vtFaltaGeral)}</b></span><span className="text-sky-600">Clique no nome para lançar VT pago em dinheiro, Pix ou transferência.</span></div>}
     {modo==="confianca" && confOcultos>0 && <div className="mb-3 p-3 rounded-xl bg-amber-50 text-amber-700 text-xs flex items-center gap-2"><Icon d={I.shield} className="w-4 h-4"/> {confOcultos} pagamento(s) de diretoria ocultos — valor visível apenas para o Diretor e a Diretora Financeira.</div>}
     <Card className="overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm min-w-[760px]">
-      <thead><tr className="text-left text-slate-400 border-b border-slate-100">{(ehPJ?["Prestador","Serviço","Valor do período","Pago","Saldo","Vencimento · Pix"]:comVT?["Colaborador",modo==="fixo"?"Cargo · dias trab.":"Cargo","Líquido do mês","Pago","Saldo","Vale-transporte","Pix"]:["Colaborador","Cargo","Salário mensal","Pago","Saldo","Pix"]).map(h=><th key={h} className="px-4 py-3 font-semibold">{h}</th>)}</tr></thead>
+      <thead><tr className="text-left text-slate-400 border-b border-slate-100">{(ehPJ?["Prestador","Serviço","Valor do período","Pago","Saldo","Vencimento · Pix"]:comVT?["Colaborador","Cargo · dias trabalhados","Líquido do mês","Pago","Saldo","Vale-transporte","Pix"]:["Colaborador","Cargo","Salário mensal","Pago","Saldo","Pix"]).map(h=><th key={h} className="px-4 py-3 font-semibold">{h}</th>)}</tr></thead>
       <tbody className="divide-y divide-slate-50">
         {linhas.map(l=>[
           <tr key={l.id} className={cx("hover:bg-slate-50/70", !l.oculto&&"cursor-pointer")} onClick={()=>{ if(!l.oculto) setAberto(aberto===l.id?null:l.id); }}>
           <td className="px-4 py-3"><div className="flex items-center gap-2">{!l.oculto&&<Icon d={aberto===l.id?I.x:I.plus} className="w-3.5 h-3.5 text-slate-400"/>}<Avatar name={l.nome} src={l.foto} tone={modo==="confianca"||ehPJ?"slate":"brand"} size="w-7 h-7"/><span className="font-semibold text-slate-800">{l.nome}</span>{l.sigiloso&&<Badge tone="amber">sigiloso</Badge>}{ehPJ&&<Badge tone="blue">PJ</Badge>}</div></td>
-          <td className="px-4 py-3 text-slate-600">{l.cargo}{modo==="fixo"&&l.diasTrab!=null&&<span className="text-slate-400"> · {l.diasTrab} dia(s)</span>}</td>
+          <td className="px-4 py-3 text-slate-600">{l.cargo}{comVT&&l.diasTrab!=null&&<span className="text-slate-400 whitespace-nowrap" aria-label={"Dias trabalhados "+l.nome}> · {l.diasTrab} dia(s) trab.</span>}</td>
           <td className="px-4 py-3 font-bold text-slate-900 tabular-nums">{l.oculto?<span className="inline-flex items-center gap-1 text-slate-400"><Icon d={I.shield} className="w-3.5 h-3.5"/>••••••</span>:fmtBRL(l.total)}</td>
           <td className="px-4 py-3 text-emerald-600 tabular-nums">{l.oculto?"—":(l.pago>0?fmtBRL(l.pago):"—")}</td>
           <td className={cx("px-4 py-3 font-semibold tabular-nums", l.oculto?"text-slate-400":l.saldo>0?"text-amber-600":"text-emerald-600")}>{l.oculto?"—":fmtBRL(l.saldo)}</td>
@@ -3654,14 +3658,25 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
               <div className="lg:col-span-2">
                 <div className="text-xs font-bold text-slate-500 uppercase mb-2">Resumo do mês</div>
                 <div className="bg-white rounded-xl border border-slate-100 p-3 text-sm space-y-1">
-                  {modo!=="confianca" && l.det && <>
-                    <div className="flex justify-between"><span className="text-slate-500">Salário base</span><span className="tabular-nums">{fmtBRL(l.det.salario)}</span></div>
-                    <div className="flex justify-between"><span className="text-slate-500">Horas extras</span><span className="tabular-nums text-emerald-600">+{fmtBRL(l.det.extrasVal)}</span></div>
-                    {l.det.notVal>0 && <div className="flex justify-between"><span className="text-slate-500">Adic. noturno</span><span className="tabular-nums text-emerald-600">+{fmtBRL(l.det.notVal)}</span></div>}
-                    {l.det.vt>0 && <div className="flex justify-between"><span className="text-slate-500">Vale Transporte ({l.det.vtPorDia?`${l.det.vtDias} dias × ${fmtBRL(l.det.vtDia)} = `:""}{fmtBRL(l.det.vt)}) − 6%</span><span className="tabular-nums text-rose-600">-{fmtBRL(l.det.vtDesconto)}</span></div>}
-                    {l.det.vtPorDia && l.det.descVTFaltas>0 && <div className="flex justify-between"><span className="text-slate-500">VT de {l.det.vtFaltasAnt} falta(s) de {fmtCompetencia(l.det.vtMesAnt)}</span><span className="tabular-nums text-rose-600">-{fmtBRL(l.det.descVTFaltas)}</span></div>}
-                    {(l.det.descontos-l.det.vtDesconto-(l.det.vtPorDia?l.det.descVTFaltas:0))>0 && <div className="flex justify-between"><span className="text-slate-500">Descontos ({l.det.faltasQtd} falta{l.det.dsrQtd?` +${l.det.dsrQtd} DSR`:""})</span><span className="tabular-nums text-rose-600">-{fmtBRL(l.det.descontos-l.det.vtDesconto-(l.det.vtPorDia?l.det.descVTFaltas:0))}</span></div>}
-                  </>}
+                  {modo!=="confianca" && !ehPJ && l.det && (()=>{ const d=l.det; const L=(rot,v,cor,lab)=><div className="flex justify-between gap-3"><span className="text-slate-500">{rot}</span><span className={cx("tabular-nums whitespace-nowrap",cor)} aria-label={lab}>{v}</span></div>;
+                    const descFaltasDSR=(d.descFaltas||0)+(d.descDSR||0);
+                    return <>
+                    <div className="flex flex-wrap gap-3 text-[11px] text-slate-500 pb-1 mb-1 border-b border-slate-100" aria-label={"Dias de "+l.nome}>
+                      <span><b className="text-slate-700">{(d.dias||[]).length}</b> dia(s) trabalhado(s) no ponto</span>
+                      {d.vtPorDia && <span><b className="text-slate-700">{d.vtDias}</b> dia(s) na escala</span>}
+                      <span><b className="text-slate-700">{d.diasContrato}</b>/30 dias de contrato no mês</span>
+                      {d.faltasQtd>0 && <span className="text-rose-600"><b>{d.faltasQtd}</b> falta(s)</span>}
+                    </div>
+                    {L(d.diasContrato<30?`Salário base (${fmtBRL(d.salarioMes)} ÷ 30 × ${d.diasContrato} dias)`:"Salário base",fmtBRL(d.salario),"","Salário base de "+l.nome)}
+                    {d.extrasVal>0 && L(`Horas extras (${fmtHoras(d.extrasHoras)})`,"+"+fmtBRL(d.extrasVal),"text-emerald-600")}
+                    {d.notVal>0 && L("Adicional noturno","+"+fmtBRL(d.notVal),"text-emerald-600")}
+                    {d.dsrReflexo>0 && L("DSR sobre extras/noturno","+"+fmtBRL(d.dsrReflexo),"text-emerald-600")}
+                    {d.reposicao>0 && L(`Complemento do salário combinado (${fmtBRL(d.combinado)}${d.combinadoMes!==d.combinado?` = ${fmtBRL(d.combinadoMes)} ÷ 30 × ${d.diasContrato} dias`:""})`,"+"+fmtBRL(d.reposicao),"text-emerald-600","Complemento de "+l.nome)}
+                    {d.vt>0 && L(`Desconto VT 6% (VT ${d.vtPorDia?`${d.vtDias} dias × ${fmtBRL(d.vtDia)} = `:""}${fmtBRL(d.vt)}, pago à parte)`,"-"+fmtBRL(d.vtDesconto),"text-rose-600")}
+                    {d.descVTFaltas>0 && L(`VT de ${d.vtFaltasAnt||d.faltasQtd} falta(s)${d.vtPorDia?" de "+fmtCompetencia(d.vtMesAnt):""}`,"-"+fmtBRL(d.descVTFaltas),"text-rose-600")}
+                    {descFaltasDSR>0 && L(`Faltas (${d.faltasQtd}${d.dsrQtd?` + ${d.dsrQtd} DSR`:""})`,"-"+fmtBRL(descFaltasDSR),"text-rose-600")}
+                    {d.descAtrasos>0 && L("Atrasos","-"+fmtBRL(d.descAtrasos),"text-rose-600")}
+                  </>; })()}
                   {modo==="confianca" && <div className="flex justify-between"><span className="text-slate-500">Salário mensal</span><span className="tabular-nums">{fmtBRL(l.total)}</span></div>}
                   {ehPJ && l.det && <>
                     <div className="flex justify-between"><span className="text-slate-500">Valor mensal × {l.det.meses.length} mês(es){l.total!==Number((l.det&&l.det.valorMensal)||0)*l.det.meses.length?" (proporcional à vigência)":""}</span><span className="tabular-nums">{fmtBRL(l.total)}</span></div>
