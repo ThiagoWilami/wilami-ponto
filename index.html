@@ -3420,7 +3420,7 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
       const pagos=pagosDaLinha(l); const pago=r2(pagos.reduce((s,p)=>s+(Number(p.valor)||0),0)); const saldo=r2(previsto-pago);
       const ultimo=[...pagos].sort((x,y)=>String(y.data||"").localeCompare(String(x.data||"")))[0];
       const aMais = pago>0 && saldo< -0.009 ? r2(-saldo) : 0;
-      const status= aMais>0 ? "amais" : previsto>0 && saldo<=0.009 ? "pago" : (previsto<=0 && pago<=0 && pc.cred>0) ? "pago" : pago>0 ? "parcial" : (venc && venc<hoje ? "vencido" : "apagar");
+      const status= aMais>0 ? "amais" : previsto>0 && saldo<=0.009 ? "pago" : (previsto<=0 && pago<=0 && pc.cred>0) ? "pago" : (previsto<=0 && pago<=0) ? "zero" : pago>0 ? "parcial" : (venc && venc<hoje ? "vencido" : "apagar");
       const mc=a.manualCalc;
       const desc = l.desc + (pc.cred>0 && !pc.editado ? " · − "+fmtBRL(pc.cred)+" pago a mais em "+fmtCompetencia(pc.credDe) : "")
         + (pc.editado && mc ? (mc.vt ? " · MANUAL: "+mc.dias+" dia(s) × "+fmtBRL(mc.vtDia)+" de VT"
@@ -3431,7 +3431,7 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
   const [stSel,setStSel]=useState("todos");   // todos | apagar | vencido | pago
   const [ordem,setOrdem]=useState("tipo");    // tipo | venc
   const togTipo=(t)=>setTiposSel(p=>p.includes(t)?p.filter(x=>x!==t):[...p,t]);
-  const visiveis=linhas.filter(l=>tiposSel.includes(l.tipo)).filter(l=> stSel==="todos" ? true : stSel==="pago" ? (l.status==="pago"||l.status==="amais") : stSel==="vencido" ? l.status==="vencido" : (l.status!=="pago"&&l.status!=="amais"));
+  const visiveis=linhas.filter(l=>tiposSel.includes(l.tipo)).filter(l=> stSel==="todos" ? true : stSel==="pago" ? (l.status==="pago"||l.status==="amais") : stSel==="vencido" ? l.status==="vencido" : (l.status!=="pago"&&l.status!=="amais"&&l.status!=="zero"));
   const soma=(arr,c)=>r2(arr.reduce((s,l)=>s+(Number(l[c])||0),0));
   const base4=linhas.filter(l=>tiposSel.includes(l.tipo));
   // ---- dar baixa / desfazer ----
@@ -3498,8 +3498,20 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
   const [oQue,setOQue]=useState("futuros");   // futuros | mes
   const uNome=uni==="todas"?"Todas as casas":unidadeNome(Number(uni),unidades);
   const rotTipo=(t)=>(TIPOS_CONTA.find(x=>x[0]===t)||[t,t])[1];
-  const stTxt=(l)=> l.status==="amais" ? "Pago a mais "+fmtBRL(l.aMais) : l.status==="pago" ? "Pago em "+fmtDataBR(l.ultimo&&l.ultimo.data) : l.status==="parcial" ? "Parcial ("+fmtBRL(l.pago)+")" : l.status==="vencido" ? "Vencido" : "A pagar";
-  const paraExportar=()=>{ const sel=visiveis.filter(l=>l.inc);
+  const stTxt=(l)=> l.status==="zero" ? "Sem valor no mês" : l.status==="amais" ? "Pago a mais "+fmtBRL(l.aMais) : l.status==="pago" ? "Pago em "+fmtDataBR(l.ultimo&&l.ultimo.data) : l.status==="parcial" ? "Parcial ("+fmtBRL(l.pago)+")" : l.status==="vencido" ? "Vencido" : "A pagar";
+  const [juntarVT,setJuntarVT]=useState(true);  // relatório: salário + VT da mesma pessoa numa linha só
+  const juntarSalarioVT=(arr)=>{ const sal=new Set(["clt","fixo","conf"]); const porPid={}; const resto=[];
+    arr.forEach(l=>{ if((sal.has(l.tipo)||l.tipo==="vt") && l.pid!=null){ (porPid[String(l.pid)]=porPid[String(l.pid)]||[]).push(l); } else resto.push(l); });
+    const juntos=Object.values(porPid).map(g=>{ const s_=g.find(x=>sal.has(x.tipo)), v_=g.find(x=>x.tipo==="vt"); if(g.length===1) return g[0];
+      const previsto=r2(g.reduce((t,x)=>t+x.previsto,0)), pago=r2(g.reduce((t,x)=>t+x.pago,0)), saldo=r2(g.reduce((t,x)=>t+Math.max(0,x.saldo),0));
+      const venc=(s_&&s_.saldo>0.009?s_.venc:null)||(v_&&v_.saldo>0.009?v_.venc:null)||(s_||v_).venc;
+      const pagos=g.flatMap(x=>x.pagos||[]); const ultimo=[...pagos].sort((x,y)=>String(y.data||"").localeCompare(String(x.data||"")))[0];
+      const status= saldo<=0.009 ? "pago" : pago>0 ? "parcial" : (venc&&venc<hoje?"vencido":"apagar");
+      const base=s_||g[0];
+      return {...base, k:"pes-"+base.pid, tipo:rotTipo(base.tipo)+" + VT", desc:"Salário "+fmtBRL(s_?s_.previsto:0)+" + VT "+fmtBRL(v_?v_.previsto:0)+(v_&&v_.pago>0||s_&&s_.pago>0?" · já pago "+fmtBRL(pago):""),
+        previsto, pago, saldo, venc, pagos, ultimo, status, aMais:0, obs:[s_&&s_.obs,v_&&v_.obs].filter(Boolean).join(" · ")}; });
+    return [...juntos,...resto].sort((a,b)=>String(a.nome).localeCompare(b.nome)); };
+  const paraExportar=()=>{ let sel=visiveis.filter(l=>l.inc); if(juntarVT) sel=juntarSalarioVT(sel);
     return oQue==="futuros" ? sel.filter(l=>l.saldo>0.009).sort((a,b)=>(a.venc||"9999").localeCompare(b.venc||"9999")||String(a.nome).localeCompare(b.nome)) : sel; };
   const porData=(arr)=>{ const m={}; arr.forEach(l=>{ const d=l.venc||""; m[d]=(m[d]||0)+(l.saldo>0?l.saldo:0); }); return Object.keys(m).sort((a,b)=>!a?1:!b?-1:a.localeCompare(b)).map(d=>[d,r2(m[d])]); };
   const titulo=()=> oQue==="futuros" ? "Pagamentos futuros (a pagar)" : "Pagamentos do mês";
@@ -3534,9 +3546,9 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
       txt((empresaEfetiva(empresaContratante).razao||"")+" · "+uNome+" · competência "+fmtCompetencia(ymRef),42,H-54,{size:9,cor:L.rgb(1,1,1)});
       y=H-84; cab();
       for(const l of arr){ if(y<50){ nova(); cab(); }
-        txt(l.venc?fmtDataBR(l.venc):"-",40,y); txt(corta(l.nome,160,f,9),100,y); txt(corta(rotTipo(l.tipo),75,f,9),265,y,{cor:cinza}); txt(corta(l.desc,165,f,8),345,y,{size:8,cor:cinza});
+        txt(l.venc?fmtDataBR(l.venc):"-",40,y); txt(corta(l.nome,160,f,9),100,y); txt(corta(rotTipo(l.tipo),75,f,9),265,y,{cor:cinza}); txt(corta(l.desc,148,f,8),345,y,{size:8,cor:cinza});
         dir(fmtBRL(l.previsto),560,y); dir(l.pago?fmtBRL(l.pago):"-",630,y); dir(fmtBRL(Math.max(0,l.saldo)),700,y,{bold:true}); txt(corta(stTxt(l),W-30-712,f,8),712,y,{size:8}); y-=14; }
-      if(y<70) nova();
+      y-=10; if(y<70) nova();
       pg.drawRectangle({x:30,y:y-8,width:W-60,height:24,color:claro});
       txt("TOTAL",40,y,{bold:true,size:11}); dir(fmtBRL(soma(arr,"previsto")),560,y,{bold:true,size:10}); dir(fmtBRL(soma(arr,"pago")),630,y,{bold:true,size:10}); dir(fmtBRL(r2(arr.reduce((s,l)=>s+Math.max(0,l.saldo),0))),700,y,{bold:true,size:10}); y-=34;
       const pd=porData(arr); if(y<60+pd.length*13) nova();
@@ -3551,7 +3563,7 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
     t+="\n*Total "+(oQue==="futuros"?"a pagar":"previsto")+": "+fmtBRL(oQue==="futuros"?r2(arr.reduce((s,l)=>s+Math.max(0,l.saldo),0)):soma(arr,"previsto"))+"*";
     copyText(t); toast("Texto copiado — cole no WhatsApp ou e-mail do Financeiro"); };
   // ---- tela ----
-  const tonSt={pago:"green",parcial:"amber",vencido:"red",apagar:"blue",amais:"violet"};
+  const tonSt={pago:"green",parcial:"amber",vencido:"red",apagar:"blue",amais:"violet",zero:"slate"};
   const legado=(ini||"")+"|"+(fim||"")+"|todas";
   const descontarProx=(l)=>{ const nx=relFinLancarCredito(setRelFin,ymRef,legado,l.k,l.aMais); toast("Desconto de "+fmtBRL(l.aMais)+" lançado em "+fmtCompetencia(nx)+" ("+l.nome+")"); };
   const desfazerDesc=(l)=>{ if(!confirm("Cancelar o desconto de "+fmtBRL(l.creditoValor||l.aMais)+" em "+fmtCompetencia(l.creditoPara)+"?")) return; relFinDesfazerCredito(setRelFin,ymRef,legado,l.k); toast("Desconto cancelado"); };
@@ -3595,6 +3607,7 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
       <div className="font-bold text-slate-800 mb-2">Relatório para o Financeiro</div>
       <div className="flex flex-wrap items-center gap-2">
         {[["futuros","Pagamentos futuros (a pagar)"],["mes","Mês completo"]].map(([k,l])=><button key={k} onClick={()=>setOQue(k)} className={cx("px-3 py-1.5 rounded-lg text-xs font-semibold border", oQue===k?"bg-slate-800 text-white border-transparent":"bg-white border-slate-200 text-slate-500")}>{l}</button>)}
+        <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 ml-2"><input type="checkbox" checked={juntarVT} onChange={e=>setJuntarVT(e.target.checked)} aria-label="Somar salário e VT"/>Somar salário + VT de cada pessoa (valor único a pagar)</label>
         <div className="flex-1"/>
         <Btn icon={I.download} onClick={exportarExcel}>Exportar Excel</Btn>
         <Btn variant="soft" icon={I.download} onClick={exportarPdf}>Exportar PDF</Btn>
