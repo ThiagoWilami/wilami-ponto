@@ -1300,6 +1300,7 @@ function StoreProvider({children}) {
   const excluirPj=(id)=>{ if(ehAuto(id)) cadOps.remove(docIdDe(id)); else setPjs(prev=>prev.filter(x=>x.id!==id)); removerDaEscala(id,"pj"); };
   // Pagamentos dos prestadores PJ (parcelas/adiantamentos), chaveados pelo id do PJ.
   const [pagamentosPJ,setPagPJ]=usePersist("pagamentosPJ",{});
+  const [relFin,setRelFin]=usePersist("relatorioFinanceiro",{});   // por período: ajustes manuais, linhas extras e seleção do relatório
   const addPagamentoPJ=(id,obj)=>setPagPJ(prev=>{ const arr=prev[String(id)]||[]; return {...prev,[String(id)]:[{...obj,id:Math.random().toString(36).slice(2)},...arr]}; });
   const removePagamentoPJ=(id,pid)=>setPagPJ(prev=>({...prev,[String(id)]:(prev[String(id)]||[]).filter(x=>x.id!==pid)}));
   const criarPasta=(donoKey,nome)=>setPastasExtra(prev=>{ const arr=prev[donoKey]||[]; if(arr.includes(nome)) return prev; return {...prev,[donoKey]:[...arr,nome]}; });
@@ -1603,7 +1604,7 @@ function StoreProvider({children}) {
     dossie,getDossie,addFalta,addFeedback,addAnexo, perfil,setPerfil, perms,setPerms, can, envContab,setEnvContab, apontContab,setApontContab, contabCfg,setContabCfg, finCfg,setFinCfg, pcmso,setPcmso, cadastrosRS, cadOpsRS:cadOps, criarFreela, escalarNaData, tirarDaData,
     clientes,clienteAtivo,tenantAtual,criarCliente,trocarCliente,
     acesso,donos,setDonos,acessos,acessosOps,
-    marca,setMarca, pjs:(casaRestrita!=null?pjsTodos.filter(x=>x.unidade==null||x.unidade==="todas"||_mesmaCasa(x.unidade)):pjsTodos), salvarPj,excluirPj, pagamentosPJ,addPagamentoPJ,removePagamentoPJ,
+    marca,setMarca, relFin,setRelFin, pjs:(casaRestrita!=null?pjsTodos.filter(x=>x.unidade==null||x.unidade==="todas"||_mesmaCasa(x.unidade)):pjsTodos), salvarPj,excluirPj, pagamentosPJ,addPagamentoPJ,removePagamentoPJ,
     pastasExtra,criarPasta,removerPasta, cargosDesc,salvarCargoDesc,excluirCargoDesc,cargosLista,cargoInfo, assinaturaCfg,setAssinaturaCfg, arquivos, acessosColab, aguardandoInicio, incluirPjNaEscala, modeloContratoPJ,setModeloContratoPJ, empresaContratante,setEmpresaContratante, termoImagemCfg,setTermoImagemCfg, catalogoEntregas,setCatalogoEntregas };
   return <StoreCtx.Provider value={value}>{children}</StoreCtx.Provider>;
 }
@@ -3287,6 +3288,153 @@ function Relatorios() {
 
 /* ============================ PAGAMENTOS (FREELANCERS) ============================ */
 // Pagamentos de SALARIADOS (CLT ou Cargos de confiança) — parcelado/adiantamento + saldo, modelo dos freelancers.
+// ===== Relatório para o Financeiro: junta PJ, Freela Fixo, freelancers (e opcionalmente CLT/Gerência) =====
+// Cada linha pode ser marcada/desmarcada e ter dias, valor e observação ajustados à mão; dá para incluir linhas manuais.
+// Os ajustes ficam salvos por período (De–Até) para refazer o relatório depois.
+function RelatorioFinanceiro({ ini, fim, uni, freelas }){
+  const { clts, pjs, unidades, registros, pontoHist, getDossie, cltExtraAjuste, gorjetasCLT, escala, escalaOv, atestados, acesso, pagamentosCLT, pagamentosPJ, faltaDescontoDesde, feriadosExtras, relFin, setRelFin, empresaContratante } = useStore();
+  const toast=useContext(ToastCtx);
+  const chave=(ini||"")+"|"+(fim||"")+"|"+uni;
+  const cfg=(relFin||{})[chave]||{};
+  const aj=cfg.aj||{}; const manuais=cfg.manuais||[];
+  const salvar=(fn)=>setRelFin(prev=>{ const c=(prev||{})[chave]||{}; return {...(prev||{}),[chave]:fn({aj:c.aj||{},manuais:c.manuais||[]})}; });
+  const setAj=(k,campo,v)=>salvar(c=>({...c,aj:{...c.aj,[k]:{...(c.aj[k]||{}),[campo]:v}}}));
+  const podeSigilo=!acesso||acesso.podeSigilo;
+  const naData=(d)=> (!ini||d>=ini)&&(!fim||d<=fim);
+  const ymRef=(ini||hojeStr()).slice(0,7);
+  const apurCLT=useMemo(()=>apurarHoras([...pontoHist,...registros]).filter(x=>x.tipo==="clt"&&x.completo&&naData(x.dia)),[pontoHist,registros,ini,fim]); // eslint-disable-line
+  const faltasCtx={ escala, escalaOv, registros:[...pontoHist,...registros], atestados, ini, fim, hoje:hojeStr(), nowMin:0, desde:faltaDescontoDesde };
+  const folhaCtx={ apurCLT, cltExtraAjuste, gorjetasCLT, ymRef, getDossie, naData, faltasCtx, feriados:feriadosExtras };
+  const naCasa=(c)=> uni==="todas" || c.unidade===Number(uni) || c.unidade==="todas" || c.unidade==null;
+  const pagoDe=(map,id)=> (map[String(id)]||[]).filter(p=>{ const r=p.ref||p.data; return (r||"").slice(0,7)===ymRef || naData(r); }).reduce((s,p)=>s+Number(p.valor||0),0);
+  const SECOES=[["pj","Prestadores PJ",true],["fixo","Freela Fixo",true],["free","Freelancers",true],["clt","CLT",false],["conf","Gerência & Diretoria",false],["manual","Lançamentos manuais",true]];
+  const base=useMemo(()=>{ const out=[];
+    (pjs||[]).filter(pj=>pjAtivoNoPeriodo(pj,ini,fim)).filter(naCasa).forEach(pj=>{ const meses=pjMesesNoPeriodo(pj,ini,fim);
+      out.push({k:"pj-"+pj.id, sec:"pj", nome:pj.nome, desc:pj.servico||"Prestação de serviço", dias:null, valor:Number(pj.valor||0)*meses.length, pago:pagoDe(pagamentosPJ,pj.id), pix:pj.pix||"", unidade:pj.unidade}); });
+    clts.filter(c=>c.vinculo==="fixo" && c.status!=="inativo").filter(naCasa).forEach(c=>{ const l=calcFolhaLinha(c,folhaCtx);
+      out.push({k:"fixo-"+c.id, sec:"fixo", nome:c.nome, desc:c.cargo||"Freela Fixo", dias:(l.dias||[]).length, valor:l.liquido, pago:pagoDe(pagamentosCLT,c.id), pix:c.pix||"", unidade:c.unidade}); });
+    (freelas||[]).filter(f=>f.jornadas>0||f.pago>0).forEach(f=>out.push({k:"free-"+f.id, sec:"free", nome:f.nome, desc:f.cargo||"Freelancer", dias:f.jornadas, valor:f.total, pago:f.pago, pix:f.pix||"", unidade:f.unidade}));
+    clts.filter(c=>c.vinculo!=="fixo" && c.vinculo!=="confianca" && c.status!=="inativo").filter(naCasa).forEach(c=>{ const l=calcFolhaLinha(c,folhaCtx);
+      out.push({k:"clt-"+c.id, sec:"clt", nome:c.nome, desc:c.cargo||"CLT", dias:(l.dias||[]).length, valor:l.liquido, pago:pagoDe(pagamentosCLT,c.id), pix:c.pix||"", unidade:c.unidade}); });
+    clts.filter(c=>c.vinculo==="confianca" && c.status!=="inativo" && !(c.sigiloso && !podeSigilo)).filter(naCasa).forEach(c=>
+      out.push({k:"conf-"+c.id, sec:"conf", nome:c.nome, desc:c.cargo||"Gerência", dias:null, valor:Number(c.salario||0), pago:pagoDe(pagamentosCLT,c.id), pix:c.pix||"", unidade:c.unidade}));
+    return out; },[pjs,clts,freelas,ini,fim,uni,apurCLT,pagamentosPJ,pagamentosCLT,escala,escalaOv]); // eslint-disable-line
+  const secPadrao=(sec)=>(SECOES.find(x=>x[0]===sec)||[])[2];
+  const linhas=[...base, ...manuais.map(m=>({...m, k:"man-"+m.id, sec:"manual", manual:true}))].map(l=>{ const a=aj[l.k]||{};
+    const inc = a.inc!=null ? a.inc : secPadrao(l.sec);
+    const dias = a.dias!=null && a.dias!=="" ? Number(a.dias) : l.dias;
+    const valor = a.valor!=null && a.valor!=="" ? Number(a.valor) : l.valor;
+    return {...l, inc, dias, valor, obs:a.obs!=null?a.obs:(l.obs||""), editado:a.dias!=null&&a.dias!==""||a.valor!=null&&a.valor!=="", diasOrig:l.dias, valorOrig:l.valor}; });
+  const sel=linhas.filter(l=>l.inc);
+  const tot=(arr)=>arr.reduce((s,l)=>s+(Number(l.valor)||0),0);
+  const [nova,setNova]=useState({nome:"",desc:"",dias:"",valor:""});
+  const addManual=()=>{ if(!nova.nome.trim()||!(Number(nova.valor)>0)){ toast("Informe o nome e o valor"); return; }
+    salvar(c=>({...c,manuais:[...c.manuais,{id:Math.random().toString(36).slice(2),nome:nova.nome.trim(),desc:nova.desc.trim(),dias:nova.dias===""?null:Number(nova.dias),valor:Number(nova.valor),pago:0,pix:""}]})); setNova({nome:"",desc:"",dias:"",valor:""}); };
+  const rmManual=(id)=>salvar(c=>({...c,manuais:c.manuais.filter(m=>m.id!==id)}));
+  const marcarSec=(sec,v)=>salvar(c=>{ const a={...c.aj}; linhas.filter(l=>l.sec===sec).forEach(l=>{ a[l.k]={...(a[l.k]||{}),inc:v}; }); return {...c,aj:a}; });
+  const uNome=uni==="todas"?"Todas as casas":unidadeNome(Number(uni),unidades);
+  const periodo=fmtDataBR(ini)+" a "+fmtDataBR(fim);
+  const exportarExcel=async()=>{ if(!sel.length){ toast("Marque ao menos uma linha"); return; } if(!window.ExcelJS){ toast("Biblioteca Excel não carregada — verifique a conexão"); return; }
+    const wb=new ExcelJS.Workbook(); const ws=wb.addWorksheet("Relatório");
+    ws.columns=[{width:34},{width:28},{width:10},{width:16},{width:14},{width:16},{width:26},{width:30}];
+    ws.mergeCells("A1:H1"); ws.getCell("A1").value="Relatório de pagamentos — "+(empresaEfetiva(empresaContratante).razao||""); ws.getCell("A1").font={bold:true,size:14};
+    ws.mergeCells("A2:H2"); ws.getCell("A2").value=uNome+" · "+periodo; ws.getCell("A2").font={color:{argb:"FF64748B"}};
+    let r=4;
+    for(const [sec,rot] of SECOES){ const arr=sel.filter(l=>l.sec===sec); if(!arr.length) continue;
+      ws.getCell("A"+r).value=rot; ws.getCell("A"+r).font={bold:true,size:12,color:{argb:"FF166534"}}; r++;
+      const cab=ws.getRow(r); cab.values=["Nome","Função / serviço","Dias","Valor (R$)","Pago (R$)","Saldo (R$)","Pix","Observação"]; cab.font={bold:true}; cab.eachCell(c=>{ c.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFF1F5F9"}}; }); r++;
+      arr.forEach(l=>{ ws.getRow(r).values=[l.nome,l.desc,l.dias==null?"":l.dias,Number(l.valor)||0,Number(l.pago)||0,(Number(l.valor)||0)-(Number(l.pago)||0),l.pix||"",l.obs||""]; r++; });
+      const st=ws.getRow(r); st.values=["Subtotal "+rot,"",arr.reduce((s,l)=>s+(Number(l.dias)||0),0)||"",tot(arr),arr.reduce((s,l)=>s+(Number(l.pago)||0),0),tot(arr)-arr.reduce((s,l)=>s+(Number(l.pago)||0),0)]; st.font={bold:true}; r+=2; }
+    const tg=ws.getRow(r); tg.values=["TOTAL GERAL","","",tot(sel),sel.reduce((s,l)=>s+(Number(l.pago)||0),0),tot(sel)-sel.reduce((s,l)=>s+(Number(l.pago)||0),0)]; tg.font={bold:true,size:12};
+    ws.eachRow(row=>{ [4,5,6].forEach(i=>{ const c=row.getCell(i); if(typeof c.value==="number") c.numFmt='"R$" #,##0.00'; }); });
+    const buf=await wb.xlsx.writeBuffer(); baixarBlob(new Blob([buf],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}),"Relatorio pagamentos "+(ini||"")+" a "+(fim||"")+" - "+uNome.replace(/[\\/:*?"<>|]/g,"")+".xlsx");
+    toast("Relatório exportado ("+sel.length+" linhas)"); };
+  const exportarPdf=async()=>{ if(!sel.length){ toast("Marque ao menos uma linha"); return; }
+    try{ const L=await carregarPdfLib(); const doc=await L.PDFDocument.create();
+      const f=await doc.embedFont(L.StandardFonts.Helvetica), b=await doc.embedFont(L.StandardFonts.HelveticaBold);
+      const limpo=(t)=>String(t??"").replace(/[^\x20-\x7E\u00A0-\u00FF]/g,"");
+      const corta=(t,w,fn,sz)=>{ t=limpo(t); while(t && fn.widthOfTextAtSize(t,sz)>w) t=t.slice(0,-1); return t; };
+      const verde=L.rgb(0.18,0.44,0.16), claro=L.rgb(0.93,0.96,0.92), cinza=L.rgb(0.4,0.4,0.4);
+      const W=842, H=595; let pg, y;
+      const nova=()=>{ pg=doc.addPage([W,H]); y=H-40; };
+      const txt=(t,x,yy,o={})=>pg.drawText(limpo(t),{x,y:yy,size:o.size||9,font:o.bold?b:f,color:o.cor||L.rgb(0.1,0.1,0.1)});
+      const dir=(t,xr,yy,o={})=>{ const fn=o.bold?b:f, sz=o.size||9; txt(t,xr-fn.widthOfTextAtSize(limpo(t),sz),yy,o); };
+      const cols=[["Nome",40,200],["Função / serviço",245,150],["Dias",440,0],["Valor",530,0],["Pago",610,0],["Saldo",690,0],["Observação",700,110]];
+      nova();
+      pg.drawRectangle({x:30,y:H-62,width:W-60,height:44,color:verde});
+      txt("RELATÓRIO DE PAGAMENTOS",42,H-38,{bold:true,size:14,cor:L.rgb(1,1,1)});
+      txt((empresaEfetiva(empresaContratante).razao||"")+" · "+uNome+" · "+periodo,42,H-54,{size:9,cor:L.rgb(1,1,1)});
+      y=H-86;
+      const cab=()=>{ pg.drawRectangle({x:30,y:y-4,width:W-60,height:16,color:claro}); cols.forEach(([t,x],i)=> i>=2&&i<=5 ? dir(t,x,y,{bold:true,size:8}) : txt(t,x,y,{bold:true,size:8})); y-=18; };
+      const pagoT=(arr)=>arr.reduce((s,l)=>s+(Number(l.pago)||0),0);
+      for(const [sec,rot] of SECOES){ const arr=sel.filter(l=>l.sec===sec); if(!arr.length) continue;
+        if(y<90) nova();
+        txt(rot,40,y,{bold:true,size:11,cor:verde}); y-=16; cab();
+        for(const l of arr){ if(y<50){ nova(); cab(); }
+          const v=Number(l.valor)||0, pg_=Number(l.pago)||0;
+          txt(corta(l.nome,195,f,9),40,y); txt(corta(l.desc,190,f,9),245,y,{cor:cinza});
+          dir(l.dias==null?"-":String(l.dias),440,y); dir(fmtBRL(v),530,y); dir(pg_?fmtBRL(pg_):"-",610,y); dir(fmtBRL(v-pg_),690,y);
+          txt(corta(l.obs||"",W-30-700,f,8),700,y,{size:8,cor:cinza}); y-=14; }
+        pg.drawLine({start:{x:40,y:y+8},end:{x:W-40,y:y+8},thickness:0.5,color:L.rgb(0.8,0.8,0.8)});
+        txt("Subtotal "+rot,40,y-2,{bold:true}); const d=arr.reduce((s,l)=>s+(Number(l.dias)||0),0); if(d) dir(String(d),440,y-2,{bold:true});
+        dir(fmtBRL(tot(arr)),530,y-2,{bold:true}); dir(fmtBRL(pagoT(arr)),610,y-2,{bold:true}); dir(fmtBRL(tot(arr)-pagoT(arr)),690,y-2,{bold:true}); y-=26; }
+      if(y<70) nova();
+      pg.drawRectangle({x:30,y:y-8,width:W-60,height:24,color:claro});
+      txt("TOTAL GERAL",40,y,{bold:true,size:11}); dir(fmtBRL(tot(sel)),530,y,{bold:true,size:11}); dir(fmtBRL(pagoT(sel)),610,y,{bold:true,size:11}); dir(fmtBRL(tot(sel)-pagoT(sel)),690,y,{bold:true,size:11});
+      doc.getPages().forEach((p,i,a)=>{ p.drawText(limpo("Gerado em "+new Date().toLocaleString("pt-BR")+" · página "+(i+1)+" de "+a.length),{x:40,y:20,size:7,font:f,color:cinza}); });
+      const bytes=await doc.save();
+      baixarBlob(new Blob([bytes],{type:"application/pdf"}),"Relatorio pagamentos "+(ini||"")+" a "+(fim||"")+" - "+uNome.replace(/[\\/:*?"<>|]/g,"")+".pdf");
+      toast("PDF gerado ("+sel.length+" linhas)");
+    }catch(e){ toast("Não foi possível gerar o PDF: "+e.message); } };
+  const copiarTexto=()=>{ if(!sel.length){ toast("Marque ao menos uma linha"); return; }
+    let t="*Relatório de pagamentos — "+uNome+"*\n_"+periodo+"_\n";
+    for(const [sec,rot] of SECOES){ const arr=sel.filter(l=>l.sec===sec); if(!arr.length) continue;
+      t+="\n*"+rot+"*\n"+arr.map(l=>"• "+l.nome+(l.dias!=null?" — "+l.dias+" dia(s)":"")+": "+fmtBRL(Number(l.valor)||0)+(l.obs?" ("+l.obs+")":"")).join("\n")+"\nSubtotal: "+fmtBRL(tot(arr))+"\n"; }
+    t+="\n*Total geral: "+fmtBRL(tot(sel))+"*"; copyText(t); toast("Texto copiado — cole no WhatsApp ou e-mail do Financeiro"); };
+  const inp="w-24 px-2 py-1 rounded-lg border border-slate-200 text-sm tabular-nums text-right";
+  return <>
+    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+      <StatCard icon={I.wallet} label="Total selecionado" value={fmtBRL(tot(sel))} tone="brand"/>
+      <StatCard icon={I.briefcase} label="Prestadores PJ" value={fmtBRL(tot(sel.filter(l=>l.sec==="pj")))} tone="slate"/>
+      <StatCard icon={I.calendar} label="Dias Freela Fixo" value={sel.filter(l=>l.sec==="fixo").reduce((s,l)=>s+(Number(l.dias)||0),0)} tone="free"/>
+      <StatCard icon={I.check} label="Linhas no relatório" value={sel.length+" de "+linhas.length} tone="green"/>
+    </div>
+    <div className="flex flex-wrap items-center gap-2 mb-3">
+      <Btn icon={I.download} onClick={exportarExcel}>Exportar Excel</Btn>
+      <Btn variant="soft" icon={I.download} onClick={exportarPdf}>Exportar PDF</Btn>
+      <Btn variant="soft" icon={I.copy} onClick={copiarTexto}>Copiar texto</Btn>
+      <span className="text-xs text-slate-500">Marque o que vai para o relatório. Dias, valor e observação podem ser ajustados à mão (fica salvo para este período).</span>
+    </div>
+    {SECOES.map(([sec,rot])=>{ const arr=linhas.filter(l=>l.sec===sec); if(!arr.length && sec!=="manual") return null; const todos=arr.length>0&&arr.every(l=>l.inc);
+      return <Card key={sec} className="mb-3 overflow-hidden">
+        <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-100 flex flex-wrap items-center gap-3">
+          {arr.length>0 && <label className="flex items-center gap-2 text-sm font-bold text-slate-800 cursor-pointer"><input type="checkbox" checked={todos} onChange={e=>marcarSec(sec,e.target.checked)} aria-label={"Incluir "+rot}/>{rot}</label>}
+          {!arr.length && <span className="text-sm font-bold text-slate-800">{rot}</span>}
+          <span className="text-xs text-slate-500">{arr.filter(l=>l.inc).length} de {arr.length} · {fmtBRL(tot(arr.filter(l=>l.inc)))}</span>
+        </div>
+        {arr.length>0 && <div className="overflow-x-auto"><table className="w-full text-sm min-w-[760px]">
+          <thead><tr className="text-left text-slate-400 text-xs border-b border-slate-100">{["","Nome","Função / serviço","Dias","Valor","Pago","Observação",""].map((h,i)=><th key={i} className="px-3 py-2 font-semibold">{h}</th>)}</tr></thead>
+          <tbody className="divide-y divide-slate-50">{arr.map(l=><tr key={l.k} className={cx(!l.inc&&"opacity-50")}>
+            <td className="px-3 py-2 w-8"><input type="checkbox" checked={!!l.inc} onChange={e=>setAj(l.k,"inc",e.target.checked)} aria-label={"Incluir "+l.nome}/></td>
+            <td className="px-3 py-2 font-semibold text-slate-800">{l.nome}</td>
+            <td className="px-3 py-2 text-slate-500">{l.desc}</td>
+            <td className="px-3 py-2">{l.sec==="pj"||l.sec==="conf" ? <span className="text-slate-300">—</span> : <input type="number" min="0" className={inp} value={(aj[l.k]||{}).dias!=null?(aj[l.k]||{}).dias:(l.diasOrig??"")} onChange={e=>setAj(l.k,"dias",e.target.value)} aria-label={"Dias de "+l.nome}/>}</td>
+            <td className="px-3 py-2"><input type="number" step="0.01" className={cx(inp,"w-28",l.editado&&"border-amber-300 bg-amber-50")} value={(aj[l.k]||{}).valor!=null?(aj[l.k]||{}).valor:(Math.round((Number(l.valorOrig)||0)*100)/100)} onChange={e=>setAj(l.k,"valor",e.target.value)} aria-label={"Valor de "+l.nome}/></td>
+            <td className="px-3 py-2 text-emerald-600 tabular-nums">{l.pago>0?fmtBRL(l.pago):"—"}</td>
+            <td className="px-3 py-2"><input className="w-full min-w-[140px] px-2 py-1 rounded-lg border border-slate-200 text-sm" value={l.obs} onChange={e=>setAj(l.k,"obs",e.target.value)} placeholder="opcional" aria-label={"Observação de "+l.nome}/></td>
+            <td className="px-3 py-2 text-right">{l.manual ? <button onClick={()=>rmManual(l.id)} className="text-xs text-rose-500 hover:underline">Remover</button> : l.editado ? <button onClick={()=>{ setAj(l.k,"dias",null); setAj(l.k,"valor",null); }} className="text-xs text-slate-500 hover:underline" title="Voltar ao valor calculado">Desfazer</button> : null}</td>
+          </tr>)}</tbody></table></div>}
+        {sec==="manual" && <div className="p-3 flex flex-wrap items-end gap-2 border-t border-slate-100">
+          <Field label="Nome"><Input value={nova.nome} onChange={e=>setNova({...nova,nome:e.target.value})} placeholder="Ex.: Fornecedor, ajuda de custo" aria-label="Nome do lançamento"/></Field>
+          <Field label="Descrição"><Input value={nova.desc} onChange={e=>setNova({...nova,desc:e.target.value})} placeholder="opcional"/></Field>
+          <Field label="Dias"><Input type="number" min="0" value={nova.dias} onChange={e=>setNova({...nova,dias:e.target.value})} className="w-20" aria-label="Dias do lançamento"/></Field>
+          <Field label="Valor (R$)"><Input type="number" step="0.01" value={nova.valor} onChange={e=>setNova({...nova,valor:e.target.value})} className="w-28" aria-label="Valor do lançamento"/></Field>
+          <Btn icon={I.plus} onClick={addManual}>Incluir linha</Btn>
+        </div>}
+      </Card>; })}
+    <p className="text-[11px] text-slate-400">Freela Fixo e CLT: dias = dias com jornada registrada no ponto no período; valor = líquido estimado da folha. PJ: valor mensal do contrato × meses no período. Freelancers: diárias e total do período.</p>
+  </>;
+}
 function PagamentoSalariados({ modo, ini, fim, uni }){
   const { clts, pjs, unidades, registros, pontoHist, getDossie, cltExtraAjuste, gorjetasCLT, escala, escalaOv, atestados, acesso, pagamentosCLT, addPagamentoCLT, removePagamentoCLT, pagamentosPJ, addPagamentoPJ, removePagamentoPJ, faltaDescontoDesde, feriadosExtras } = useStore();
   const ehPJ = modo==="pj";
@@ -3462,7 +3610,7 @@ function Pagamentos() {
     </PageHeader>
 
     <div className="flex flex-wrap gap-2 mb-3">
-      {[["freela","Freelancers"],["clt","CLT"],["confianca","Gerência & Diretoria"],["pj","Prestadores PJ"]].map(([k,l])=>
+      {[["freela","Freelancers"],["clt","CLT"],["confianca","Gerência & Diretoria"],["pj","Prestadores PJ"],["relatorio","Relatório p/ Financeiro"]].map(([k,l])=>
         <button key={k} onClick={()=>{setAbaP(k);setAberto(null);}} className={cx("px-4 py-2 rounded-xl text-sm font-semibold border transition", abaP===k?"grad-brand text-white border-transparent shadow-glow":"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>{l}</button>)}
     </div>
 
@@ -3477,7 +3625,7 @@ function Pagamentos() {
       </div>
     </Card>
 
-    {abaP!=="freela" ? <PagamentoSalariados modo={abaP} ini={ini} fim={fim} uni={uni}/> : <>
+    {abaP==="relatorio" ? <RelatorioFinanceiro ini={ini} fim={fim} uni={uni} freelas={linhas}/> : abaP!=="freela" ? <PagamentoSalariados modo={abaP} ini={ini} fim={fim} uni={uni}/> : <>
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
       <StatCard icon={I.wallet} label="Total a pagar (mês)" value={fmtBRL(totalGeral)} tone="free"/>
       <StatCard icon={I.check} label="Já pago" value={fmtBRL(totalPago)} tone="green"/>
