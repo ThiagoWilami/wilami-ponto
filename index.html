@@ -162,7 +162,7 @@ const Badge = ({children, tone="slate"}) => {
   const map = {
     slate:"bg-slate-100 text-slate-600", brand:"bg-brand-50 text-brand-700",
     free:"bg-free-100 text-free-700", green:"bg-emerald-50 text-emerald-700",
-    red:"bg-rose-50 text-rose-700", amber:"bg-amber-50 text-amber-700", blue:"bg-sky-50 text-sky-700",
+    red:"bg-rose-50 text-rose-700", amber:"bg-amber-50 text-amber-700", blue:"bg-sky-50 text-sky-700", violet:"bg-violet-50 text-violet-700",
   };
   return <span className={cx("inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold", map[tone])}>{children}</span>;
 };
@@ -3253,56 +3253,95 @@ function minutosNoturnos(punches){ const g=a=>{ const p=punches.find(x=>x.acao==
   const fim=sai<ent?sai+1440:sai; let c=0; for(let m=ent;m<fim;m++){ if(ehMinNoturno(m)) c++; } return c; }
 const fmtSaldo=(min)=> (min<0?"-":"+")+fmtHoras(min);
 function Relatorios() {
-  const { clts, freelas, unidades, registros, pontoHist, getDossie } = useStore();
+  const { clts, freelasComPagamentos, pjs, unidades, registros, pontoHist, getDossie, cltExtraAjuste, gorjetasCLT, escala, escalaOv, atestados, faltaDescontoDesde, feriadosExtras,
+    pagamentosCLT, pagamentosPJ, pagamentosFreela, relFin, acesso } = useStore();
   const toast=useContext(ToastCtx);
-  const [f,setF]=useState("extras");
+  const _clock=useClock(60000);
+  const [f,setF]=useState("folha");
   const [casa,setCasa]=useState("todas");
-  const filtros=[["extras","Horas extras"],["atrasos","Atrasos & faltas"],["banco","Banco de horas"],["noturno","Adicional noturno"]];
-  const cols={extras:["Colaborador","Horas extras","Escala"],atrasos:["Colaborador","Atrasos & faltas","Escala"],banco:["Colaborador","Saldo de horas","Escala"],noturno:["Colaborador","Horas noturnas","Escala"]};
-  // Apuração REAL das batidas (CLT) — extras, atraso e noturno vêm dos registros; faltas do dossiê.
-  const apur=apurarHoras([...pontoHist, ...registros]).filter(x=>x.tipo==="clt" && x.completo);
-  const dados = clts.filter(c=>casa==="todas"||c.unidade===casa).map(c=>{
-    const meus=apur.filter(x=>x.nome===c.nome);
-    const extrasMin=meus.reduce((s,x)=>s+(x.extras||0)+(x.extras100||0),0);
-    const atrasoMin=meus.reduce((s,x)=>s+(x.atraso||0),0);
-    const notMin=meus.reduce((s,x)=>s+minutosNoturnos(x.punches||[]),0);
-    const dos=getDossie("clt-"+c.id);
-    const faltasQtd=(dos.faltas||[]).filter(x=>x.tipo==="falta"&&x.descontar).length;
-    const atrasosQtd=(dos.faltas||[]).filter(x=>x.tipo==="atraso").length;
-    return { c, extrasMin, atrasoMin, notMin, faltasQtd, atrasosQtd, saldoMin: extrasMin-atrasoMin };
-  });
-  const val=(d)=> f==="extras" ? (d.extrasMin?fmtHoras(d.extrasMin):"—")
-    : f==="atrasos" ? ((d.atrasoMin?fmtHoras(d.atrasoMin):"0h00")+(d.faltasQtd?` · ${d.faltasQtd} falta(s)`:""))
-    : f==="banco" ? fmtSaldo(d.saldoMin)
-    : (d.notMin?fmtHoras(d.notMin):"—");
-  const neg=(d)=> f==="banco" ? d.saldoMin<0 : f==="atrasos" ? (d.atrasoMin>0||d.faltasQtd>0) : false;
-  const exportar=()=>{
-    const cab="Colaborador;Escala;Horas_extras;Atrasos;Faltas;Saldo_banco_horas;Horas_noturnas";
-    const corpo=dados.map(d=>`${d.c.nome};${d.c.escala};${fmtHoras(d.extrasMin)};${fmtHoras(d.atrasoMin)};${d.faltasQtd};${fmtSaldo(d.saldoMin)};${fmtHoras(d.notMin)}`).join("\n");
-    const blob=new Blob([cab+"\n"+corpo],{type:"text/csv"}); const url=URL.createObjectURL(blob);
-    const a=document.createElement("a"); a.href=url; a.download="relatorio-clt.csv"; a.click(); URL.revokeObjectURL(url);
-    toast("Relatório consolidado exportado");
+  const [ym,setYm]=useState(hojeStr().slice(0,7));
+  const [y_,m_]=ym.split("-").map(Number); const [ini,fim]=mesDe(y_,m_);
+  const naData=(d)=> !!d && d>=ini && d<=fim;
+  const podeSigilo=!acesso||acesso.podeSigilo;
+  const naCasa=(u)=> casa==="todas" || Number(u)===Number(casa);
+  const apurTodas=useMemo(()=>apurarHoras([...pontoHist, ...registros]),[pontoHist,registros]);
+  const apur=apurTodas.filter(x=>x.tipo==="clt" && x.completo && naData(x.dia));
+  const nowMin=_clock.getHours()*60+_clock.getMinutes();
+  const faltasCtx={ escala, escalaOv, registros:[...pontoHist,...registros], atestados, ini, fim, hoje:hojeStr(), nowMin, desde:faltaDescontoDesde };
+  const folhaCtx={ apurCLT:apur, cltExtraAjuste, gorjetasCLT, ymRef:ym, getDossie, naData, faltasCtx, feriados:feriadosExtras };
+  const salariados=clts.filter(c=>c.status!=="inativo" && naCasa(c.unidade) && (!c.admissao||c.admissao<=fim) && (!c.fimContrato||c.fimContrato>=ini));
+  const vinc=(c)=> c.vinculo==="fixo"?"Freela Fixo":c.vinculo==="confianca"?"Gerência":"CLT";
+  const folha=useMemo(()=>salariados.filter(c=>c.vinculo!=="confianca").map(c=>({c,l:calcFolhaLinha(c,folhaCtx)})),[clts,casa,ym,apurTodas,escala,escalaOv,atestados,cltExtraAjuste,feriadosExtras]); // eslint-disable-line
+  const B=(v)=>({v:Math.round((Number(v)||0)*100)/100,t:"brl"}), H=(v)=>({v:Number(v)||0,t:"h"}), N=(v)=>({v:Number(v)||0,t:"n"}), S=(v)=>({v:v==null?"":String(v),t:"s"});
+  const soma=(rows,i)=>rows.reduce((s,r)=>s+(Number(r[i]&&r[i].v)||0),0);
+  const atestadosDe=(c)=>(atestados||[]).filter(a=>naData(a.data) && ((a.pid!=null&&String(a.pid)===String(c.id))||(c.cpf&&a.cpf&&soDigitos(a.cpf)===soDigitos(c.cpf)))).length;
+  const R={
+    folha:()=>{ const rows=folha.map(({c,l})=>[S(c.nome),S(vinc(c)),N((l.dias||[]).length),N(l.faltasQtd),B(l.salario),B(l.extrasVal),B(l.notVal+l.dsrReflexo),B(l.reposicao),B(l.descontos),B(l.liquido),B(l.vt)]);
+      return {cols:["Colaborador","Vínculo","Dias trab.","Faltas","Salário","Extras","Noturno + DSR","Complemento","Descontos","Líquido","VT (à parte)"], rows, tot:[4,5,6,7,8,9,10,2,3],
+        nota:"Mesma conta da folha e de Pagamentos: salário proporcional aos dias de contrato + extras + adicional noturno + DSR + complemento do combinado − descontos (faltas, DSR, atrasos, 6% VT). O VT é pago à parte."}; },
+    dias:()=>{ const rows=folha.map(({c,l})=>{ const esc=diasTrabalhoNoPeriodo(c,ini,fim,escala,escalaOv); return [S(c.nome),S(vinc(c)),S(c.admissao?fmtDataBR(c.admissao):""),N(l.diasContrato),N(esc),N((l.dias||[]).length),N(l.faltasQtd),S((l.faltaDatas||[]).map(d=>d.slice(8,10)+"/"+d.slice(5,7)).join(", ")),N(atestadosDe(c)),N(l.atrasosQtd)]; });
+      return {cols:["Colaborador","Vínculo","Admissão","Dias de contrato","Dias na escala","Dias trabalhados (ponto)","Faltas","Datas das faltas","Atestados","Atrasos"], rows, tot:[4,5,6,8,9],
+        nota:"Dias na escala = dias de trabalho previstos (folgas fora) dentro do contrato. Dias trabalhados = dias com entrada e saída no ponto. Faltas = escalado sem ponto e sem atestado (a partir da data de início do controle em Configurações)."}; },
+    extras:()=>{ const rows=folha.filter(({l})=>l.extrasMin+l.extras100Min>0||l.extrasVal>0).map(({c,l})=>[S(c.nome),S(vinc(c)),H(l.extrasMin),H(l.extras100Min),H(l.extSemanal),B(l.extrasVal),S(l.extrasEditado?"valor ajustado à mão":"")]);
+      return {cols:["Colaborador","Vínculo","HE 50%","HE 100% (folga/feriado)","Acima de 44h/sem","Valor das extras","Obs."], rows, tot:[2,3,4,5], nota:"Horas extras do mês pelas batidas reais (CLT art. 59): 50% em dia normal e acima de 44h na semana; 100% em folga da escala ou feriado."}; },
+    noturno:()=>{ const rows=folha.filter(({l})=>l.notMin>0).map(({c,l})=>[S(c.nome),S(vinc(c)),H(l.notRelMin),H(l.notMin),B(l.notVal)]);
+      return {cols:["Colaborador","Vínculo","Horas no relógio (22h–5h)","Horas noturnas (reduzidas)","Adicional 20%"], rows, tot:[2,3,4], nota:"Art. 73 CLT: trabalho entre 22h e 5h, hora noturna reduzida de 52min30s, adicional de 20%."}; },
+    banco:()=>{ const rows=salariados.filter(c=>c.vinculo!=="confianca").map(c=>{ const meus=apur.filter(x=>x.nome===c.nome); const ex=meus.reduce((s,x)=>s+(x.extras||0)+(x.extras100||0),0), at=meus.reduce((s,x)=>s+(x.atraso||0),0); return [S(c.nome),S(vinc(c)),H(ex),H(at),{v:ex-at,t:"saldo"}]; });
+      return {cols:["Colaborador","Vínculo","Horas a mais","Atrasos","Saldo do mês"], rows, tot:[2,3,4], nota:"Saldo do mês = horas trabalhadas a mais − atrasos, pelas batidas reais."}; },
+    freelas:()=>{ const rows=(freelasComPagamentos||[]).map(fr=>{ const js=(fr.jornadasHist||[]).filter(j=>naData(j.data)&&naCasa(j.unidade)); if(!js.length) return null;
+        const pago=(pagamentosFreela[String(fr.id)]||[]).filter(p=>p.comp?p.comp===ym:(p.semana?p.semana.slice(0,7)===ym:naData(p.ref||p.data))).reduce((s,p)=>s+(Number(p.valor)||0),0);
+        const tot=js.reduce((s,j)=>s+(Number(j.valor)||0),0); return [S(fr.nome),S(fr.cargo||""),N(js.length),H(js.reduce((s,j)=>s+(Number(j.horas)||0)*60,0)),B(tot),B(pago),B(tot-pago),S(fr.pix||"")]; }).filter(Boolean);
+      return {cols:["Freelancer","Função","Diárias","Horas","Valor","Pago","Saldo","Pix"], rows, tot:[2,3,4,5,6], nota:"Diárias registradas no mês (dia 01 ao último dia)."}; },
+    pj:()=>{ const rows=(pjs||[]).filter(pj=>pjAtivoNoPeriodo(pj,ini,fim)&&(casa==="todas"||naCasa(pj.unidade)||pj.unidade==null||pj.unidade==="todas")).map(pj=>{ const pv=pjValorNoPeriodo(pj,ini,fim);
+        const pago=(pagamentosPJ[String(pj.id)]||[]).filter(p=>pagoNaCompetencia(p,ym,naData)).reduce((s,p)=>s+(Number(p.valor)||0),0);
+        return [S(pj.nome),S(pj.servico||""),B(pj.valor),B(pv.total),S(pv.det.filter(d=>!d.cheio).map(d=>d.dias+" dia(s)").join(", ")||"mês cheio"),S(fmtDataBR(pjVencimento(pj,ym))),B(pago),B(pv.total-pago)]; });
+      return {cols:["Prestador","Serviço","Valor mensal","Valor do mês","Proporcional","Vencimento","Pago","Saldo"], rows, tot:[3,6,7], nota:"Valor do contrato proporcional aos dias de vigência no mês; vencimento no dia do contrato do mês seguinte."}; },
+    pagos:()=>{ const out=[]; const nomeClt=(id)=>{ const c=clts.find(x=>String(x.id)===String(id)); return c?c:null; };
+      Object.keys(pagamentosCLT||{}).forEach(id=>{ const c=nomeClt(id); if(!c||!naCasa(c.unidade)) return; if(c.vinculo==="confianca"&&c.sigiloso&&!podeSigilo) return;
+        (pagamentosCLT[id]||[]).filter(p=>naData(p.data)).forEach(p=>out.push([S(p.data),S(c.nome),S(p.tipo==="vt"?"Vale-transporte":vinc(c)),S(p.comp?fmtCompetencia(p.comp):""),S(p.forma||""),S(p.obs||""),B(p.valor)])); });
+      Object.keys(pagamentosPJ||{}).forEach(id=>{ const pj=(pjs||[]).find(x=>String(x.id)===String(id)); if(!pj) return; (pagamentosPJ[id]||[]).filter(p=>naData(p.data)).forEach(p=>out.push([S(p.data),S(pj.nome),S("PJ"),S(p.comp?fmtCompetencia(p.comp):""),S(p.forma||""),S(p.obs||""),B(p.valor)])); });
+      Object.keys(pagamentosFreela||{}).forEach(id=>{ const fr=(freelasComPagamentos||[]).find(x=>String(x.id)===String(id)); if(!fr||!naCasa(fr.unidade)) return; (pagamentosFreela[id]||[]).filter(p=>naData(p.data)).forEach(p=>out.push([S(p.data),S(fr.nome),S("Freelancer"),S(p.comp?fmtCompetencia(p.comp):p.semana?"semana "+fmtDataBR(p.semana):""),S(p.forma||""),S(p.obs||""),B(p.valor)])); });
+      Object.keys(relFin||{}).forEach(k=>{ ((relFin[k]||{}).manuais||[]).forEach(m=>{ if(!naCasa(m.unidade)&&casa!=="todas") return; (m.baixas||[]).filter(p=>naData(p.data)).forEach(p=>out.push([S(p.data),S(m.nome),S("Manual · "+m.tipoLanc),S(p.comp?fmtCompetencia(p.comp):""),S(p.forma||""),S(m.desc||p.obs||""),B(p.valor)])); }); });
+      out.sort((a,b)=>a[0].v.localeCompare(b[0].v)); out.forEach(r=>{ r[0]={v:fmtDataBR(r[0].v),t:"s"}; });
+      return {cols:["Pago em","Nome","Tipo","Referente a","Forma","Observação","Valor"], rows:out, tot:[6], nota:"Tudo o que saiu do caixa com data de pagamento neste mês (extrato), de qualquer competência."}; },
   };
+  const filtros=[["folha","Folha do mês"],["dias","Dias trabalhados & faltas"],["extras","Horas extras"],["noturno","Adicional noturno"],["banco","Banco de horas"],["freelas","Freelancers"],["pj","Prestadores PJ"],["pagos","Pagamentos feitos"]];
+  const rel=R[f]();
+  const fmtC=(c)=> c.t==="brl"?fmtBRL(c.v) : c.t==="h"?(c.v?fmtHoras(Math.round(c.v)):"—") : c.t==="saldo"?fmtSaldo(Math.round(c.v)) : c.t==="n"?String(c.v) : c.v;
+  const totRow=rel.tot&&rel.rows.length ? rel.cols.map((_,i)=> i===0?{v:"Total",t:"s"} : rel.tot.includes(i) ? {v:soma(rel.rows,i),t:(rel.rows[0][i]||{}).t} : {v:"",t:"s"}) : null;
+  const nomeArq="Relatorio "+(filtros.find(x=>x[0]===f)||[])[1]+" "+ym+(casa!=="todas"?" "+unidadeNome(Number(casa),unidades):"");
+  const exportarCSV=()=>{ const cel=(c)=> c.t==="s"?'"'+String(c.v).replace(/"/g,'""')+'"' : c.t==="h"||c.t==="saldo" ? fmtHoras(Math.round(c.v)).replace("h",":") : String(Math.round(c.v*100)/100).replace(".",",");
+    const linhas=[rel.cols.join(";"), ...rel.rows.map(r=>r.map(cel).join(";")), ...(totRow?[totRow.map(cel).join(";")]:[])];
+    baixarBlob(new Blob(["﻿"+linhas.join("\n")],{type:"text/csv;charset=utf-8"}),nomeArq.replace(/[\\/:*?"<>|]/g,"")+".csv"); toast("Relatório exportado ("+rel.rows.length+" linhas)"); };
+  const exportarExcel=async()=>{ if(!window.ExcelJS){ exportarCSV(); return; } const wb=new ExcelJS.Workbook(); const ws=wb.addWorksheet("Relatório");
+    ws.addRow([nomeArq]).font={bold:true,size:13}; ws.addRow(["Competência "+fmtCompetencia(ym)+" (01 a "+fmtDataBR(fim)+")"]); ws.addRow([]);
+    const h=ws.addRow(rel.cols); h.font={bold:true};
+    const val=(c)=> c.t==="h"||c.t==="saldo" ? (c.v?fmtHoras(Math.round(c.v)):"") : c.v;
+    rel.rows.forEach(r=>{ const row=ws.addRow(r.map(val)); r.forEach((c,i)=>{ if(c.t==="brl") row.getCell(i+1).numFmt='"R$" #,##0.00'; }); });
+    if(totRow){ const t=ws.addRow(totRow.map(val)); t.font={bold:true}; totRow.forEach((c,i)=>{ if(c.t==="brl") t.getCell(i+1).numFmt='"R$" #,##0.00'; }); }
+    ws.columns.forEach(c=>{ c.width=18; }); ws.getColumn(1).width=30;
+    const buf=await wb.xlsx.writeBuffer(); baixarBlob(new Blob([buf],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}),nomeArq.replace(/[\\/:*?"<>|]/g,"")+".xlsx"); toast("Excel gerado ("+rel.rows.length+" linhas)"); };
   return <div className="fade-in">
-    <PageHeader title="Relatórios" sub="Cálculo conforme CLT e Portaria 671/2021 · consolidado para folha">
-      <Btn variant="ghost" icon={I.download} onClick={exportar}>Exportar</Btn>
+    <PageHeader title="Relatórios" sub="Cálculo conforme CLT e Portaria 671/2021 · sempre do dia 01 ao último dia do mês · mesma conta da folha e de Pagamentos">
+      <Btn variant="ghost" icon={I.download} onClick={exportarCSV}>CSV</Btn>
+      <Btn icon={I.download} onClick={exportarExcel}>Exportar Excel</Btn>
     </PageHeader>
     <div className="flex flex-wrap gap-2 mb-3">
       {filtros.map(([k,l])=><button key={k} onClick={()=>setF(k)} className={cx("px-4 py-2 rounded-xl text-sm font-semibold border transition", f===k?"grad-brand text-white border-transparent shadow-glow":"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>{l}</button>)}
     </div>
+    <div className="flex flex-wrap items-center gap-3 mb-1">
+      <Field label="Mês (competência)"><Input type="month" value={ym} onChange={e=>e.target.value&&setYm(e.target.value)} aria-label="Mês do relatório"/></Field>
+    </div>
     <FiltroCasa casa={casa} setCasa={setCasa} unidades={unidades}/>
-    {f==="noturno" && <div className="mb-3 text-xs text-slate-400">Adicional noturno: horas trabalhadas entre 22h e 5h (Art. 73 CLT) — calculado das batidas reais.</div>}
-    {f==="banco" && <div className="mb-3 text-xs text-slate-400">Saldo do banco de horas = horas extras − atrasos (das batidas reais).</div>}
-    <Card className="overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm min-w-[520px]">
-      <thead><tr className="text-left text-slate-400 border-b border-slate-100">{cols[f].map(h=><th key={h} className="px-4 py-3 font-semibold">{h}</th>)}</tr></thead>
+    {rel.nota && <div className="mb-3 text-xs text-slate-500">{rel.nota}</div>}
+    <Card className="overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm min-w-[640px]">
+      <thead><tr className="text-left text-slate-400 border-b border-slate-100">{rel.cols.map(h=><th key={h} className="px-3 py-3 font-semibold text-xs">{h}</th>)}</tr></thead>
       <tbody className="divide-y divide-slate-50">
-        {dados.map((d,i)=><tr key={i} className="hover:bg-slate-50/70">
-          <td className="px-4 py-3"><div className="flex items-center gap-2"><Avatar name={d.c.nome} src={d.c.foto} tone="brand" size="w-7 h-7"/><span className="font-semibold text-slate-800">{d.c.nome}</span></div></td>
-          <td className={cx("px-4 py-3 font-semibold tabular-nums", neg(d)?"text-rose-600":"text-slate-700")}>{val(d)}</td>
-          <td className="px-4 py-3"><Badge tone="brand">{d.c.escala}</Badge></td>
-        </tr>)}
-        {dados.length===0 && <tr><td colSpan="3" className="px-4 py-8 text-center text-slate-400">Nenhum colaborador CLT nesta casa.</td></tr>}
-      </tbody></table></div></Card>
+        {rel.rows.map((r,i)=><tr key={i} className="hover:bg-slate-50/70">{r.map((c,j)=><td key={j} className={cx("px-3 py-2.5", j===0?"font-semibold text-slate-800":"text-slate-600", c.t!=="s"&&"tabular-nums whitespace-nowrap", c.t==="saldo"&&c.v<0&&"text-rose-600")}>{fmtC(c)}</td>)}</tr>)}
+        {rel.rows.length===0 && <tr><td colSpan={rel.cols.length} className="px-4 py-8 text-center text-slate-400">Nada neste mês{casa!=="todas"?" nesta casa":""}.</td></tr>}
+      </tbody>
+      {totRow && <tfoot><tr className="border-t-2 border-slate-100 bg-slate-50/60 font-bold">{totRow.map((c,j)=><td key={j} className="px-3 py-2.5 tabular-nums whitespace-nowrap">{c.t==="s"?c.v:fmtC(c)}</td>)}</tr></tfoot>}
+    </table></div></Card>
   </div>;
 }
 
@@ -3312,6 +3351,20 @@ function Relatorios() {
 // Uma lista só por competência (dia 01 ao último dia): salário CLT/Freela Fixo/Gerência e VT (vindos da folha),
 // PJ (contrato), freelancers (diárias) e lançamentos manuais. Cada linha tem valor previsto e vencimento editáveis,
 // e "Dar baixa" grava o pagamento (data em que o Financeiro pagou) no mesmo lugar usado pelas outras telas.
+// ---- Pago a mais → desconto na competência seguinte ----
+// O excesso fica gravado nos ajustes do mês seguinte (relatorioFinanceiro[mês+1].aj[chave].credito) e abate o valor previsto
+// daquela conta; no mês de origem fica a marca "creditoPara" (para não lançar duas vezes e permitir desfazer).
+function relFinLancarCredito(setRelFin, ym, legado, k, valor){ const nx=mesSeguinte(ym); const v=Math.round(Number(valor)*100)/100;
+  setRelFin(prev=>{ const P=prev||{}; const cur=P[ym]||P[legado]||{}; const ca=cur.aj||{}; const nxt=P[nx]||{}; const na=nxt.aj||{};
+    return {...P,[ym]:{...cur,aj:{...ca,[k]:{...(ca[k]||{}),creditoPara:nx,creditoValor:v}}},[nx]:{...nxt,aj:{...na,[k]:{...(na[k]||{}),credito:{valor:v,de:ym}}}}}; }); return nx; }
+function relFinDesfazerCredito(setRelFin, ym, legado, k){ const nx=mesSeguinte(ym);
+  setRelFin(prev=>{ const P=prev||{}; const cur=P[ym]||P[legado]||{}; const ca=cur.aj||{}; const nxt=P[nx]||{}; const na=nxt.aj||{};
+    const {creditoPara,creditoValor,...restoCur}=ca[k]||{}; const {credito,...restoNx}=na[k]||{};
+    return {...P,[ym]:{...cur,aj:{...ca,[k]:restoCur}},[nx]:{...nxt,aj:{...na,[k]:restoNx}}}; }); }
+// valor previsto de uma conta: ajuste manual vale como valor final; senão = calculado − desconto de pagamento a mais do mês anterior
+function previstoConta(calc, a){ a=a||{}; const cred=a.credito&&Number(a.credito.valor)>0?Math.round(Number(a.credito.valor)*100)/100:0;
+  const editado=a.valor!=null&&a.valor!=="";
+  return { previsto:Math.round((editado?Number(a.valor):Math.max(0,Number(calc||0)-cred))*100)/100, cred, credDe:a.credito&&a.credito.de, editado, creditoPara:a.creditoPara, creditoValor:a.creditoValor }; }
 const TIPOS_CONTA=[["clt","CLT"],["fixo","Freela Fixo"],["pj","PJ"],["vt","Vale-transporte"],["free","Freelancers"],["conf","Gerência & Diretoria"],["manual","Manuais"]];
 const TIPOS_MANUAL=["Vale-transporte","Adiantamento","Complemento de salário","Bônus / gratificação","Reembolso","Outro"];
 const FORMAS_PAG=["Dinheiro","Pix","Transferência","Cartão / VT eletrônico","Outro"];
@@ -3350,7 +3403,7 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
       out.push({k:"pj-"+pj.id, tipo:"pj", pid:pj.id, nome:pj.nome, desc:(pj.servico||"Prestação de serviço")+((pjValorNoPeriodo(pj,ini,fim).det.find(d=>!d.cheio))?" · proporcional "+pjValorNoPeriodo(pj,ini,fim).det.filter(d=>!d.cheio).map(d=>d.dias+" dia(s)").join(", "):""), dias:null, previsto:pjValorNoPeriodo(pj,ini,fim).total, venc:pjVencimento(pj,ymRef), pix:pj.pix||"", unidade:pj.unidade}); });
     (freelasComPagamentos||[]).forEach(f=>{ const js=(f.jornadasHist||[]).filter(j=>naData(j.data) && (uni==="todas"||Number(j.unidade)===Number(uni)));
       const pagos=(pagamentosFreela[String(f.id)]||[]).filter(p=>p.comp?p.comp===ymRef:(p.semana?p.semana.slice(0,7)===ymRef:naData(p.ref||p.data||"")));
-      if(!js.length && !pagos.length) return;
+      if(!js.length && !pagos.length && !((aj["free-"+f.id]||{}).credito)) return;
       out.push({k:"free-"+f.id, tipo:"free", pid:f.id, nome:f.nome, desc:(f.cargo||"Freelancer")+" · "+js.length+" diária(s)", dias:js.length, previsto:js.reduce((s,j)=>s+(Number(j.valor)||0),0), venc:"", pix:f.pix||"", unidade:f.unidade}); });
     return out; },[clts,pjs,freelasComPagamentos,pagamentosFreela,pagamentosCLT,relFin,ini,fim,uni,apurCLT,escala,escalaOv,vtDiaPagamento,feriadosExtras]); // eslint-disable-line
   // ---- pagamentos (baixas) de cada linha: gravados nos mesmos cadastros de pagamento das outras telas ----
@@ -3362,18 +3415,20 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
     return (pagamentosCLT[String(l.pid)]||[]).filter(p=>p.tipo!=="vt" && pagoNaCompetencia(p,ymRef,naData)); };
   const linhas=[...base, ...manuais.filter(m=>uni==="todas"||!m.unidade||Number(m.unidade)===Number(uni)).map(m=>({k:"man-"+m.id, tipo:"manual", id:m.id, nome:m.nome, desc:m.tipoLanc+(m.desc?" · "+m.desc:""), dias:null, previsto:Number(m.valor)||0, venc:m.venc||"", baixas:m.baixas||[], pix:"", unidade:m.unidade, manual:true}))]
     .map(l=>{ const a=aj[l.k]||{};
-      const previsto=r2(a.valor!=null&&a.valor!=="" ? Number(a.valor) : l.previsto);
+      const pc=l.manual ? {previsto:r2(l.previsto),cred:0,editado:false} : previstoConta(l.previsto,a); const previsto=pc.previsto;
       const venc=a.pagar!=null ? a.pagar : l.venc;
       const pagos=pagosDaLinha(l); const pago=r2(pagos.reduce((s,p)=>s+(Number(p.valor)||0),0)); const saldo=r2(previsto-pago);
       const ultimo=[...pagos].sort((x,y)=>String(y.data||"").localeCompare(String(x.data||"")))[0];
-      const status= previsto>0 && saldo<=0.009 ? "pago" : pago>0 ? "parcial" : (venc && venc<hoje ? "vencido" : "apagar");
-      return {...l, previsto, venc, pagos, pago, saldo, ultimo, status, inc:a.inc!=null?a.inc:true, obs:a.obs!=null?a.obs:"", editado:a.valor!=null&&a.valor!=="", previstoOrig:r2(l.previsto)}; });
+      const aMais = pago>0 && saldo< -0.009 ? r2(-saldo) : 0;
+      const status= aMais>0 ? "amais" : previsto>0 && saldo<=0.009 ? "pago" : (previsto<=0 && pago<=0 && pc.cred>0) ? "pago" : pago>0 ? "parcial" : (venc && venc<hoje ? "vencido" : "apagar");
+      const desc = l.desc + (pc.cred>0 && !pc.editado ? " · − "+fmtBRL(pc.cred)+" pago a mais em "+fmtCompetencia(pc.credDe) : "");
+      return {...l, desc, previsto, venc, pagos, pago, saldo, aMais, cred:pc.cred, credDe:pc.credDe, creditoPara:pc.creditoPara, creditoValor:pc.creditoValor, ultimo, status, inc:a.inc!=null?a.inc:true, obs:a.obs!=null?a.obs:"", editado:!!pc.editado, previstoOrig:r2(l.previsto)}; });
   // ---- filtros ----
   const [tiposSel,setTiposSel]=useState(()=> modo==="financeiro" ? ["clt","fixo","pj","vt"] : TIPOS_CONTA.map(t=>t[0]));
   const [stSel,setStSel]=useState("todos");   // todos | apagar | vencido | pago
   const [ordem,setOrdem]=useState("tipo");    // tipo | venc
   const togTipo=(t)=>setTiposSel(p=>p.includes(t)?p.filter(x=>x!==t):[...p,t]);
-  const visiveis=linhas.filter(l=>tiposSel.includes(l.tipo)).filter(l=> stSel==="todos" ? true : stSel==="pago" ? l.status==="pago" : stSel==="vencido" ? l.status==="vencido" : l.status!=="pago");
+  const visiveis=linhas.filter(l=>tiposSel.includes(l.tipo)).filter(l=> stSel==="todos" ? true : stSel==="pago" ? (l.status==="pago"||l.status==="amais") : stSel==="vencido" ? l.status==="vencido" : (l.status!=="pago"&&l.status!=="amais"));
   const soma=(arr,c)=>r2(arr.reduce((s,l)=>s+(Number(l[c])||0),0));
   const base4=linhas.filter(l=>tiposSel.includes(l.tipo));
   // ---- dar baixa / desfazer ----
@@ -3416,7 +3471,7 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
   const [oQue,setOQue]=useState("futuros");   // futuros | mes
   const uNome=uni==="todas"?"Todas as casas":unidadeNome(Number(uni),unidades);
   const rotTipo=(t)=>(TIPOS_CONTA.find(x=>x[0]===t)||[t,t])[1];
-  const stTxt=(l)=> l.status==="pago" ? "Pago em "+fmtDataBR(l.ultimo&&l.ultimo.data) : l.status==="parcial" ? "Parcial ("+fmtBRL(l.pago)+")" : l.status==="vencido" ? "Vencido" : "A pagar";
+  const stTxt=(l)=> l.status==="amais" ? "Pago a mais "+fmtBRL(l.aMais) : l.status==="pago" ? "Pago em "+fmtDataBR(l.ultimo&&l.ultimo.data) : l.status==="parcial" ? "Parcial ("+fmtBRL(l.pago)+")" : l.status==="vencido" ? "Vencido" : "A pagar";
   const paraExportar=()=>{ const sel=visiveis.filter(l=>l.inc);
     return oQue==="futuros" ? sel.filter(l=>l.saldo>0.009).sort((a,b)=>(a.venc||"9999").localeCompare(b.venc||"9999")||String(a.nome).localeCompare(b.nome)) : sel; };
   const porData=(arr)=>{ const m={}; arr.forEach(l=>{ const d=l.venc||""; m[d]=(m[d]||0)+(l.saldo>0?l.saldo:0); }); return Object.keys(m).sort((a,b)=>!a?1:!b?-1:a.localeCompare(b)).map(d=>[d,r2(m[d])]); };
@@ -3469,17 +3524,22 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
     t+="\n*Total "+(oQue==="futuros"?"a pagar":"previsto")+": "+fmtBRL(oQue==="futuros"?r2(arr.reduce((s,l)=>s+Math.max(0,l.saldo),0)):soma(arr,"previsto"))+"*";
     copyText(t); toast("Texto copiado — cole no WhatsApp ou e-mail do Financeiro"); };
   // ---- tela ----
-  const tonSt={pago:"green",parcial:"amber",vencido:"red",apagar:"blue"};
+  const tonSt={pago:"green",parcial:"amber",vencido:"red",apagar:"blue",amais:"violet"};
+  const legado=(ini||"")+"|"+(fim||"")+"|todas";
+  const descontarProx=(l)=>{ const nx=relFinLancarCredito(setRelFin,ymRef,legado,l.k,l.aMais); toast("Desconto de "+fmtBRL(l.aMais)+" lançado em "+fmtCompetencia(nx)+" ("+l.nome+")"); };
+  const desfazerDesc=(l)=>{ if(!confirm("Cancelar o desconto de "+fmtBRL(l.creditoValor||l.aMais)+" em "+fmtCompetencia(l.creditoPara)+"?")) return; relFinDesfazerCredito(setRelFin,ymRef,legado,l.k); toast("Desconto cancelado"); };
   const inp="px-2 py-1 rounded-lg border border-slate-200 text-sm";
   const linhaTr=(l)=>[<tr key={l.k} className={cx("align-middle", !l.inc&&"opacity-50")}>
       <td className="px-2 py-2 w-8"><input type="checkbox" checked={!!l.inc} onChange={e=>setAj(l.k,"inc",e.target.checked)} aria-label={"Incluir "+l.k} title="Incluir no relatório"/></td>
       <td className="px-2 py-2"><div className="font-semibold text-slate-800 leading-tight">{l.nome}</div><div className="text-[11px] text-slate-400">{l.desc}</div></td>
       <td className="px-2 py-2"><Badge tone={l.tipo==="pj"?"blue":l.tipo==="vt"?"amber":l.tipo==="fixo"||l.tipo==="free"?"free":l.tipo==="manual"?"slate":"brand"}>{rotTipo(l.tipo)}</Badge></td>
-      <td className="px-2 py-2"><input type="number" step="0.01" className={cx(inp,"w-28 text-right tabular-nums",l.editado&&"border-amber-300 bg-amber-50")} value={(aj[l.k]||{}).valor!=null?(aj[l.k]||{}).valor:l.previstoOrig} onChange={e=>setAj(l.k,"valor",e.target.value)} aria-label={"Previsto "+l.k} title={l.editado?"Valor ajustado à mão (calculado: "+fmtBRL(l.previstoOrig)+")":"Valor calculado"}/></td>
+      <td className="px-2 py-2"><input type="number" step="0.01" className={cx(inp,"w-28 text-right tabular-nums",l.editado&&"border-amber-300 bg-amber-50")} value={(aj[l.k]||{}).valor!=null?(aj[l.k]||{}).valor:l.previsto} onChange={e=>setAj(l.k,"valor",e.target.value)} aria-label={"Previsto "+l.k} title={l.editado?"Valor ajustado à mão (calculado: "+fmtBRL(l.previstoOrig)+")":l.cred>0?"Calculado "+fmtBRL(l.previstoOrig)+" − "+fmtBRL(l.cred)+" pago a mais no mês anterior":"Valor calculado"}/></td>
       <td className="px-2 py-2"><input type="date" className={inp} value={l.venc||""} onChange={e=>setAj(l.k,"pagar",e.target.value)} aria-label={"Vencimento "+l.k}/></td>
-      <td className="px-2 py-2"><Badge tone={tonSt[l.status]}>{stTxt(l)}</Badge>{l.status==="parcial"&&<div className="text-[11px] font-semibold text-amber-700 mt-0.5">falta {fmtBRL(l.saldo)}</div>}{l.pagos.length>0&&<div className="text-[10px] text-slate-400 mt-0.5 leading-tight">{l.pagos.map(p=>fmtBRL(Number(p.valor)||0)+" "+fmtDataBR(p.data)+(p.forma?" "+p.forma.toLowerCase():"")).join(" · ")}</div>}</td>
+      <td className="px-2 py-2"><Badge tone={tonSt[l.status]}>{stTxt(l)}</Badge>{l.status==="parcial"&&<div className="text-[11px] font-semibold text-amber-700 mt-0.5">falta {fmtBRL(l.saldo)}</div>}{l.status==="amais"&&<div className="text-[11px] font-semibold text-violet-700 mt-0.5">{l.creditoPara?"desconto de "+fmtBRL(l.creditoValor||l.aMais)+" lançado em "+fmtCompetencia(l.creditoPara):"descontar no próximo mês"}</div>}{l.pagos.length>0&&<div className="text-[10px] text-slate-400 mt-0.5 leading-tight">{l.pagos.map(p=>fmtBRL(Number(p.valor)||0)+" "+fmtDataBR(p.data)+(p.forma?" "+p.forma.toLowerCase():"")).join(" · ")}</div>}</td>
       <td className="px-2 py-2 text-right whitespace-nowrap">
         {l.saldo>0.009 && <Btn size="sm" icon={I.check} onClick={()=>setBaixa({k:l.k,data:hoje,valor:l.saldo,obs:"",forma:l.tipo==="vt"?"Dinheiro":"Pix"})}>Dar baixa</Btn>}
+        {l.status==="amais" && !l.manual && !l.creditoPara && modo!=="financeiro" && <Btn size="sm" variant="soft" onClick={()=>descontarProx(l)}>Descontar no próximo mês</Btn>}
+        {l.status==="amais" && !l.manual && l.creditoPara && modo!=="financeiro" && <button onClick={()=>desfazerDesc(l)} className="ml-2 text-xs text-violet-600 hover:underline">Cancelar desconto</button>}
         {l.ultimo && <button onClick={()=>desfazer(l)} className="ml-2 text-xs text-slate-500 hover:text-rose-600 hover:underline">Desfazer</button>}
         {l.manual && <button onClick={()=>rmManual(l.id)} className="ml-2 text-xs text-rose-500 hover:underline">Excluir</button>}
       </td>
@@ -3498,6 +3558,79 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
     ? porData(visiveis.map(l=>({...l,saldo:1}))).map(([d])=>[d?("Vencimento "+fmtDataBR(d)):"Sem vencimento", [...visiveis.filter(l=>(l.venc||"")===d)].sort((a,b)=>String(a.nome).localeCompare(b.nome))])
     : TIPOS_CONTA.map(([t,rot])=>[rot, visiveis.filter(l=>l.tipo===t).sort((a,b)=>String(a.nome).localeCompare(b.nome))]);
   const vencidos=base4.filter(l=>l.status==="vencido");
+  const chipsTipo=<div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs font-bold uppercase text-slate-400 mr-1">Mostrar</span>
+        {TIPOS_CONTA.map(([t,rot])=><button key={t} onClick={()=>togTipo(t)} className={cx("px-3 py-1.5 rounded-lg text-xs font-semibold border", tiposSel.includes(t)?"grad-brand text-white border-transparent":"bg-white border-slate-200 text-slate-500")}>{rot} <span className="opacity-70">{linhas.filter(l=>l.tipo===t).length}</span></button>)}
+        <button onClick={()=>setTiposSel(TIPOS_CONTA.map(t=>t[0]))} className="text-xs text-brand-700 hover:underline ml-1">todos</button>
+      </div>;
+  const cardExport=<Card className="p-4 mt-4">
+      <div className="font-bold text-slate-800 mb-2">Relatório para o Financeiro</div>
+      <div className="flex flex-wrap items-center gap-2">
+        {[["futuros","Pagamentos futuros (a pagar)"],["mes","Mês completo"]].map(([k,l])=><button key={k} onClick={()=>setOQue(k)} className={cx("px-3 py-1.5 rounded-lg text-xs font-semibold border", oQue===k?"bg-slate-800 text-white border-transparent":"bg-white border-slate-200 text-slate-500")}>{l}</button>)}
+        <div className="flex-1"/>
+        <Btn icon={I.download} onClick={exportarExcel}>Exportar Excel</Btn>
+        <Btn variant="soft" icon={I.download} onClick={exportarPdf}>Exportar PDF</Btn>
+        <Btn variant="ghost" icon={I.copy} onClick={copiarTexto}>Copiar texto</Btn>
+      </div>
+      <p className="text-[11px] text-slate-400 mt-2">Usa os tipos e a casa escolhidos e só as linhas marcadas em Pagamentos → Contas do mês. Competência sempre do dia 01 ao último dia do mês. Vencimentos sugeridos: salários no 5º dia útil do mês seguinte; VT no dia {Number(vtDiaPagamento)||5} (Configurações); PJ no dia do contrato no mês seguinte.</p>
+    </Card>;
+  // ===== Financeiro → Geral: painel de ANÁLISE (só leitura). Pagar, dar baixa e lançar fica em Pagamentos. =====
+  if(modo==="financeiro"){
+    const sel=base4; const aPagar=(arr)=>r2(arr.reduce((s,l)=>s+Math.max(0,l.saldo),0)); const prevT=soma(sel,"previsto")||0;
+    const aMaisArr=sel.filter(l=>l.aMais>0); const credArr=sel.filter(l=>l.cred>0);
+    const porTipo=TIPOS_CONTA.map(([t,rot])=>{ const arr=sel.filter(l=>l.tipo===t); return {t,rot,n:new Set(arr.map(l=>l.nome)).size,prev:soma(arr,"previsto"),pago:soma(arr,"pago"),ap:aPagar(arr)}; }).filter(x=>x.n>0);
+    const casas={}; sel.forEach(l=>{ const u=(l.unidade==null||l.unidade==="todas")?"geral":String(l.unidade); (casas[u]=casas[u]||[]).push(l); });
+    const porCasa=Object.keys(casas).map(u=>({u, nome:u==="geral"?"Geral (todas as casas)":unidadeNome(Number(u),unidades), prev:soma(casas[u],"previsto"), pago:soma(casas[u],"pago"), ap:aPagar(casas[u]), n:casas[u].length})).sort((a,b)=>b.prev-a.prev);
+    const crono=porData(sel.filter(l=>l.saldo>0.009)).map(([d,v])=>({d,v,arr:sel.filter(l=>l.saldo>0.009&&(l.venc||"")===d)}));
+    const pagamentos=sel.flatMap(l=>l.pagos.map(p=>({...p,nome:l.nome,tipo:l.tipo}))).sort((a,b)=>String(a.data||"").localeCompare(String(b.data||"")));
+    const porForma={}; pagamentos.forEach(p=>{ const f=p.forma||"Não informado"; porForma[f]=r2((porForma[f]||0)+(Number(p.valor)||0)); });
+    const irPag=()=>{ try{ window.dispatchEvent(new CustomEvent("wp-ir-para",{detail:"pagamentos"})); }catch(e){} };
+    const th="px-3 py-2 font-semibold", td="px-3 py-2 tabular-nums";
+    const barra=(v)=> <div className="h-1.5 rounded-full bg-slate-100 w-24"><div className="h-1.5 rounded-full grad-brand" style={{width:Math.min(100,prevT?v/prevT*100:0)+"%"}}/></div>;
+    return <>
+      <div className="mb-3 p-3 rounded-xl bg-slate-50 border border-slate-100 text-xs text-slate-600 flex flex-wrap items-center gap-2">
+        <Icon d={I.chart} className="w-4 h-4 text-brand-700"/>
+        <span><b>Financeiro = visão e análise</b> do custo do mês (só leitura). Para <b>pagar, dar baixa, mudar vencimento ou lançar pagamento</b> use <b>Pagamentos → Contas do mês</b>.</span>
+        <div className="flex-1"/><Btn size="sm" variant="soft" onClick={irPag}>Ir para Pagamentos</Btn>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+        <StatCard icon={I.wallet} label="Custo previsto do mês" value={fmtBRL(prevT)} tone="brand"/>
+        <StatCard icon={I.check} label="Já pago" value={fmtBRL(soma(sel,"pago"))} tone="green"/>
+        <StatCard icon={I.calendar} label={"A pagar"+(vencidos.length?" · "+vencidos.length+" vencido(s)":"")} value={fmtBRL(aPagar(sel))} tone={vencidos.length?"red":"amber"}/>
+        <StatCard icon={I.pix} label={"Pago a mais ("+aMaisArr.length+")"} value={fmtBRL(r2(aMaisArr.reduce((s,l)=>s+l.aMais,0)))} tone={aMaisArr.length?"amber":"slate"}/>
+      </div>
+      <Card className="p-3 mb-3">{chipsTipo}</Card>
+      <div className="grid lg:grid-cols-2 gap-3 mb-3">
+        <Card className="overflow-hidden"><div className="px-4 py-2.5 bg-slate-50 border-b border-slate-100 text-sm font-bold text-slate-800">Custo por tipo</div>
+          <table className="w-full text-sm"><thead><tr className="text-left text-xs text-slate-400 border-b border-slate-100">{["Tipo","Pessoas","Previsto","Pago","A pagar",""].map((h,i)=><th key={i} className={th}>{h}</th>)}</tr></thead>
+          <tbody className="divide-y divide-slate-50">{porTipo.map(x=><tr key={x.t}><td className="px-3 py-2 font-semibold text-slate-700">{x.rot}</td><td className={td}>{x.n}</td><td className={td} aria-label={"Previsto "+x.rot}>{fmtBRL(x.prev)}</td><td className={cx(td,"text-emerald-600")}>{fmtBRL(x.pago)}</td><td className={cx(td,x.ap>0?"text-amber-600 font-semibold":"text-slate-400")}>{fmtBRL(x.ap)}</td><td className="px-3 py-2">{barra(x.prev)}</td></tr>)}
+            {porTipo.length===0 && <tr><td colSpan="6" className="px-3 py-6 text-center text-slate-400">Nada neste mês.</td></tr>}</tbody>
+          <tfoot><tr className="border-t-2 border-slate-100 font-bold"><td className="px-3 py-2">Total</td><td/><td className={td}>{fmtBRL(prevT)}</td><td className={cx(td,"text-emerald-600")}>{fmtBRL(soma(sel,"pago"))}</td><td className={cx(td,"text-amber-600")}>{fmtBRL(aPagar(sel))}</td><td/></tr></tfoot></table></Card>
+        <Card className="overflow-hidden"><div className="px-4 py-2.5 bg-slate-50 border-b border-slate-100 text-sm font-bold text-slate-800">Custo por casa</div>
+          <table className="w-full text-sm"><thead><tr className="text-left text-xs text-slate-400 border-b border-slate-100">{["Casa","Lançamentos","Previsto","Pago","A pagar"].map((h,i)=><th key={i} className={th}>{h}</th>)}</tr></thead>
+          <tbody className="divide-y divide-slate-50">{porCasa.map(x=><tr key={x.u}><td className="px-3 py-2 font-semibold text-slate-700">{x.nome}</td><td className={td}>{x.n}</td><td className={td}>{fmtBRL(x.prev)}</td><td className={cx(td,"text-emerald-600")}>{fmtBRL(x.pago)}</td><td className={cx(td,x.ap>0?"text-amber-600 font-semibold":"text-slate-400")}>{fmtBRL(x.ap)}</td></tr>)}</tbody></table></Card>
+      </div>
+      <div className="grid lg:grid-cols-2 gap-3 mb-3">
+        <Card className="overflow-hidden"><div className="px-4 py-2.5 bg-slate-50 border-b border-slate-100 text-sm font-bold text-slate-800">Cronograma do que falta pagar</div>
+          <div className="divide-y divide-slate-50">{crono.map(x=><div key={x.d||"sem"} className="px-4 py-2 text-sm">
+            <div className="flex justify-between"><span className={cx("font-semibold",x.d&&x.d<hoje?"text-rose-600":"text-slate-700")}>{x.d?fmtDataBR(x.d)+(x.d<hoje?" · vencido":""):"Sem data"}</span><span className="font-bold tabular-nums">{fmtBRL(x.v)}</span></div>
+            <div className="text-[11px] text-slate-400">{x.arr.map(l=>l.nome+" ("+rotTipo(l.tipo)+")").join(" · ")}</div></div>)}
+            {crono.length===0 && <div className="px-4 py-6 text-center text-sm text-emerald-600">Tudo pago neste mês.</div>}</div></Card>
+        <Card className="overflow-hidden"><div className="px-4 py-2.5 bg-slate-50 border-b border-slate-100 text-sm font-bold text-slate-800">Pagamentos feitos (competência {fmtCompetencia(ymRef)})</div>
+          <div className="px-4 py-2 flex flex-wrap gap-2 border-b border-slate-50">{Object.keys(porForma).map(f=><Badge key={f} tone="slate">{f}: {fmtBRL(porForma[f])}</Badge>)}{!pagamentos.length&&<span className="text-xs text-slate-400">Nenhum pagamento registrado.</span>}</div>
+          <div className="max-h-72 overflow-y-auto divide-y divide-slate-50">{pagamentos.map((p,i)=><div key={i} className="px-4 py-1.5 text-xs flex gap-2"><span className="text-slate-400 w-20 shrink-0">{fmtDataBR(p.data)}</span><span className="flex-1 truncate text-slate-700">{p.nome} <span className="text-slate-400">· {rotTipo(p.tipo)}{p.forma?" · "+p.forma:""}</span></span><span className="font-semibold tabular-nums">{fmtBRL(Number(p.valor)||0)}</span></div>)}</div></Card>
+      </div>
+      {(aMaisArr.length>0||credArr.length>0) && <Card className="p-4 mb-3 border-violet-200">
+        <div className="font-bold text-slate-800 mb-1">Pagamentos a mais e descontos</div>
+        {aMaisArr.map(l=><div key={l.k} className="text-sm flex justify-between gap-2"><span>{l.nome} · {rotTipo(l.tipo)} — pago {fmtBRL(l.pago)} de {fmtBRL(l.previsto)}</span><span className="text-violet-700 font-semibold">+{fmtBRL(l.aMais)} {l.creditoPara?"→ desconto em "+fmtCompetencia(l.creditoPara):"(ainda não descontado)"}</span></div>)}
+        {credArr.map(l=><div key={"c"+l.k} className="text-sm flex justify-between gap-2"><span>{l.nome} · {rotTipo(l.tipo)}</span><span className="text-violet-700">− {fmtBRL(l.cred)} descontado (pago a mais em {fmtCompetencia(l.credDe)})</span></div>)}
+      </Card>}
+      <Card className="overflow-hidden mb-3"><div className="px-4 py-2.5 bg-slate-50 border-b border-slate-100 text-sm font-bold text-slate-800">Detalhe por pessoa</div>
+        <div className="overflow-x-auto"><table className="w-full text-sm min-w-[720px]"><thead><tr className="text-left text-xs text-slate-400 border-b border-slate-100">{["Nome","Tipo","Referência","Previsto","Pago","Vencimento","Situação"].map((h,i)=><th key={i} className={th}>{h}</th>)}</tr></thead>
+        <tbody className="divide-y divide-slate-50">{[...sel].sort((a,b)=>String(a.nome).localeCompare(b.nome)||a.tipo.localeCompare(b.tipo)).map(l=><tr key={l.k}><td className="px-3 py-2 font-semibold text-slate-800">{l.nome}</td><td className="px-3 py-2"><Badge tone={l.tipo==="pj"?"blue":l.tipo==="vt"?"amber":l.tipo==="fixo"||l.tipo==="free"?"free":l.tipo==="manual"?"slate":"brand"}>{rotTipo(l.tipo)}</Badge></td><td className="px-3 py-2 text-[11px] text-slate-500">{l.desc}</td><td className={td}>{fmtBRL(l.previsto)}</td><td className={cx(td,"text-emerald-600")}>{l.pago?fmtBRL(l.pago):"—"}</td><td className="px-3 py-2 text-xs">{l.venc?fmtDataBR(l.venc):"—"}</td><td className="px-3 py-2"><Badge tone={tonSt[l.status]}>{stTxt(l)}</Badge></td></tr>)}</tbody></table></div></Card>
+      {cardExport}
+    </>;
+  }
   return <>
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
       <StatCard icon={I.wallet} label="Previsto no mês" value={fmtBRL(soma(base4,"previsto"))} tone="brand"/>
@@ -3506,11 +3639,7 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
       <StatCard icon={I.x} label={"Vencido ("+vencidos.length+")"} value={fmtBRL(r2(vencidos.reduce((s,l)=>s+Math.max(0,l.saldo),0)))} tone={vencidos.length?"red":"slate"}/>
     </div>
     <Card className="p-3 mb-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs font-bold uppercase text-slate-400 mr-1">Mostrar</span>
-        {TIPOS_CONTA.map(([t,rot])=><button key={t} onClick={()=>togTipo(t)} className={cx("px-3 py-1.5 rounded-lg text-xs font-semibold border", tiposSel.includes(t)?"grad-brand text-white border-transparent":"bg-white border-slate-200 text-slate-500")}>{rot} <span className="opacity-70">{linhas.filter(l=>l.tipo===t).length}</span></button>)}
-        <button onClick={()=>setTiposSel(TIPOS_CONTA.map(t=>t[0]))} className="text-xs text-brand-700 hover:underline ml-1">todos</button>
-      </div>
+      {chipsTipo}
       <div className="flex flex-wrap items-center gap-2 mt-2">
         <span className="text-xs font-bold uppercase text-slate-400 mr-1">Situação</span>
         {[["todos","Todas"],["apagar","A pagar"],["vencido","Vencidas"],["pago","Pagas"]].map(([k,l])=><button key={k} onClick={()=>setStSel(k)} className={cx("px-3 py-1.5 rounded-lg text-xs font-semibold border", stSel===k?"bg-slate-800 text-white border-transparent":"bg-white border-slate-200 text-slate-500")}>{l}</button>)}
@@ -3548,17 +3677,7 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
         <thead><tr className="text-left text-slate-400 text-xs border-b border-slate-100">{["","Nome","Tipo","Previsto","Vencimento","Situação",""].map((h,i)=><th key={i} className="px-2 py-2 font-semibold">{h}</th>)}</tr></thead>
         <tbody className="divide-y divide-slate-50">{arr.map(linhaTr)}</tbody></table></div>
     </Card>)}
-    <Card className="p-4 mt-4">
-      <div className="font-bold text-slate-800 mb-2">Relatório para o Financeiro</div>
-      <div className="flex flex-wrap items-center gap-2">
-        {[["futuros","Pagamentos futuros (a pagar)"],["mes","Mês completo"]].map(([k,l])=><button key={k} onClick={()=>setOQue(k)} className={cx("px-3 py-1.5 rounded-lg text-xs font-semibold border", oQue===k?"bg-slate-800 text-white border-transparent":"bg-white border-slate-200 text-slate-500")}>{l}</button>)}
-        <div className="flex-1"/>
-        <Btn icon={I.download} onClick={exportarExcel}>Exportar Excel</Btn>
-        <Btn variant="soft" icon={I.download} onClick={exportarPdf}>Exportar PDF</Btn>
-        <Btn variant="ghost" icon={I.copy} onClick={copiarTexto}>Copiar texto</Btn>
-      </div>
-      <p className="text-[11px] text-slate-400 mt-2">Usa os filtros acima (tipos e casa) e só as linhas marcadas. Competência sempre do dia 01 ao último dia do mês. Vencimentos sugeridos: salários no 5º dia útil do mês seguinte; VT no dia {Number(vtDiaPagamento)||5} (Configurações); PJ no dia do contrato no mês seguinte. Salário e VT vêm da folha (ponto e escala); o valor previsto pode ser ajustado à mão.</p>
-    </Card>
+    {cardExport}
   </>;
 }
 function PagamentoSalariados({ modo, ini, fim, uni }){
@@ -3581,11 +3700,14 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
   const ajMes=(((relFin||{})[ymRef]||(relFin||{})[chaveLeg]||{}).aj)||{};
   const setVTPrevisto=(id,v)=>setRelFin(prev=>{ const c=(prev||{})[ymRef]||(prev||{})[chaveLeg]||{}; const a=c.aj||{}; const k="vt-"+id;
     return {...(prev||{}),[ymRef]:{...c,aj:{...a,[k]:{...(a[k]||{}),valor:v}}}}; });
-  const vtDe=(id,det)=>{ const a=ajMes["vt-"+id]||{}; const auto=Math.round(Number((det&&det.vt)||0)*100)/100; const editado=a.valor!=null&&a.valor!=="";
-    const previsto=Math.round((editado?Number(a.valor):auto)*100)/100;
+  const vtDe=(id,det)=>{ const a=ajMes["vt-"+id]||{}; const auto=Math.round(Number((det&&det.vt)||0)*100)/100;
+    const pc=previstoConta(auto,a); const previsto=pc.previsto, editado=pc.editado;
     const pagos=(pagamentosCLT[String(id)]||[]).filter(p=>p.tipo==="vt" && p.comp===ymRef);
     const pago=Math.round(pagos.reduce((s,p)=>s+Number(p.valor||0),0)*100)/100;
-    return { auto, previsto, editado, pagos, pago, falta:Math.round((previsto-pago)*100)/100, dias:det&&det.vtDias, dia:det&&det.vtDia }; };
+    return { auto, previsto, editado, pagos, pago, falta:Math.round((previsto-pago)*100)/100, dias:det&&det.vtDias, dia:det&&det.vtDia, cred:pc.cred, credDe:pc.credDe, creditoPara:pc.creditoPara, creditoValor:pc.creditoValor }; };
+  const prefixoConta = ehPJ?"pj-":modo==="confianca"?"conf-":modo==="fixo"?"fixo-":"clt-";
+  const descontarProx=(k,valor,nome)=>{ const nx=relFinLancarCredito(setRelFin,ymRef,chaveLeg,k,valor); toast("Desconto de "+fmtBRL(valor)+" lançado em "+fmtCompetencia(nx)+(nome?" ("+nome+")":"")); };
+  const cancelarDesc=(k,valor,para)=>{ if(!confirm("Cancelar o desconto de "+fmtBRL(valor)+" em "+fmtCompetencia(para)+"?")) return; relFinDesfazerCredito(setRelFin,ymRef,chaveLeg,k); toast("Desconto cancelado"); };
   const _nowMin=_clock.getHours()*60+_clock.getMinutes();
   const apurCLT=apurarHoras([...pontoHist,...registros]).filter(x=>x.tipo==="clt"&&x.completo&&naData(x.dia));
   const faltasCtx={ escala, escalaOv, registros:[...pontoHist,...registros], atestados, ini, fim, hoje:hojeStr(), nowMin:_nowMin, desde:faltaDescontoDesde };
@@ -3606,14 +3728,18 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
     else if(modo==="confianca"){ total=Number(c.salario||0); }
     else { det=calcFolhaLinha(c,folhaCtx); total=det.liquido; }
     const oculto = modo==="confianca" && c.sigiloso && !podeSigilo;
-    const pagos=pagosDe(c.id); const pago=pagos.reduce((s,p)=>s+Number(p.valor||0),0);
+    // mesmo valor da linha de Contas do mês: ajuste manual ou calculado − desconto de pagamento a mais do mês anterior
+    const k=prefixoConta+c.id; const totalCalc=Math.round(Number(total||0)*100)/100; const pc=previstoConta(totalCalc,ajMes[k]); total=pc.previsto;
+    const pagos=pagosDe(c.id); const pago=Math.round(pagos.reduce((s,p)=>s+Number(p.valor||0),0)*100)/100;
     const vt = comVT ? vtDe(c.id,det) : null;
-    return { id:c.id, nome:c.nome, foto:c.foto, pix:c.pix, cargo:ehPJ?(c.servico||"Prestador PJ"):c.cargo, sigiloso:!!c.sigiloso, oculto, total, pago, saldo:total-pago, pagos, det, vt, diasTrab: det&&det.dias?det.dias.length:null };
+    const saldo=Math.round((total-pago)*100)/100;
+    return { id:c.id, k, nome:c.nome, foto:c.foto, pix:c.pix, cargo:ehPJ?(c.servico||"Prestador PJ"):c.cargo, sigiloso:!!c.sigiloso, oculto, total, totalCalc, cred:pc.cred, credDe:pc.credDe, editadoContas:pc.editado, creditoPara:pc.creditoPara, creditoValor:pc.creditoValor,
+      pago, saldo, aMais: pago>0&&saldo< -0.009 ? -saldo : 0, pagos, det, vt, diasTrab: det&&det.dias?det.dias.length:null };
   }).sort((a,b)=>b.total-a.total);
   const vis=linhas.filter(l=>!l.oculto);
   const totalGeral=vis.reduce((s,l)=>s+l.total,0);
   const totalPago=vis.reduce((s,l)=>s+l.pago,0);
-  const saldoGeral=totalGeral-totalPago;
+  const saldoGeral=Math.round(vis.reduce((s,l)=>s+Math.max(0,l.saldo),0)*100)/100;
   const vtFaltaGeral=Math.round(vis.reduce((s,l)=>s+(l.vt&&l.vt.falta>0?l.vt.falta:0),0)*100)/100;
   const vtPagoGeral=Math.round(vis.reduce((s,l)=>s+(l.vt?l.vt.pago:0),0)*100)/100;
   const lancarVT=(l)=>{ const n=novoVT[l.id]||{}; const v=Math.round(Number(String(n.valor||"").replace(",","."))*100)/100; if(!(v>0)){ toast("Informe o valor de VT pago"); return; }
@@ -3621,7 +3747,7 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
     addPagamentoCLT(l.id,{tipo:"vt", data, ref:ymRef+"-01", comp:ymRef, valor:v, forma, obs:"Vale-transporte "+fmtCompetencia(ymRef)+" · "+forma+(n.obs?" · "+n.obs:""), origem:"pagamentos"});
     setNovoVT(p=>({...p,[l.id]:{}}));
     const falta=Math.round(((l.vt?l.vt.falta:0)-v)*100)/100;
-    toast("VT registrado ("+forma+"): "+fmtBRL(v)+(l.vt&&l.vt.previsto>0?(falta>0?" · falta "+fmtBRL(falta):" · VT do mês quitado"):"")); };
+    toast("VT registrado ("+forma+"): "+fmtBRL(v)+(l.vt&&l.vt.previsto>0?(falta>0.009?" · falta "+fmtBRL(falta):falta< -0.009?" · pago a mais "+fmtBRL(-falta)+" (pode descontar no próximo mês)":" · VT do mês quitado"):"")); };
   const confOcultos=linhas.filter(l=>l.oculto).length;
   const pagarTudo=(l)=>{ if(l.saldo<=0){ toast("Nada em aberto para "+l.nome); return; } addPag(l.id,{data:hojeStr(), ref:ymRef+"-01", comp:ymRef, valor:Math.round(l.saldo*100)/100, obs:(ehPJ?"Prestação de serviço ":modo==="confianca"?"Salário ":"Folha ")+fmtCompetencia(ymRef)}); toast("Pagamento de "+fmtCompetencia(ymRef)+" registrado"); };
   const lancarPag=(l)=>{ const np=novoPag[l.id]||{}; const v=Number(np.valor||0); if(!v){ toast("Informe o valor do pagamento"); return; }
@@ -3649,8 +3775,8 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
           <td className="px-4 py-3 text-slate-600">{l.cargo}{comVT&&l.diasTrab!=null&&<span className="text-slate-400 whitespace-nowrap" aria-label={"Dias trabalhados "+l.nome}> · {l.diasTrab} dia(s) trab.</span>}</td>
           <td className="px-4 py-3 font-bold text-slate-900 tabular-nums">{l.oculto?<span className="inline-flex items-center gap-1 text-slate-400"><Icon d={I.shield} className="w-3.5 h-3.5"/>••••••</span>:fmtBRL(l.total)}</td>
           <td className="px-4 py-3 text-emerald-600 tabular-nums">{l.oculto?"—":(l.pago>0?fmtBRL(l.pago):"—")}</td>
-          <td className={cx("px-4 py-3 font-semibold tabular-nums", l.oculto?"text-slate-400":l.saldo>0?"text-amber-600":"text-emerald-600")}>{l.oculto?"—":fmtBRL(l.saldo)}</td>
-          {comVT && <td className="px-4 py-3 text-xs tabular-nums" aria-label={"VT de "+l.nome}>{!l.vt||(l.vt.previsto<=0&&l.vt.pago<=0)?<span className="text-slate-300">—</span>:<><div className="text-slate-500">pago {fmtBRL(l.vt.pago)}{l.vt.previsto>0?" de "+fmtBRL(l.vt.previsto):""}</div><div className={cx("font-bold",l.vt.falta>0?"text-amber-600":"text-emerald-600")}>{l.vt.falta>0?"falta "+fmtBRL(l.vt.falta):"quitado"}</div></>}</td>}
+          <td className={cx("px-4 py-3 font-semibold tabular-nums", l.oculto?"text-slate-400":l.saldo>0?"text-amber-600":"text-emerald-600")}>{l.oculto?"—":l.aMais>0?<span className="text-violet-700" aria-label={"Pago a mais "+l.nome}>pago a mais {fmtBRL(l.aMais)}</span>:fmtBRL(l.saldo)}</td>
+          {comVT && <td className="px-4 py-3 text-xs tabular-nums" aria-label={"VT de "+l.nome}>{!l.vt||(l.vt.previsto<=0&&l.vt.pago<=0)?<span className="text-slate-300">—</span>:<><div className="text-slate-500">pago {fmtBRL(l.vt.pago)}{l.vt.previsto>0?" de "+fmtBRL(l.vt.previsto):""}</div><div className={cx("font-bold",l.vt.falta>0?"text-amber-600":l.vt.falta< -0.009?"text-violet-700":"text-emerald-600")}>{l.vt.falta>0?"falta "+fmtBRL(l.vt.falta):l.vt.falta< -0.009?"pago a mais "+fmtBRL(-l.vt.falta):"quitado"}</div></>}</td>}
           <td className="px-4 py-3 font-mono text-xs text-slate-500">{ehPJ && l.det && l.det.venc && <div className={cx("font-sans font-semibold mb-0.5", atrasado(l)?"text-rose-600":l.saldo<=0?"text-emerald-600":"text-slate-600")}>{l.saldo<=0?"pago":atrasado(l)?"vencido "+fmtDataBR(l.det.venc):"vence "+fmtDataBR(l.det.venc)}</div>}{l.oculto?"—":(l.pix||"—")}</td>
         </tr>,
           aberto===l.id && !l.oculto && <tr key={l.id+"-d"} className="bg-slate-50/60"><td colSpan={nCol} className="px-4 py-4" onClick={e=>e.stopPropagation()}>
@@ -3683,6 +3809,8 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
                     <div className="flex justify-between"><span className="text-slate-500">Vencimento</span><span>{l.det.venc?fmtDataBR(l.det.venc):"—"} · {l.det.forma}</span></div>
                     {l.det.cnpj && <div className="flex justify-between"><span className="text-slate-500">CNPJ</span><span className="font-mono text-xs">{l.det.cnpj}</span></div>}
                   </>}
+                  {l.cred>0 && !l.editadoContas && <div className="flex justify-between"><span className="text-slate-500">Desconto: pago a mais em {fmtCompetencia(l.credDe)}</span><span className="tabular-nums text-violet-700" aria-label={"Desconto pago a mais "+l.nome}>-{fmtBRL(l.cred)}</span></div>}
+                  {l.editadoContas && <div className="flex justify-between text-[11px]"><span className="text-amber-700">Valor ajustado à mão em Contas do mês (calculado: {fmtBRL(l.totalCalc)})</span></div>}
                   <div className="flex justify-between border-t border-slate-100 pt-1 font-bold"><span className="text-slate-700">{modo==="confianca"||ehPJ?"Total":"Líquido do mês"}</span><span className="tabular-nums text-slate-900">{fmtBRL(l.total)}</span></div>
                 </div>
                 <div className="text-[11px] font-bold text-slate-400 uppercase mt-3 mb-1.5">Pagamentos registrados</div>
@@ -3698,7 +3826,10 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
                 <div className="bg-white rounded-xl border border-slate-100 p-3 space-y-2">
                   <div className="flex items-center justify-between text-sm"><span className="text-slate-500">Total do mês</span><span className="font-bold tabular-nums">{fmtBRL(l.total)}</span></div>
                   <div className="flex items-center justify-between text-sm"><span className="text-slate-500">Já pago</span><span className="font-bold text-emerald-600 tabular-nums">{fmtBRL(l.pago)}</span></div>
-                  <div className="flex items-center justify-between text-sm border-t border-slate-100 pt-2"><span className="font-semibold text-slate-600">Saldo</span><span className={cx("font-extrabold tabular-nums", l.saldo>0?"text-amber-600":"text-emerald-600")}>{fmtBRL(l.saldo)}</span></div>
+                  <div className="flex items-center justify-between text-sm border-t border-slate-100 pt-2"><span className="font-semibold text-slate-600">{l.aMais>0?"Pago a mais":"Saldo"}</span><span className={cx("font-extrabold tabular-nums", l.aMais>0?"text-violet-700":l.saldo>0?"text-amber-600":"text-emerald-600")}>{fmtBRL(l.aMais>0?l.aMais:l.saldo)}</span></div>
+                  {l.aMais>0 && (l.creditoPara
+                    ? <div className="text-[11px] text-violet-700 bg-violet-50 rounded-lg px-2 py-1.5">Desconto de <b>{fmtBRL(l.creditoValor||l.aMais)}</b> lançado em {fmtCompetencia(l.creditoPara)}. <button onClick={()=>cancelarDesc(l.k,l.creditoValor||l.aMais,l.creditoPara)} className="underline">cancelar</button></div>
+                    : <button onClick={()=>descontarProx(l.k,l.aMais,l.nome)} className="w-full px-3 py-1.5 rounded-lg text-xs font-bold bg-violet-600 text-white hover:bg-violet-700">Descontar {fmtBRL(l.aMais)} no próximo mês</button>)}
                   <button onClick={()=>pagarTudo(l)} disabled={l.saldo<=0} className={cx("w-full px-3 py-1.5 rounded-lg text-xs font-bold text-white", l.saldo>0?"grad-brand hover:opacity-90":"bg-slate-300 cursor-not-allowed")}>Pagar saldo do mês</button>
                 </div>
                 {comVT && l.vt && <>
@@ -3709,6 +3840,10 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
                   {l.vt.editado && l.vt.auto>0 && <button onClick={()=>setVTPrevisto(l.id,"")} className="text-[11px] text-sky-600 hover:underline">voltar ao valor da folha ({fmtBRL(l.vt.auto)})</button>}
                   <div className="flex items-center justify-between text-sm"><span className="text-slate-500">Já pago de VT</span><span className="font-bold text-emerald-600 tabular-nums">{fmtBRL(l.vt.pago)}</span></div>
                   <div className="flex items-center justify-between text-sm border-t border-slate-100 pt-2"><span className="font-semibold text-slate-600">Falta pagar de VT</span><span className={cx("font-extrabold tabular-nums",l.vt.falta>0?"text-amber-600":"text-emerald-600")} aria-label={"Falta pagar VT de "+l.nome}>{fmtBRL(Math.max(0,l.vt.falta))}</span></div>
+                  {l.vt.cred>0 && !l.vt.editado && <div className="text-[11px] text-violet-700">Já descontado: {fmtBRL(l.vt.cred)} de VT pago a mais em {fmtCompetencia(l.vt.credDe)}</div>}
+                  {l.vt.falta< -0.009 && (l.vt.creditoPara
+                    ? <div className="text-[11px] text-violet-700 bg-violet-50 rounded-lg px-2 py-1.5">VT pago a mais: desconto de <b>{fmtBRL(l.vt.creditoValor||-l.vt.falta)}</b> lançado em {fmtCompetencia(l.vt.creditoPara)}. <button onClick={()=>cancelarDesc("vt-"+l.id,l.vt.creditoValor||-l.vt.falta,l.vt.creditoPara)} className="underline">cancelar</button></div>
+                    : <button onClick={()=>descontarProx("vt-"+l.id,-l.vt.falta,l.nome)} className="w-full px-3 py-1.5 rounded-lg text-xs font-bold bg-violet-600 text-white hover:bg-violet-700">VT pago a mais {fmtBRL(-l.vt.falta)} · descontar no próximo mês</button>)}
                   {l.vt.pagos.map(p=><div key={p.id} className="flex items-center gap-2 text-xs bg-sky-50/60 rounded-lg px-2 py-1.5">
                     <span className="font-semibold tabular-nums">{fmtBRL(Number(p.valor||0))}</span><span className="text-slate-500 truncate">{fmtDataBR(p.data)}{p.forma?" · "+p.forma:""}</span>
                     <button onClick={()=>{ if(confirm("Remover este pagamento de VT?")) removePagamentoCLT(l.id,p.id); }} className="ml-auto text-slate-300 hover:text-rose-500" title="Remover"><Icon d={I.trash} className="w-3.5 h-3.5"/></button></div>)}
@@ -3794,7 +3929,7 @@ function Pagamentos() {
   };
 
   return <div className="fade-in">
-    <PageHeader title="Pagamentos" sub="Freelancers, CLT, gerência/diretoria e prestadores PJ · pagamento parcelado (adiantamentos), saldo do mês e filtro por período/casa">
+    <PageHeader title="Pagamentos" sub="Onde você PAGA: dar baixa, pagamento parcial, VT em dinheiro, vencimentos, lançamentos manuais e desconto de pagamento a mais">
       {abaP==="freela" && <Btn icon={I.download} onClick={exportar}>Exportar consolidado</Btn>}
     </PageHeader>
 
@@ -4327,9 +4462,9 @@ function Financeiro() {
     try{ const z=new JSZip(); for(const l of linhasCLT){ z.file(nomeArqPessoa(l), await pdfDemonstrativoFolha(l,metaPdf)); }
       baixarBlob(await z.generateAsync({type:"blob"}), "Folha "+rotuloFolha+" "+(ini||"").slice(0,7)+" - "+uNome.replace(/[\\/:*?"<>|]/g,"")+".zip"); toast(linhasCLT.length+" demonstrativo(s) no ZIP"); }
     catch(e){ toast("Não foi possível gerar o ZIP: "+e.message); } };
-  const abas=[["geral","Geral (CLT · PJ · Freela Fixo)"],["clt","Folha CLT"],["fixo","Freela Fixo"],["confianca","Gerência & Diretoria"],["freela","Pagamento freelancers"],["pj","Prestadores PJ"]];
+  const abas=[["geral","Visão geral do mês"],["clt","Folha CLT"],["fixo","Freela Fixo"],["confianca","Gerência & Diretoria"],["freela","Pagamento freelancers"],["pj","Prestadores PJ"]];
   return <div className="fade-in">
-    <PageHeader title="Relatórios financeiros" sub="Folha CLT · Freela Fixo · Gerência & Diretoria · freelancers · prestadores PJ · filtro por período e casa · Excel · WhatsApp">
+    <PageHeader title="Relatórios financeiros" sub="Onde você ANALISA: custo do mês por tipo e por casa, cronograma, folha detalhada (CLT · Freela Fixo · Gerência · PJ · freelancers) e relatórios para o Financeiro e a Contabilidade">
       {aba!=="geral" && <Btn variant="ghost" icon={I.copy} onClick={copiarTodos}>Copiar p/ WhatsApp</Btn>}
       {(aba==="clt"||aba==="fixo") && <Btn variant="ghost" icon={I.download} onClick={baixarZipGrupo}>Baixar PDFs (ZIP)</Btn>}
       {aba!=="geral" && <Btn icon={I.download} onClick={exportarExcel}>Exportar Excel</Btn>}
@@ -8986,6 +9121,7 @@ function Shell({ onLogout }) {
   },[acesso&&acesso.pronto, acesso&&acesso.tenantBind, tenantAtual]);
   const pushToast=(msg,ms)=>{ const id=Math.random(); setToasts(t=>[...t,{id,msg}]); setTimeout(()=>setToasts(t=>t.filter(x=>x.id!==id)),ms||2600); };
   useEffect(()=>{ const on=(e)=>pushToast("⚠️ "+e.detail,9000); window.addEventListener("wp-aviso-gravacao",on); return ()=>window.removeEventListener("wp-aviso-gravacao",on); },[]); // eslint-disable-line
+  useEffect(()=>{ const ir=(e)=>{ if(e&&e.detail) setView(String(e.detail)); }; window.addEventListener("wp-ir-para",ir); return ()=>window.removeEventListener("wp-ir-para",ir); },[]);
   const abaRestrita = acesso && acesso.pronto && !acesso.ehDono ? ABA_DO_PAPEL[acesso.papelKey]||null : null;
   useEffect(()=>{ if(abaRestrita && view!==abaRestrita) setView(abaRestrita); },[abaRestrita,view]);
   // Portões de acesso (login independente por cliente)
