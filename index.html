@@ -3423,7 +3423,8 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
       const status= aMais>0 ? "amais" : previsto>0 && saldo<=0.009 ? "pago" : (previsto<=0 && pago<=0 && pc.cred>0) ? "pago" : pago>0 ? "parcial" : (venc && venc<hoje ? "vencido" : "apagar");
       const mc=a.manualCalc;
       const desc = l.desc + (pc.cred>0 && !pc.editado ? " · − "+fmtBRL(pc.cred)+" pago a mais em "+fmtCompetencia(pc.credDe) : "")
-        + (pc.editado && mc ? " · MANUAL: "+mc.dias+" dia(s) × "+fmtBRL(mc.salario)+" ÷ 30"+(Number(mc.acresc)>0?" + "+fmtBRL(mc.acresc):"")+(Number(mc.desconto)>0?" − "+fmtBRL(mc.desconto):"")+(mc.obs?" ("+mc.obs+")":"") : "");
+        + (pc.editado && mc ? (mc.vt ? " · MANUAL: "+mc.dias+" dia(s) × "+fmtBRL(mc.vtDia)+" de VT"
+          : " · MANUAL: "+mc.dias+" dia(s) × "+fmtBRL(mc.salario)+" ÷ 30"+(Number(mc.acresc)>0?" + "+fmtBRL(mc.acresc):"")+(Number(mc.desconto)>0?" − "+fmtBRL(mc.desconto):"")+(Number(mc.desc6)>0?" − "+fmtBRL(mc.desc6)+" (6% VT)":"")+(mc.obs?" ("+mc.obs+")":"")) : "");
       return {...l, desc, manualCalc:pc.editado?mc:null, previsto, venc, pagos, pago, saldo, aMais, cred:pc.cred, credDe:pc.credDe, creditoPara:pc.creditoPara, creditoValor:pc.creditoValor, ultimo, status, inc:a.inc!=null?a.inc:true, obs:a.obs!=null?a.obs:"", editado:!!pc.editado, previstoOrig:r2(l.previsto)}; });
   // ---- filtros ----
   const [tiposSel,setTiposSel]=useState(()=> modo==="financeiro" ? ["clt","fixo","pj","vt"] : TIPOS_CONTA.map(t=>t[0]));
@@ -3473,17 +3474,24 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
   const [prop,setProp]=useState(null);
   const kProp=(c)=> (c.vinculo==="confianca"?"conf-":c.vinculo==="fixo"?"fixo-":"clt-")+c.id;
   const diasEntre=(a,b)=> (a&&b&&a<=b) ? Math.min(30,datasEntre(a,b).length) : 0;
-  const abrirProp=()=>setProp({pid:"",salario:"",de:ini,ate:fim,dias:"",acresc:"",desconto:"",obs:"",pago:false,dataPago:hoje,forma:"Pix"});
+  const abrirProp=()=>setProp({pid:"",salario:"",de:ini,ate:fim,dias:"",acresc:"",desconto:"",obs:"",pago:false,dataPago:hoje,forma:"Pix",vtDia:"",vtDias:"",com6:true,vtPago:false,vtForma:"Dinheiro"});
+  const diasVTde=(pid,de,ate)=>{ const c=clts.find(x=>String(x.id)===String(pid)); if(!c||!de||!ate||de>ate) return 0; let n=0; try{ n=diasTrabalhoNoPeriodo(c,de,ate,escala,escalaOv); }catch(e){ n=0; } return n||datasEntre(de,ate).length; };
   const escolherProp=(pid)=>{ const c=clts.find(x=>String(x.id)===String(pid)); if(!c){ setProp(p=>({...p,pid:""})); return; }
     const de=(c.admissao&&c.admissao>ini)?c.admissao:ini, ate=(c.fimContrato&&c.fimContrato<fim)?c.fimContrato:fim;
-    setProp(p=>({...p,pid:String(c.id),salario:String(Number(c.salario)||0),de,ate,dias:String(de===ini&&ate===fim?30:diasEntre(de,ate))})); };
-  const valorProp=(p)=> p ? r2((Number(p.salario)||0)/30*(Number(p.dias)||0) + (Number(p.acresc)||0) - (Number(p.desconto)||0)) : 0;
+    setProp(p=>({...p,pid:String(c.id),salario:String(Number(c.salario)||0),de,ate,dias:String(de===ini&&ate===fim?30:diasEntre(de,ate)),vtDia:c.vtDia?String(c.vtDia):"",vtDias:String(diasVTde(c.id,de,ate))})); };
+  const vtProp=(p)=> p ? r2((Number(p.vtDia)||0)*(Number(p.vtDias)||0)) : 0;
+  const baseProp=(p)=> p ? r2((Number(p.salario)||0)/30*(Number(p.dias)||0)) : 0;
+  const desc6Prop=(p)=> p && p.com6 && vtProp(p)>0 ? r2(Math.min(baseProp(p)*0.06, vtProp(p))) : 0;
+  const valorProp=(p)=> p ? r2(baseProp(p) + (Number(p.acresc)||0) - (Number(p.desconto)||0) - desc6Prop(p)) : 0;
   const salvarProp=()=>{ const c=clts.find(x=>String(x.id)===String(prop.pid)); if(!c){ toast("Escolha a pessoa"); return; }
     const v=valorProp(prop); if(!(Number(prop.dias)>0)){ toast("Informe os dias trabalhados"); return; } if(!(v>0)){ toast("O valor ficou zerado — confira salário e dias"); return; }
-    const k=kProp(c); const mc={salario:Number(prop.salario)||0, dias:Number(prop.dias)||0, de:prop.de, ate:prop.ate, acresc:Number(prop.acresc)||0, desconto:Number(prop.desconto)||0, obs:(prop.obs||"").trim()};
+    const k=kProp(c); const mc={salario:Number(prop.salario)||0, dias:Number(prop.dias)||0, de:prop.de, ate:prop.ate, acresc:Number(prop.acresc)||0, desconto:Number(prop.desconto)||0, desc6:desc6Prop(prop), obs:(prop.obs||"").trim()};
     salvar(cf=>({...cf,aj:{...cf.aj,[k]:{...(cf.aj[k]||{}),valor:String(v),manualCalc:mc}}}));
+    const vtv=vtProp(prop);
+    if(vtv>0){ salvar(cf=>({...cf,aj:{...cf.aj,["vt-"+c.id]:{...(cf.aj["vt-"+c.id]||{}),valor:String(vtv),manualCalc:{vt:true,dias:Number(prop.vtDias)||0,vtDia:Number(prop.vtDia)||0}}}}));
+      if(prop.vtPago) addPagamentoCLT(c.id,{tipo:"vt", data:prop.dataPago||hoje, ref:ymRef+"-01", comp:ymRef, valor:vtv, forma:prop.vtForma||"Dinheiro", obs:"Vale-transporte "+fmtCompetencia(ymRef)+" ("+(Number(prop.vtDias)||0)+" dias) · "+(prop.vtForma||"Dinheiro"), origem:"contas"}); }
     if(prop.pago) addPagamentoCLT(c.id,{tipo:"salario", data:prop.dataPago||hoje, ref:ymRef+"-01", comp:ymRef, valor:v, forma:prop.forma||"Pix", obs:"Salário "+fmtCompetencia(ymRef)+" (proporcional "+mc.dias+" dias) · "+(prop.forma||"Pix"), origem:"contas"});
-    setProp(null); toast(c.nome+": salário de "+fmtCompetencia(ymRef)+" = "+fmtBRL(v)+(prop.pago?" (pago e baixado)":" (a pagar)")); };
+    setProp(null); toast(c.nome+": salário de "+fmtCompetencia(ymRef)+" = "+fmtBRL(v)+(prop.pago?" (pago)":" (a pagar)")+(vtv>0?" · VT "+fmtBRL(vtv)+(prop.vtPago?" (pago)":" (a pagar)"):"")); };
   const voltarFolha=(l)=>{ if(!confirm("Voltar "+l.nome+" para o cálculo automático da folha?")) return; salvar(cf=>{ const {valor,manualCalc,...resto}=cf.aj[l.k]||{}; return {...cf,aj:{...cf.aj,[l.k]:resto}}; }); toast("Voltou ao cálculo da folha"); };
   const rmManual=(id)=>{ if(confirm("Excluir este lançamento manual?")) salvar(c=>({...c,manuais:c.manuais.filter(m=>m.id!==id)})); };
   // ---- exportação ----
@@ -3676,22 +3684,36 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
       <div className="flex flex-wrap items-end gap-2">
         <Field label="Pessoa"><Select value={prop.pid} onChange={e=>escolherProp(e.target.value)} aria-label="Pessoa do pagamento proporcional"><option value="">Escolha…</option>{pessoasProp.map(c=><option key={c.id} value={c.id}>{c.nome} · {c.vinculo==="fixo"?"Freela Fixo":c.vinculo==="confianca"?"Gerência":"CLT"}</option>)}</Select></Field>
         <Field label="Salário cadastrado (R$)"><Input type="number" step="0.01" value={prop.salario} onChange={e=>setProp({...prop,salario:e.target.value})} className="w-32" aria-label="Salário base proporcional"/></Field>
-        <Field label="De"><Input type="date" value={prop.de} onChange={e=>{ const de=e.target.value; setProp(p=>({...p,de,dias:String(de===ini&&p.ate===fim?30:diasEntre(de,p.ate))})); }} aria-label="Início do período proporcional"/></Field>
-        <Field label="Até"><Input type="date" value={prop.ate} onChange={e=>{ const ate=e.target.value; setProp(p=>({...p,ate,dias:String(p.de===ini&&ate===fim?30:diasEntre(p.de,ate))})); }} aria-label="Fim do período proporcional"/></Field>
+        <Field label="De"><Input type="date" value={prop.de} onChange={e=>{ const de=e.target.value; setProp(p=>({...p,de,dias:String(de===ini&&p.ate===fim?30:diasEntre(de,p.ate)),vtDias:String(diasVTde(p.pid,de,p.ate))})); }} aria-label="Início do período proporcional"/></Field>
+        <Field label="Até"><Input type="date" value={prop.ate} onChange={e=>{ const ate=e.target.value; setProp(p=>({...p,ate,dias:String(p.de===ini&&ate===fim?30:diasEntre(p.de,ate)),vtDias:String(diasVTde(p.pid,p.de,ate))})); }} aria-label="Fim do período proporcional"/></Field>
         <Field label="Dias a pagar"><Input type="number" min="0" max="31" value={prop.dias} onChange={e=>setProp({...prop,dias:e.target.value})} className="w-24" aria-label="Dias a pagar"/></Field>
         <Field label="Acréscimos (R$)"><Input type="number" step="0.01" value={prop.acresc} onChange={e=>setProp({...prop,acresc:e.target.value})} className="w-28" placeholder="extras" aria-label="Acréscimos proporcional"/></Field>
         <Field label="Descontos (R$)"><Input type="number" step="0.01" value={prop.desconto} onChange={e=>setProp({...prop,desconto:e.target.value})} className="w-28" placeholder="adiant., VT 6%" aria-label="Descontos proporcional"/></Field>
         <div className="flex-1 min-w-[160px]"><Field label="Observação"><Input value={prop.obs} onChange={e=>setProp({...prop,obs:e.target.value})} placeholder="Ex.: não bateu ponto em outubro"/></Field></div>
       </div>
-      <div className="mt-3 p-3 rounded-xl bg-sky-50 text-sm text-sky-900 flex flex-wrap items-center gap-x-3 gap-y-1">
-        <span>{fmtBRL(Number(prop.salario)||0)} ÷ 30 × {Number(prop.dias)||0} dia(s) = <b>{fmtBRL(r2((Number(prop.salario)||0)/30*(Number(prop.dias)||0)))}</b></span>
-        {Number(prop.acresc)>0 && <span>+ {fmtBRL(Number(prop.acresc))}</span>}{Number(prop.desconto)>0 && <span>− {fmtBRL(Number(prop.desconto))}</span>}
-        <span className="font-extrabold text-base" aria-label="Valor proporcional">= {fmtBRL(valorProp(prop))}</span>
+      <div className="mt-3 pt-3 border-t border-slate-100 flex flex-wrap items-end gap-2">
+        <span className="text-xs font-bold uppercase text-amber-700 self-center mr-1">Vale-transporte</span>
+        <Field label="VT por dia (R$)"><Input type="number" step="0.01" value={prop.vtDia} onChange={e=>setProp({...prop,vtDia:e.target.value})} className="w-28" placeholder="0,00" aria-label="VT por dia proporcional"/></Field>
+        <Field label="Dias de VT"><Input type="number" min="0" max="31" value={prop.vtDias} onChange={e=>setProp({...prop,vtDias:e.target.value})} className="w-24" aria-label="Dias de VT proporcional"/></Field>
+        <label className="flex items-center gap-2 text-sm text-slate-700 pb-2"><input type="checkbox" checked={!!prop.com6} onChange={e=>setProp({...prop,com6:e.target.checked})} aria-label="Descontar 6% do VT"/>Descontar 6% do salário (parte do colaborador)</label>
+        <span className="text-xs text-slate-400 pb-2">Os dias de VT vêm da escala no período (folgas fora) — ajuste se precisar. Deixe em branco se não tem VT.</span>
+      </div>
+      <div className="mt-3 p-3 rounded-xl bg-sky-50 text-sm text-sky-900 space-y-1">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1"><b className="w-24">Salário:</b>
+          <span>{fmtBRL(Number(prop.salario)||0)} ÷ 30 × {Number(prop.dias)||0} dia(s) = <b>{fmtBRL(baseProp(prop))}</b></span>
+          {Number(prop.acresc)>0 && <span>+ {fmtBRL(Number(prop.acresc))}</span>}{Number(prop.desconto)>0 && <span>− {fmtBRL(Number(prop.desconto))}</span>}
+          {desc6Prop(prop)>0 && <span>− {fmtBRL(desc6Prop(prop))} (6% VT)</span>}
+          <span className="font-extrabold text-base" aria-label="Valor proporcional">= {fmtBRL(valorProp(prop))}</span></div>
+        {vtProp(prop)>0 && <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-amber-900"><b className="w-24">VT (à parte):</b>
+          <span>{Number(prop.vtDias)||0} dia(s) × {fmtBRL(Number(prop.vtDia)||0)}</span><span className="font-extrabold text-base" aria-label="VT proporcional">= {fmtBRL(vtProp(prop))}</span></div>}
+        <div className="flex flex-wrap items-center gap-x-3 pt-1 border-t border-sky-100"><b className="w-24">Total a pagar:</b><span className="font-extrabold text-base" aria-label="Total proporcional">{fmtBRL(r2(valorProp(prop)+vtProp(prop)))}</span></div>
       </div>
       <div className="flex flex-wrap items-center gap-3 mt-3">
         <label className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={prop.pago} onChange={e=>setProp({...prop,pago:e.target.checked})} aria-label="Proporcional já foi pago"/>Já foi pago</label>
         {prop.pago && <label className="flex items-center gap-2 text-sm text-slate-600">em <input type="date" className={inp} value={prop.dataPago} onChange={e=>setProp({...prop,dataPago:e.target.value})} aria-label="Data do pagamento proporcional"/></label>}
         {prop.pago && <label className="flex items-center gap-2 text-sm text-slate-600">forma <select className={cx(inp,"bg-white")} value={prop.forma} onChange={e=>setProp({...prop,forma:e.target.value})} aria-label="Forma do pagamento proporcional">{FORMAS_PAG.map(f=><option key={f}>{f}</option>)}</select></label>}
+        {vtProp(prop)>0 && <label className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={!!prop.vtPago} onChange={e=>setProp({...prop,vtPago:e.target.checked})} aria-label="VT proporcional já foi pago"/>VT já foi pago</label>}
+        {vtProp(prop)>0 && prop.vtPago && <label className="flex items-center gap-2 text-sm text-slate-600">forma do VT <select className={cx(inp,"bg-white")} value={prop.vtForma} onChange={e=>setProp({...prop,vtForma:e.target.value})} aria-label="Forma do VT proporcional">{FORMAS_PAG.map(f=><option key={f}>{f}</option>)}</select></label>}
         <div className="flex-1"/>
         <Btn icon={I.check} onClick={salvarProp}>Salvar valor do mês</Btn><Btn variant="ghost" onClick={()=>setProp(null)}>Cancelar</Btn>
       </div>
@@ -3858,7 +3880,7 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
                   </>}
                   {l.cred>0 && !l.editadoContas && <div className="flex justify-between"><span className="text-slate-500">Desconto: pago a mais em {fmtCompetencia(l.credDe)}</span><span className="tabular-nums text-violet-700" aria-label={"Desconto pago a mais "+l.nome}>-{fmtBRL(l.cred)}</span></div>}
                   {l.editadoContas && (l.manualCalc
-                    ? <div className="flex justify-between gap-3 bg-sky-50 rounded-lg px-2 py-1 -mx-1"><span className="text-sky-800">Pagamento proporcional manual (sem ponto): {fmtBRL(l.manualCalc.salario)} ÷ 30 × {l.manualCalc.dias} dia(s){Number(l.manualCalc.acresc)>0?" + "+fmtBRL(l.manualCalc.acresc):""}{Number(l.manualCalc.desconto)>0?" − "+fmtBRL(l.manualCalc.desconto):""} — substitui o cálculo acima (folha: {fmtBRL(l.totalCalc)})</span></div>
+                    ? <div className="flex justify-between gap-3 bg-sky-50 rounded-lg px-2 py-1 -mx-1"><span className="text-sky-800">Pagamento proporcional manual (sem ponto): {fmtBRL(l.manualCalc.salario)} ÷ 30 × {l.manualCalc.dias} dia(s){Number(l.manualCalc.acresc)>0?" + "+fmtBRL(l.manualCalc.acresc):""}{Number(l.manualCalc.desconto)>0?" − "+fmtBRL(l.manualCalc.desconto):""}{Number(l.manualCalc.desc6)>0?" − "+fmtBRL(l.manualCalc.desc6)+" (6% VT)":""} — substitui o cálculo acima (folha: {fmtBRL(l.totalCalc)})</span></div>
                     : <div className="flex justify-between text-[11px]"><span className="text-amber-700">Valor ajustado à mão em Contas do mês (calculado: {fmtBRL(l.totalCalc)})</span></div>)}
                   <div className="flex justify-between border-t border-slate-100 pt-1 font-bold"><span className="text-slate-700">{modo==="confianca"||ehPJ?"Total":"Líquido do mês"}</span><span className="tabular-nums text-slate-900">{fmtBRL(l.total)}</span></div>
                 </div>
