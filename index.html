@@ -3310,6 +3310,7 @@ function Relatorios() {
 // e "Dar baixa" grava o pagamento (data em que o Financeiro pagou) no mesmo lugar usado pelas outras telas.
 const TIPOS_CONTA=[["clt","CLT"],["fixo","Freela Fixo"],["pj","PJ"],["vt","Vale-transporte"],["free","Freelancers"],["conf","Gerência & Diretoria"],["manual","Manuais"]];
 const TIPOS_MANUAL=["Vale-transporte","Adiantamento","Complemento de salário","Bônus / gratificação","Reembolso","Outro"];
+const FORMAS_PAG=["Dinheiro","Pix","Transferência","Cartão / VT eletrônico","Outro"];
 function RelatorioFinanceiro({ ini, fim, uni, modo }){
   const { clts, pjs, freelasComPagamentos, unidades, registros, pontoHist, getDossie, cltExtraAjuste, gorjetasCLT, escala, escalaOv, atestados, acesso,
     pagamentosCLT, addPagamentoCLT, removePagamentoCLT, pagamentosPJ, addPagamentoPJ, removePagamentoPJ, pagamentosFreela, addPagamentoFreela, removePagamentoFreela,
@@ -3338,14 +3339,16 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
       if(c.vinculo==="confianca"){ if(c.sigiloso && !podeSigilo) return; out.push({k:"conf-"+c.id, tipo:"conf", pid:c.id, nome:c.nome, desc:c.cargo||"Gerência", dias:null, previsto:Number(c.salario||0), venc:dataSal, pix:c.pix||"", unidade:c.unidade}); return; }
       const l=calcFolhaLinha(c,folhaCtx); const t=c.vinculo==="fixo"?"fixo":"clt";
       out.push({k:t+"-"+c.id, tipo:t, pid:c.id, nome:c.nome, desc:(c.cargo||"")+" · salário", dias:(l.dias||[]).length, previsto:l.liquido, venc:dataSal, pix:c.pix||"", unidade:c.unidade});
-      if(l.vt>0) out.push({k:"vt-"+c.id, tipo:"vt", pid:c.id, nome:c.nome, desc:"VT · "+l.vtDias+" dia(s) de escala", dias:l.vtDias, previsto:l.vt, venc:dataVT, pix:c.pix||"", unidade:c.unidade}); });
+      const ajVT=(aj["vt-"+c.id]||{}).valor; const temAjVT=ajVT!=null&&ajVT!==""&&Number(ajVT)>0;
+      const temPgVT=(pagamentosCLT[String(c.id)]||[]).some(p=>p.tipo==="vt"&&p.comp===ymRef);
+      if(l.vt>0||temAjVT||temPgVT) out.push({k:"vt-"+c.id, tipo:"vt", pid:c.id, nome:c.nome, desc:l.vt>0?"VT · "+l.vtDias+" dia(s) de escala":"VT combinado do mês", dias:l.vtDias, previsto:l.vt||0, venc:dataVT, pix:c.pix||"", unidade:c.unidade}); });
     (pjs||[]).filter(pj=>pjAtivoNoPeriodo(pj,ini,fim)).filter(naCasa).forEach(pj=>{ const meses=pjMesesNoPeriodo(pj,ini,fim);
       out.push({k:"pj-"+pj.id, tipo:"pj", pid:pj.id, nome:pj.nome, desc:(pj.servico||"Prestação de serviço")+((pjValorNoPeriodo(pj,ini,fim).det.find(d=>!d.cheio))?" · proporcional "+pjValorNoPeriodo(pj,ini,fim).det.filter(d=>!d.cheio).map(d=>d.dias+" dia(s)").join(", "):""), dias:null, previsto:pjValorNoPeriodo(pj,ini,fim).total, venc:pjVencimento(pj,ymRef), pix:pj.pix||"", unidade:pj.unidade}); });
     (freelasComPagamentos||[]).forEach(f=>{ const js=(f.jornadasHist||[]).filter(j=>naData(j.data) && (uni==="todas"||Number(j.unidade)===Number(uni)));
       const pagos=(pagamentosFreela[String(f.id)]||[]).filter(p=>p.comp?p.comp===ymRef:(p.semana?p.semana.slice(0,7)===ymRef:naData(p.ref||p.data||"")));
       if(!js.length && !pagos.length) return;
       out.push({k:"free-"+f.id, tipo:"free", pid:f.id, nome:f.nome, desc:(f.cargo||"Freelancer")+" · "+js.length+" diária(s)", dias:js.length, previsto:js.reduce((s,j)=>s+(Number(j.valor)||0),0), venc:"", pix:f.pix||"", unidade:f.unidade}); });
-    return out; },[clts,pjs,freelasComPagamentos,pagamentosFreela,ini,fim,uni,apurCLT,escala,escalaOv,vtDiaPagamento,feriadosExtras]); // eslint-disable-line
+    return out; },[clts,pjs,freelasComPagamentos,pagamentosFreela,pagamentosCLT,relFin,ini,fim,uni,apurCLT,escala,escalaOv,vtDiaPagamento,feriadosExtras]); // eslint-disable-line
   // ---- pagamentos (baixas) de cada linha: gravados nos mesmos cadastros de pagamento das outras telas ----
   const pagosDaLinha=(l)=>{
     if(l.tipo==="manual") return (l.baixas||[]);
@@ -3372,12 +3375,14 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
   // ---- dar baixa / desfazer ----
   const [baixa,setBaixa]=useState(null);   // {k, data, valor, obs}
   const confirmarBaixa=(l)=>{ const v=r2(baixa.valor); if(!(v>0)){ toast("Informe o valor pago"); return; } if(!baixa.data){ toast("Informe a data do pagamento"); return; }
-    const pg={ data:baixa.data, ref:ymRef+"-01", comp:ymRef, valor:v, obs:baixa.obs||(l.tipo==="vt"?"Vale-transporte":"Pagamento")+" "+fmtCompetencia(ymRef), origem:"contas" };
+    const forma=baixa.forma||"Pix";
+    const pg={ data:baixa.data, ref:ymRef+"-01", comp:ymRef, valor:v, forma, obs:baixa.obs||(l.tipo==="vt"?"Vale-transporte":"Pagamento")+" "+fmtCompetencia(ymRef)+" · "+forma, origem:"contas" };
     if(l.tipo==="manual") salvar(c=>({...c,manuais:c.manuais.map(m=>m.id===l.id?{...m,baixas:[...(m.baixas||[]),{...pg,id:Math.random().toString(36).slice(2)}]}:m)}));
     else if(l.tipo==="pj") addPagamentoPJ(l.pid,pg);
     else if(l.tipo==="free") addPagamentoFreela(l.pid,pg);
     else addPagamentoCLT(l.pid,{...pg, tipo:l.tipo==="vt"?"vt":"salario"});
-    toast("Baixa registrada: "+l.nome+" · "+fmtBRL(v)+" em "+fmtDataBR(baixa.data)); setBaixa(null); };
+    const falta=r2(l.saldo-v);
+    toast("Baixa registrada: "+l.nome+" · "+fmtBRL(v)+" ("+forma+") em "+fmtDataBR(baixa.data)+(falta>0.009?" · falta "+fmtBRL(falta):" · quitado")); setBaixa(null); };
   const desfazer=(l)=>{ const p=l.ultimo; if(!p) return; if(!confirm("Desfazer o pagamento de "+fmtBRL(Number(p.valor)||0)+" ("+fmtDataBR(p.data)+") de "+l.nome+"?")) return;
     if(l.tipo==="manual") salvar(c=>({...c,manuais:c.manuais.map(m=>m.id===l.id?{...m,baixas:(m.baixas||[]).filter(b=>b.id!==p.id)}:m)}));
     else if(l.tipo==="pj") removePagamentoPJ(l.pid,p.id);
@@ -3392,9 +3397,15 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
   const [nova,setNova]=useState(null);
   const addManual=()=>{ const p=pessoasOpc.find(x=>x.k===nova.pessoa); const nome=p?p.nome:(nova.nome||"").trim(); const v=r2(nova.valor);
     if(!nome){ toast("Escolha a pessoa ou digite o nome"); return; } if(!(v>0)){ toast("Informe o valor"); return; }
+    const forma=nova.forma||"Pix";
+    // VT de colaborador CLT/Freela Fixo: entra na linha de VT da pessoa (mesmo saldo da folha e da aba CLT/Freela Fixo)
+    if(nova.tipoLanc==="Vale-transporte" && String(nova.pessoa).startsWith("clt-")){ const pid=nova.pessoa.slice(4); const linhaVT=linhas.find(x=>x.k==="vt-"+pid);
+      if(!linhaVT || linhaVT.previsto<=0 || !nova.pago) setAj("vt-"+pid,"valor",String(!linhaVT||linhaVT.previsto<=0||!nova.pago ? v : linhaVT.previsto));
+      if(nova.pago) addPagamentoCLT(pid,{tipo:"vt", data:nova.dataPago||hoje, ref:ymRef+"-01", comp:ymRef, valor:v, forma, obs:"Vale-transporte "+fmtCompetencia(ymRef)+" · "+forma+(nova.desc?" · "+nova.desc:""), origem:"contas"});
+      setNova(null); toast(nova.pago?"VT pago lançado na conta de VT de "+nome:"VT do mês de "+nome+" definido em "+fmtBRL(v)); return; }
     const id=Math.random().toString(36).slice(2);
     const m={id, pessoa:nova.pessoa||"", nome, tipoLanc:nova.tipoLanc, desc:(nova.desc||"").trim(), valor:v, venc:nova.venc||"", unidade:p?p.unidade:(uni==="todas"?null:Number(uni)),
-      baixas: nova.pago ? [{id:Math.random().toString(36).slice(2), data:nova.dataPago||hoje, comp:ymRef, ref:ymRef+"-01", valor:v, obs:nova.tipoLanc}] : []};
+      baixas: nova.pago ? [{id:Math.random().toString(36).slice(2), data:nova.dataPago||hoje, comp:ymRef, ref:ymRef+"-01", valor:v, forma, obs:nova.tipoLanc+" · "+forma}] : []};
     salvar(c=>({...c,manuais:[...c.manuais,m]})); setNova(null); toast(nova.pago?"Pagamento lançado e baixado":"Pagamento lançado (provisionado)"); };
   const rmManual=(id)=>{ if(confirm("Excluir este lançamento manual?")) salvar(c=>({...c,manuais:c.manuais.filter(m=>m.id!==id)})); };
   // ---- exportação ----
@@ -3462,9 +3473,9 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
       <td className="px-2 py-2"><Badge tone={l.tipo==="pj"?"blue":l.tipo==="vt"?"amber":l.tipo==="fixo"||l.tipo==="free"?"free":l.tipo==="manual"?"slate":"brand"}>{rotTipo(l.tipo)}</Badge></td>
       <td className="px-2 py-2"><input type="number" step="0.01" className={cx(inp,"w-28 text-right tabular-nums",l.editado&&"border-amber-300 bg-amber-50")} value={(aj[l.k]||{}).valor!=null?(aj[l.k]||{}).valor:l.previstoOrig} onChange={e=>setAj(l.k,"valor",e.target.value)} aria-label={"Previsto "+l.k} title={l.editado?"Valor ajustado à mão (calculado: "+fmtBRL(l.previstoOrig)+")":"Valor calculado"}/></td>
       <td className="px-2 py-2"><input type="date" className={inp} value={l.venc||""} onChange={e=>setAj(l.k,"pagar",e.target.value)} aria-label={"Vencimento "+l.k}/></td>
-      <td className="px-2 py-2"><Badge tone={tonSt[l.status]}>{stTxt(l)}</Badge>{l.status==="parcial"&&<div className="text-[11px] text-slate-500 mt-0.5">falta {fmtBRL(l.saldo)}</div>}</td>
+      <td className="px-2 py-2"><Badge tone={tonSt[l.status]}>{stTxt(l)}</Badge>{l.status==="parcial"&&<div className="text-[11px] font-semibold text-amber-700 mt-0.5">falta {fmtBRL(l.saldo)}</div>}{l.pagos.length>0&&<div className="text-[10px] text-slate-400 mt-0.5 leading-tight">{l.pagos.map(p=>fmtBRL(Number(p.valor)||0)+" "+fmtDataBR(p.data)+(p.forma?" "+p.forma.toLowerCase():"")).join(" · ")}</div>}</td>
       <td className="px-2 py-2 text-right whitespace-nowrap">
-        {l.saldo>0.009 && <Btn size="sm" icon={I.check} onClick={()=>setBaixa({k:l.k,data:hoje,valor:l.saldo,obs:""})}>Dar baixa</Btn>}
+        {l.saldo>0.009 && <Btn size="sm" icon={I.check} onClick={()=>setBaixa({k:l.k,data:hoje,valor:l.saldo,obs:"",forma:l.tipo==="vt"?"Dinheiro":"Pix"})}>Dar baixa</Btn>}
         {l.ultimo && <button onClick={()=>desfazer(l)} className="ml-2 text-xs text-slate-500 hover:text-rose-600 hover:underline">Desfazer</button>}
         {l.manual && <button onClick={()=>rmManual(l.id)} className="ml-2 text-xs text-rose-500 hover:underline">Excluir</button>}
       </td>
@@ -3474,6 +3485,8 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
         <span className="text-sm font-semibold text-slate-700">Dar baixa — {l.nome}</span>
         <Field label="Pago em"><Input type="date" value={baixa.data} onChange={e=>setBaixa({...baixa,data:e.target.value})} aria-label="Data do pagamento"/></Field>
         <Field label="Valor pago (R$)"><Input type="number" step="0.01" value={baixa.valor} onChange={e=>setBaixa({...baixa,valor:e.target.value})} className="w-32" aria-label="Valor pago"/></Field>
+        <Field label="Forma"><Select value={baixa.forma||"Pix"} onChange={e=>setBaixa({...baixa,forma:e.target.value})} aria-label="Forma de pagamento">{FORMAS_PAG.map(f=><option key={f}>{f}</option>)}</Select></Field>
+        {r2(l.saldo-r2(baixa.valor))>0.009 && <span className="text-xs text-amber-700 pb-2">vai faltar <b>{fmtBRL(r2(l.saldo-r2(baixa.valor)))}</b></span>}
         <div className="flex-1 min-w-[160px]"><Field label="Observação"><Input value={baixa.obs} onChange={e=>setBaixa({...baixa,obs:e.target.value})} placeholder="Ex.: Pix, transferência"/></Field></div>
         <Btn icon={I.check} onClick={()=>confirmarBaixa(l)}>Confirmar baixa</Btn><Btn variant="ghost" onClick={()=>setBaixa(null)}>Cancelar</Btn>
       </div></td></tr> : null];
@@ -3516,6 +3529,7 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
       <div className="flex flex-wrap items-center gap-3 mt-3">
         <label className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={nova.pago} onChange={e=>setNova({...nova,pago:e.target.checked})} aria-label="Já foi pago"/>Já foi pago</label>
         {nova.pago && <label className="flex items-center gap-2 text-sm text-slate-600">em <input type="date" className={inp} value={nova.dataPago} onChange={e=>setNova({...nova,dataPago:e.target.value})} aria-label="Data em que foi pago"/></label>}
+        {nova.pago && <label className="flex items-center gap-2 text-sm text-slate-600">forma <select className={cx(inp,"bg-white")} value={nova.forma||"Pix"} onChange={e=>setNova({...nova,forma:e.target.value})} aria-label="Forma do pagamento manual">{FORMAS_PAG.map(f=><option key={f}>{f}</option>)}</select></label>}
         <div className="flex-1"/>
         <Btn icon={I.check} onClick={addManual}>Lançar</Btn><Btn variant="ghost" onClick={()=>setNova(null)}>Cancelar</Btn>
       </div>
@@ -3544,8 +3558,9 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
   </>;
 }
 function PagamentoSalariados({ modo, ini, fim, uni }){
-  const { clts, pjs, unidades, registros, pontoHist, getDossie, cltExtraAjuste, gorjetasCLT, escala, escalaOv, atestados, acesso, pagamentosCLT, addPagamentoCLT, removePagamentoCLT, pagamentosPJ, addPagamentoPJ, removePagamentoPJ, faltaDescontoDesde, feriadosExtras } = useStore();
+  const { clts, pjs, unidades, registros, pontoHist, getDossie, cltExtraAjuste, gorjetasCLT, escala, escalaOv, atestados, acesso, pagamentosCLT, addPagamentoCLT, removePagamentoCLT, pagamentosPJ, addPagamentoPJ, removePagamentoPJ, faltaDescontoDesde, feriadosExtras, relFin, setRelFin } = useStore();
   const ehPJ = modo==="pj";
+  const comVT = modo==="clt" || modo==="fixo";
   const pagMap = ehPJ ? pagamentosPJ : pagamentosCLT;
   const addPag = ehPJ ? addPagamentoPJ : addPagamentoCLT;
   const removePag = ehPJ ? removePagamentoPJ : removePagamentoCLT;
@@ -3553,9 +3568,20 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
   const _clock=useClock(60000);
   const [aberto,setAberto]=useState(null);
   const [novoPag,setNovoPag]=useState({});
+  const [novoVT,setNovoVT]=useState({});
   const podeSigilo=!acesso||acesso.podeSigilo;
   const naData=(d)=> (!ini||d>=ini)&&(!fim||d<=fim);
   const ymRef=(ini||hojeStr()).slice(0,7);
+  // VT do mês: mesmo valor previsto da tela "Contas do mês" (ajuste gravado em relatorioFinanceiro[mês].aj["vt-id"])
+  const chaveLeg=(ini||"")+"|"+(fim||"")+"|todas";
+  const ajMes=(((relFin||{})[ymRef]||(relFin||{})[chaveLeg]||{}).aj)||{};
+  const setVTPrevisto=(id,v)=>setRelFin(prev=>{ const c=(prev||{})[ymRef]||(prev||{})[chaveLeg]||{}; const a=c.aj||{}; const k="vt-"+id;
+    return {...(prev||{}),[ymRef]:{...c,aj:{...a,[k]:{...(a[k]||{}),valor:v}}}}; });
+  const vtDe=(id,det)=>{ const a=ajMes["vt-"+id]||{}; const auto=Math.round(Number((det&&det.vt)||0)*100)/100; const editado=a.valor!=null&&a.valor!=="";
+    const previsto=Math.round((editado?Number(a.valor):auto)*100)/100;
+    const pagos=(pagamentosCLT[String(id)]||[]).filter(p=>p.tipo==="vt" && p.comp===ymRef);
+    const pago=Math.round(pagos.reduce((s,p)=>s+Number(p.valor||0),0)*100)/100;
+    return { auto, previsto, editado, pagos, pago, falta:Math.round((previsto-pago)*100)/100, dias:det&&det.vtDias, dia:det&&det.vtDia }; };
   const _nowMin=_clock.getHours()*60+_clock.getMinutes();
   const apurCLT=apurarHoras([...pontoHist,...registros]).filter(x=>x.tipo==="clt"&&x.completo&&naData(x.dia));
   const faltasCtx={ escala, escalaOv, registros:[...pontoHist,...registros], atestados, ini, fim, hoje:hojeStr(), nowMin:_nowMin, desde:faltaDescontoDesde };
@@ -3565,6 +3591,8 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
     ? (pjs||[]).filter(pj=>pjAtivoNoPeriodo(pj,ini,fim))
     : modo==="confianca"
     ? clts.filter(c=>c.vinculo==="confianca")
+    : modo==="fixo"
+    ? clts.filter(c=>c.vinculo==="fixo" && c.status!=="inativo")
     : clts.filter(c=>c.vinculo!=="fixo" && c.vinculo!=="confianca")).filter(naCasa);
   const pagosDe=(id)=> (pagMap[String(id)]||[]).filter(p=>p.tipo!=="vt" && pagoNaCompetencia(p,ymRef,naData));
   const linhas=lista.map(c=>{
@@ -3575,19 +3603,29 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
     else { det=calcFolhaLinha(c,folhaCtx); total=det.liquido; }
     const oculto = modo==="confianca" && c.sigiloso && !podeSigilo;
     const pagos=pagosDe(c.id); const pago=pagos.reduce((s,p)=>s+Number(p.valor||0),0);
-    return { id:c.id, nome:c.nome, foto:c.foto, pix:c.pix, cargo:ehPJ?(c.servico||"Prestador PJ"):c.cargo, sigiloso:!!c.sigiloso, oculto, total, pago, saldo:total-pago, pagos, det };
+    const vt = comVT ? vtDe(c.id,det) : null;
+    return { id:c.id, nome:c.nome, foto:c.foto, pix:c.pix, cargo:ehPJ?(c.servico||"Prestador PJ"):c.cargo, sigiloso:!!c.sigiloso, oculto, total, pago, saldo:total-pago, pagos, det, vt, diasTrab: det&&det.dias?det.dias.length:null };
   }).sort((a,b)=>b.total-a.total);
   const vis=linhas.filter(l=>!l.oculto);
   const totalGeral=vis.reduce((s,l)=>s+l.total,0);
   const totalPago=vis.reduce((s,l)=>s+l.pago,0);
   const saldoGeral=totalGeral-totalPago;
+  const vtFaltaGeral=Math.round(vis.reduce((s,l)=>s+(l.vt&&l.vt.falta>0?l.vt.falta:0),0)*100)/100;
+  const vtPagoGeral=Math.round(vis.reduce((s,l)=>s+(l.vt?l.vt.pago:0),0)*100)/100;
+  const lancarVT=(l)=>{ const n=novoVT[l.id]||{}; const v=Math.round(Number(String(n.valor||"").replace(",","."))*100)/100; if(!(v>0)){ toast("Informe o valor de VT pago"); return; }
+    const forma=n.forma||"Dinheiro", data=n.data||hojeStr();
+    addPagamentoCLT(l.id,{tipo:"vt", data, ref:ymRef+"-01", comp:ymRef, valor:v, forma, obs:"Vale-transporte "+fmtCompetencia(ymRef)+" · "+forma+(n.obs?" · "+n.obs:""), origem:"pagamentos"});
+    setNovoVT(p=>({...p,[l.id]:{}}));
+    const falta=Math.round(((l.vt?l.vt.falta:0)-v)*100)/100;
+    toast("VT registrado ("+forma+"): "+fmtBRL(v)+(l.vt&&l.vt.previsto>0?(falta>0?" · falta "+fmtBRL(falta):" · VT do mês quitado"):"")); };
   const confOcultos=linhas.filter(l=>l.oculto).length;
   const pagarTudo=(l)=>{ if(l.saldo<=0){ toast("Nada em aberto para "+l.nome); return; } addPag(l.id,{data:hojeStr(), ref:ymRef+"-01", comp:ymRef, valor:Math.round(l.saldo*100)/100, obs:(ehPJ?"Prestação de serviço ":modo==="confianca"?"Salário ":"Folha ")+fmtCompetencia(ymRef)}); toast("Pagamento de "+fmtCompetencia(ymRef)+" registrado"); };
   const lancarPag=(l)=>{ const np=novoPag[l.id]||{}; const v=Number(np.valor||0); if(!v){ toast("Informe o valor do pagamento"); return; }
     const comp=np.comp||ymRef, data=np.data||hojeStr();
-    addPag(l.id,{data, ref:comp+"-01", comp, valor:v, obs:np.obs||(comp===ymRef?"Adiantamento":"Pagamento")}); setNovoPag(p=>({...p,[l.id]:{valor:"",obs:"",comp:"",data:""}}));
+    addPag(l.id,{data, ref:comp+"-01", comp, valor:v, forma:np.forma||"Pix", obs:np.obs||(comp===ymRef?"Adiantamento":"Pagamento")}); setNovoPag(p=>({...p,[l.id]:{valor:"",obs:"",comp:"",data:""}}));
     toast("Pagamento registrado em "+fmtCompetencia(comp)+(comp!==ymRef?" (não entra neste mês)":"")); };
-  const rot = ehPJ?"Prestadores PJ":modo==="confianca"?"Gerência & Diretoria":"CLT";
+  const rot = ehPJ?"Prestadores PJ":modo==="confianca"?"Gerência & Diretoria":modo==="fixo"?"Freela Fixo":"CLT";
+  const nCol = comVT ? 7 : 6;
   const atrasado=(l)=> ehPJ && l.saldo>0 && l.det && l.det.venc && l.det.venc<hojeStr();
   return <>
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
@@ -3596,20 +3634,22 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
       <StatCard icon={I.pix} label="Saldo restante" value={fmtBRL(saldoGeral)} tone={saldoGeral>0?"amber":"green"}/>
       <StatCard icon={I.user} label={rot} value={linhas.length} tone="slate"/>
     </div>
+    {comVT && <div className="mb-3 p-3 rounded-xl bg-sky-50 text-sky-800 text-xs flex flex-wrap items-center gap-3"><Icon d={I.wallet} className="w-4 h-4"/><b>Vale-transporte de {fmtCompetencia(ymRef)}</b><span>pago: <b className="tabular-nums">{fmtBRL(vtPagoGeral)}</b></span><span>falta pagar: <b className={cx("tabular-nums",vtFaltaGeral>0?"text-amber-700":"text-emerald-700")}>{fmtBRL(vtFaltaGeral)}</b></span><span className="text-sky-600">Clique no nome para lançar VT pago em dinheiro, Pix ou transferência.</span></div>}
     {modo==="confianca" && confOcultos>0 && <div className="mb-3 p-3 rounded-xl bg-amber-50 text-amber-700 text-xs flex items-center gap-2"><Icon d={I.shield} className="w-4 h-4"/> {confOcultos} pagamento(s) de diretoria ocultos — valor visível apenas para o Diretor e a Diretora Financeira.</div>}
     <Card className="overflow-hidden"><div className="overflow-x-auto"><table className="w-full text-sm min-w-[760px]">
-      <thead><tr className="text-left text-slate-400 border-b border-slate-100">{(ehPJ?["Prestador","Serviço","Valor do período","Pago","Saldo","Vencimento · Pix"]:["Colaborador","Cargo",modo==="confianca"?"Salário mensal":"Líquido do mês","Pago","Saldo","Pix"]).map(h=><th key={h} className="px-4 py-3 font-semibold">{h}</th>)}</tr></thead>
+      <thead><tr className="text-left text-slate-400 border-b border-slate-100">{(ehPJ?["Prestador","Serviço","Valor do período","Pago","Saldo","Vencimento · Pix"]:comVT?["Colaborador",modo==="fixo"?"Cargo · dias trab.":"Cargo","Líquido do mês","Pago","Saldo","Vale-transporte","Pix"]:["Colaborador","Cargo","Salário mensal","Pago","Saldo","Pix"]).map(h=><th key={h} className="px-4 py-3 font-semibold">{h}</th>)}</tr></thead>
       <tbody className="divide-y divide-slate-50">
         {linhas.map(l=>[
           <tr key={l.id} className={cx("hover:bg-slate-50/70", !l.oculto&&"cursor-pointer")} onClick={()=>{ if(!l.oculto) setAberto(aberto===l.id?null:l.id); }}>
           <td className="px-4 py-3"><div className="flex items-center gap-2">{!l.oculto&&<Icon d={aberto===l.id?I.x:I.plus} className="w-3.5 h-3.5 text-slate-400"/>}<Avatar name={l.nome} src={l.foto} tone={modo==="confianca"||ehPJ?"slate":"brand"} size="w-7 h-7"/><span className="font-semibold text-slate-800">{l.nome}</span>{l.sigiloso&&<Badge tone="amber">sigiloso</Badge>}{ehPJ&&<Badge tone="blue">PJ</Badge>}</div></td>
-          <td className="px-4 py-3 text-slate-600">{l.cargo}</td>
+          <td className="px-4 py-3 text-slate-600">{l.cargo}{modo==="fixo"&&l.diasTrab!=null&&<span className="text-slate-400"> · {l.diasTrab} dia(s)</span>}</td>
           <td className="px-4 py-3 font-bold text-slate-900 tabular-nums">{l.oculto?<span className="inline-flex items-center gap-1 text-slate-400"><Icon d={I.shield} className="w-3.5 h-3.5"/>••••••</span>:fmtBRL(l.total)}</td>
           <td className="px-4 py-3 text-emerald-600 tabular-nums">{l.oculto?"—":(l.pago>0?fmtBRL(l.pago):"—")}</td>
           <td className={cx("px-4 py-3 font-semibold tabular-nums", l.oculto?"text-slate-400":l.saldo>0?"text-amber-600":"text-emerald-600")}>{l.oculto?"—":fmtBRL(l.saldo)}</td>
+          {comVT && <td className="px-4 py-3 text-xs tabular-nums" aria-label={"VT de "+l.nome}>{!l.vt||(l.vt.previsto<=0&&l.vt.pago<=0)?<span className="text-slate-300">—</span>:<><div className="text-slate-500">pago {fmtBRL(l.vt.pago)}{l.vt.previsto>0?" de "+fmtBRL(l.vt.previsto):""}</div><div className={cx("font-bold",l.vt.falta>0?"text-amber-600":"text-emerald-600")}>{l.vt.falta>0?"falta "+fmtBRL(l.vt.falta):"quitado"}</div></>}</td>}
           <td className="px-4 py-3 font-mono text-xs text-slate-500">{ehPJ && l.det && l.det.venc && <div className={cx("font-sans font-semibold mb-0.5", atrasado(l)?"text-rose-600":l.saldo<=0?"text-emerald-600":"text-slate-600")}>{l.saldo<=0?"pago":atrasado(l)?"vencido "+fmtDataBR(l.det.venc):"vence "+fmtDataBR(l.det.venc)}</div>}{l.oculto?"—":(l.pix||"—")}</td>
         </tr>,
-          aberto===l.id && !l.oculto && <tr key={l.id+"-d"} className="bg-slate-50/60"><td colSpan="6" className="px-4 py-4" onClick={e=>e.stopPropagation()}>
+          aberto===l.id && !l.oculto && <tr key={l.id+"-d"} className="bg-slate-50/60"><td colSpan={nCol} className="px-4 py-4" onClick={e=>e.stopPropagation()}>
             <div className="grid lg:grid-cols-3 gap-4">
               <div className="lg:col-span-2">
                 <div className="text-xs font-bold text-slate-500 uppercase mb-2">Resumo do mês</div>
@@ -3634,7 +3674,7 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
                 <div className="space-y-1.5">
                   {l.pagos.length===0 && <p className="text-xs text-slate-400">Nenhum pagamento registrado ainda.</p>}
                   {l.pagos.map(p=><div key={p.id} className="flex items-center gap-2 text-sm bg-white rounded-lg px-3 py-2 border border-slate-100">
-                    <div className="min-w-0"><div className="font-semibold text-slate-800 tabular-nums">{fmtBRL(Number(p.valor||0))}</div><div className="text-[11px] text-slate-400 truncate">{p.comp?"ref. "+fmtCompetencia(p.comp)+" · ":""}pago em {fmtDataBR(p.data)} · {p.obs||"—"}</div></div>
+                    <div className="min-w-0"><div className="font-semibold text-slate-800 tabular-nums">{fmtBRL(Number(p.valor||0))}</div><div className="text-[11px] text-slate-400 truncate">{p.comp?"ref. "+fmtCompetencia(p.comp)+" · ":""}pago em {fmtDataBR(p.data)}{p.forma?" · "+p.forma:""} · {p.obs||"—"}</div></div>
                     <button onClick={()=>removePag(l.id,p.id)} className="ml-auto text-slate-300 hover:text-rose-500" title="Remover"><Icon d={I.trash} className="w-4 h-4"/></button>
                   </div>)}
                 </div>
@@ -3646,10 +3686,29 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
                   <div className="flex items-center justify-between text-sm border-t border-slate-100 pt-2"><span className="font-semibold text-slate-600">Saldo</span><span className={cx("font-extrabold tabular-nums", l.saldo>0?"text-amber-600":"text-emerald-600")}>{fmtBRL(l.saldo)}</span></div>
                   <button onClick={()=>pagarTudo(l)} disabled={l.saldo<=0} className={cx("w-full px-3 py-1.5 rounded-lg text-xs font-bold text-white", l.saldo>0?"grad-brand hover:opacity-90":"bg-slate-300 cursor-not-allowed")}>Pagar saldo do mês</button>
                 </div>
-                <div className="text-[11px] font-bold text-slate-400 uppercase mt-3 mb-1.5">Adiantamento / parcial</div>
+                {comVT && l.vt && <>
+                <div className="text-[11px] font-bold text-sky-600 uppercase mt-3 mb-1.5">Vale-transporte · {fmtCompetencia(ymRef)}</div>
+                <div className="bg-white rounded-xl border border-sky-100 p-3 space-y-2">
+                  <label className="block text-[11px] text-slate-500">VT do mês (R$){l.vt.auto>0?<span className="text-slate-400"> · folha: {l.vt.dias} dia(s) × {fmtBRL(l.vt.dia)} = {fmtBRL(l.vt.auto)}</span>:<span className="text-slate-400"> · sem VT/dia no cadastro — digite o valor combinado</span>}
+                    <input type="number" step="0.01" min="0" value={l.vt.editado?(ajMes["vt-"+l.id]||{}).valor:(l.vt.auto||"")} placeholder="0,00" onChange={e=>setVTPrevisto(l.id,e.target.value)} className="w-full mt-0.5 px-2 py-1.5 rounded-lg border border-slate-200 text-sm" aria-label={"VT do mês de "+l.nome}/></label>
+                  {l.vt.editado && l.vt.auto>0 && <button onClick={()=>setVTPrevisto(l.id,"")} className="text-[11px] text-sky-600 hover:underline">voltar ao valor da folha ({fmtBRL(l.vt.auto)})</button>}
+                  <div className="flex items-center justify-between text-sm"><span className="text-slate-500">Já pago de VT</span><span className="font-bold text-emerald-600 tabular-nums">{fmtBRL(l.vt.pago)}</span></div>
+                  <div className="flex items-center justify-between text-sm border-t border-slate-100 pt-2"><span className="font-semibold text-slate-600">Falta pagar de VT</span><span className={cx("font-extrabold tabular-nums",l.vt.falta>0?"text-amber-600":"text-emerald-600")} aria-label={"Falta pagar VT de "+l.nome}>{fmtBRL(Math.max(0,l.vt.falta))}</span></div>
+                  {l.vt.pagos.map(p=><div key={p.id} className="flex items-center gap-2 text-xs bg-sky-50/60 rounded-lg px-2 py-1.5">
+                    <span className="font-semibold tabular-nums">{fmtBRL(Number(p.valor||0))}</span><span className="text-slate-500 truncate">{fmtDataBR(p.data)}{p.forma?" · "+p.forma:""}</span>
+                    <button onClick={()=>{ if(confirm("Remover este pagamento de VT?")) removePagamentoCLT(l.id,p.id); }} className="ml-auto text-slate-300 hover:text-rose-500" title="Remover"><Icon d={I.trash} className="w-3.5 h-3.5"/></button></div>)}
+                  <div className="grid grid-cols-2 gap-2 pt-1">
+                    <label className="text-[11px] text-slate-500">Valor pago (R$)<input type="number" step="0.01" min="0" value={(novoVT[l.id]||{}).valor||""} placeholder={l.vt.falta>0?String(l.vt.falta):"0,00"} onChange={e=>setNovoVT(p=>({...p,[l.id]:{...(p[l.id]||{}),valor:e.target.value}}))} className="w-full mt-0.5 px-2 py-1.5 rounded-lg border border-slate-200 text-sm" aria-label={"Valor de VT pago a "+l.nome}/></label>
+                    <label className="text-[11px] text-slate-500">Forma<select value={(novoVT[l.id]||{}).forma||"Dinheiro"} onChange={e=>setNovoVT(p=>({...p,[l.id]:{...(p[l.id]||{}),forma:e.target.value}}))} className="w-full mt-0.5 px-2 py-1.5 rounded-lg border border-slate-200 text-sm bg-white" aria-label={"Forma do VT de "+l.nome}>{FORMAS_PAG.map(f=><option key={f}>{f}</option>)}</select></label>
+                    <label className="text-[11px] text-slate-500 col-span-2">Pago em<input type="date" value={(novoVT[l.id]||{}).data||hojeStr()} onChange={e=>setNovoVT(p=>({...p,[l.id]:{...(p[l.id]||{}),data:e.target.value}}))} className="w-full mt-0.5 px-2 py-1.5 rounded-lg border border-slate-200 text-sm" aria-label={"Data do VT de "+l.nome}/></label>
+                  </div>
+                  <button onClick={()=>lancarVT(l)} className="w-full px-3 py-1.5 rounded-lg text-xs font-bold bg-sky-600 text-white hover:bg-sky-700">Registrar VT pago</button>
+                </div></>}
+                <div className="text-[11px] font-bold text-slate-400 uppercase mt-3 mb-1.5">{comVT?"Salário · adiantamento / parcial":"Adiantamento / parcial"}</div>
                 <div className="bg-white rounded-xl border border-slate-100 p-3 space-y-2">
                   <div className="flex items-center gap-1"><span className="text-slate-500 text-xs">R$</span><input type="number" placeholder="valor" value={(novoPag[l.id]||{}).valor||""} onChange={e=>setNovoPag(p=>({...p,[l.id]:{...(p[l.id]||{}),valor:e.target.value}}))} className="w-full px-2 py-1.5 rounded-lg border border-slate-200 text-sm"/></div>
-                  <input type="text" placeholder="observação (ex.: adiantamento Pix)" value={(novoPag[l.id]||{}).obs||""} onChange={e=>setNovoPag(p=>({...p,[l.id]:{...(p[l.id]||{}),obs:e.target.value}}))} className="w-full px-2 py-1.5 rounded-lg border border-slate-200 text-sm"/>
+                  <input type="text" placeholder="observação (ex.: adiantamento)" value={(novoPag[l.id]||{}).obs||""} onChange={e=>setNovoPag(p=>({...p,[l.id]:{...(p[l.id]||{}),obs:e.target.value}}))} className="w-full px-2 py-1.5 rounded-lg border border-slate-200 text-sm"/>
+                  <select value={(novoPag[l.id]||{}).forma||"Pix"} onChange={e=>setNovoPag(p=>({...p,[l.id]:{...(p[l.id]||{}),forma:e.target.value}}))} className="w-full px-2 py-1.5 rounded-lg border border-slate-200 text-sm bg-white" aria-label={"Forma do pagamento de "+l.nome}>{FORMAS_PAG.map(f=><option key={f}>{f}</option>)}</select>
                   <div className="grid grid-cols-2 gap-2">
                     <label className="text-[11px] text-slate-500">Referente ao mês<input type="month" value={(novoPag[l.id]||{}).comp||ymRef} onChange={e=>setNovoPag(p=>({...p,[l.id]:{...(p[l.id]||{}),comp:e.target.value}}))} className="w-full mt-0.5 px-2 py-1.5 rounded-lg border border-slate-200 text-sm" aria-label={"Competência do pagamento de "+l.nome}/></label>
                     <label className="text-[11px] text-slate-500">Pago em<input type="date" value={(novoPag[l.id]||{}).data||hojeStr()} onChange={e=>setNovoPag(p=>({...p,[l.id]:{...(p[l.id]||{}),data:e.target.value}}))} className="w-full mt-0.5 px-2 py-1.5 rounded-lg border border-slate-200 text-sm" aria-label={"Data do pagamento de "+l.nome}/></label>
@@ -3660,15 +3719,15 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
             </div>
           </td></tr>
         ])}
-        {linhas.length===0 && <tr><td colSpan="6" className="px-4 py-8 text-center text-slate-400">Nenhum {ehPJ?"prestador PJ ativo":modo==="confianca"?"cargo de confiança":"colaborador CLT"} nesta casa.</td></tr>}
+        {linhas.length===0 && <tr><td colSpan={nCol} className="px-4 py-8 text-center text-slate-400">Nenhum {ehPJ?"prestador PJ ativo":modo==="confianca"?"cargo de confiança":modo==="fixo"?"Freela Fixo":"colaborador CLT"} nesta casa.</td></tr>}
       </tbody>
       {vis.length>0 && <tfoot><tr className="border-t-2 border-slate-100 bg-slate-50/60">
         <td className="px-4 py-3 font-bold" colSpan="2">Total {podeSigilo?"":"(visível)"}</td>
         <td className="px-4 py-3 font-extrabold text-slate-900 tabular-nums">{fmtBRL(totalGeral)}</td>
         <td className="px-4 py-3 font-bold text-emerald-600 tabular-nums">{fmtBRL(totalPago)}</td>
-        <td className={cx("px-4 py-3 font-extrabold tabular-nums", saldoGeral>0?"text-amber-600":"text-emerald-600")}>{fmtBRL(saldoGeral)}</td><td/></tr></tfoot>}
+        <td className={cx("px-4 py-3 font-extrabold tabular-nums", saldoGeral>0?"text-amber-600":"text-emerald-600")}>{fmtBRL(saldoGeral)}</td>{comVT&&<td className={cx("px-4 py-3 text-xs font-bold tabular-nums",vtFaltaGeral>0?"text-amber-600":"text-emerald-600")}>{vtFaltaGeral>0?"falta "+fmtBRL(vtFaltaGeral):"VT quitado"}</td>}<td/></tr></tfoot>}
     </table></div></Card>
-    <p className="text-xs text-slate-400 mt-3">{ehPJ?"Valor mensal do contrato de cada prestador PJ (proporcional aos meses de vigência no período), com o vencimento no dia de pagamento cadastrado. ":modo==="confianca"?"Salário mensal fixo dos cargos de confiança. ":"Líquido do mês = salário + extras/adic. noturno − faltas/DSR (mesma conta da folha). "}Clique no nome para registrar pagamentos parciais, adiantamentos e o saldo restante.</p>
+    <p className="text-xs text-slate-400 mt-3">{ehPJ?"Valor mensal do contrato de cada prestador PJ (proporcional aos meses de vigência no período), com o vencimento no dia de pagamento cadastrado. ":modo==="confianca"?"Salário mensal fixo dos cargos de confiança. ":modo==="fixo"?"Freela Fixo: salário mensal proporcional aos dias de contrato + extras − faltas (mesma conta da folha); o VT é pago à parte. ":"Líquido do mês = salário + extras/adic. noturno − faltas/DSR (mesma conta da folha). "}Clique no nome para registrar pagamentos parciais, adiantamentos e o saldo restante.</p>
   </>;
 }
 
@@ -3725,7 +3784,7 @@ function Pagamentos() {
     </PageHeader>
 
     <div className="flex flex-wrap gap-2 mb-3">
-      {[["contas","Contas do mês"],["freela","Freelancers (semanal)"],["clt","CLT"],["confianca","Gerência & Diretoria"],["pj","Prestadores PJ"]].map(([k,l])=>
+      {[["contas","Contas do mês"],["freela","Freelancers (semanal)"],["clt","CLT"],["fixo","Freela Fixo"],["confianca","Gerência & Diretoria"],["pj","Prestadores PJ"]].map(([k,l])=>
         <button key={k} onClick={()=>{setAbaP(k);setAberto(null); if(k==="contas"){ const [y,m]=(ini||hojeStr()).slice(0,7).split("-").map(Number); const [a,b]=mesDe(y,m); setIni(a); setFim(b); } }} className={cx("px-4 py-2 rounded-xl text-sm font-semibold border transition", abaP===k?"grad-brand text-white border-transparent shadow-glow":"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>{l}</button>)}
     </div>
 
