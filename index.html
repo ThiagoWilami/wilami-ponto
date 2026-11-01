@@ -3325,7 +3325,7 @@ function Relatorios() {
       return {cols:["Freelancer","Função","Diárias","Horas","Valor","Pago","Saldo","Pix"], rows, tot:[2,3,4,5,6], nota:"Diárias registradas no mês (dia 01 ao último dia)."}; },
     pj:()=>{ const rows=(pjs||[]).filter(pj=>pjAtivoNoPeriodo(pj,ini,fim)&&(casa==="todas"||naCasa(pj.unidade)||pj.unidade==null||pj.unidade==="todas")).map(pj=>{ const pv=pjValorNoPeriodo(pj,ini,fim);
         const pago=(pagamentosPJ[String(pj.id)]||[]).filter(p=>pagoNaCompetencia(p,ym,naData)).reduce((s,p)=>s+(Number(p.valor)||0),0);
-        return [S(pj.nome),S(pj.servico||""),B(pj.valor),B(pv.total),S(pv.det.filter(d=>!d.cheio).map(d=>d.dias+" dia(s)").join(", ")||"mês cheio"),S(fmtDataBR(pjVencimento(pj,ym))),B(pago),B(pv.total-pago)]; });
+        return [S(pj.nome),S(pj.servico||""),B(pj.valor),B(pv.total),S(pv.det.filter(d=>!d.cheio).map(d=>d.dias+" dia(s)").join(", ")||"mês cheio"),S(pjParcelasNoMes(pj,ym,pv.total).map(p=>fmtDataBR(p.venc)+(p.N>1?" ("+fmtBRL(p.valor)+")":"")).join(" + ")),B(pago),B(pv.total-pago)]; });
       return {cols:["Prestador","Serviço","Valor mensal","Valor do mês","Proporcional","Vencimento","Pago","Saldo"], rows, tot:[3,6,7], nota:"Valor do contrato proporcional aos dias de vigência no mês; vencimento no dia do contrato do mês seguinte."}; },
     pagos:()=>{ const out=[]; const nomeClt=(id)=>{ const c=clts.find(x=>String(x.id)===String(id)); return c?c:null; };
       Object.keys(pagamentosCLT||{}).forEach(id=>{ const c=nomeClt(id); if(!c||!naCasa(c.unidade)) return; if(c.vinculo==="confianca"&&c.sigiloso&&!podeSigilo) return;
@@ -3432,7 +3432,10 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
       const temPgVT=(pagamentosCLT[String(c.id)]||[]).some(p=>p.tipo==="vt"&&p.comp===ymRef);
       if(l.vt>0||temAjVT||temPgVT) out.push({k:"vt-"+c.id, tipo:"vt", pid:c.id, ref:c, nome:c.nome, desc:l.vt>0?"VT · "+l.vtDias+" dia(s) de escala":"VT combinado do mês", dias:l.vtDias, previsto:l.vt||0, venc:(c.admissao&&c.admissao>dataVT&&c.admissao<=(fim||"9999"))?c.admissao:dataVT, pix:c.pix||"", unidade:c.unidade}); });
     (pjs||[]).filter(pj=>pjAtivoNoPeriodo(pj,ini,fim)).filter(naCasa).forEach(pj=>{ const meses=pjMesesNoPeriodo(pj,ini,fim);
-      out.push({k:"pj-"+pj.id, tipo:"pj", pid:pj.id, ref:pj, nome:pj.nome, desc:(pj.servico||"Prestação de serviço")+((pjValorNoPeriodo(pj,ini,fim).det.find(d=>!d.cheio))?" · proporcional "+pjValorNoPeriodo(pj,ini,fim).det.filter(d=>!d.cheio).map(d=>d.dias+" dia(s)").join(", "):""), dias:null, previsto:pjValorNoPeriodo(pj,ini,fim).total, venc:pjVencimento(pj,ymRef), pix:pj.pix||"", unidade:pj.unidade}); });
+      const pv=pjValorNoPeriodo(pj,ini,fim); const descPJ=(pj.servico||"Prestação de serviço")+((pv.det.find(d=>!d.cheio))?" · proporcional "+pv.det.filter(d=>!d.cheio).map(d=>d.dias+" dia(s)").join(", "):"");
+      const parc=pjParcelasNoMes(pj,ymRef,pv.total);
+      if(parc.length<=1) out.push({k:"pj-"+pj.id, tipo:"pj", pid:pj.id, ref:pj, nome:pj.nome, desc:descPJ, dias:null, previsto:pv.total, venc:parc[0].venc, pix:pj.pix||"", unidade:pj.unidade});
+      else parc.forEach(p=>out.push({k:"pj-"+pj.id+(p.n>1?"#"+p.n:""), tipo:"pj", pid:pj.id, ref:pj, nome:pj.nome, desc:"Parcela "+p.n+"/"+p.N+" ("+p.pct+"%) · "+descPJ, dias:null, previsto:p.valor, venc:p.venc, pix:pj.pix||"", unidade:pj.unidade, parcela:p.n, parcelaN:p.N, parcelasVals:parc.map(x=>({valor:x.valor}))})); });
     (freelasComPagamentos||[]).forEach(f=>{ const js=(f.jornadasHist||[]).filter(j=>naData(j.data) && (uni==="todas"||Number(j.unidade)===Number(uni)));
       const pagos=(pagamentosFreela[String(f.id)]||[]).filter(p=>p.comp?p.comp===ymRef:(p.semana?p.semana.slice(0,7)===ymRef:naData(p.ref||p.data||"")));
       if(!js.length && !pagos.length && !((aj["free-"+f.id]||{}).credito)) return;
@@ -3441,7 +3444,8 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
   // ---- pagamentos (baixas) de cada linha: gravados nos mesmos cadastros de pagamento das outras telas ----
   const pagosDaLinha=(l)=>{
     if(l.tipo==="manual") return (l.baixas||[]);
-    if(l.tipo==="pj") return (pagamentosPJ[String(l.pid)]||[]).filter(p=>pagoNaCompetencia(p,ymRef,naData));
+    if(l.tipo==="pj"){ const todos=(pagamentosPJ[String(l.pid)]||[]).filter(p=>pagoNaCompetencia(p,ymRef,naData)); if(!(l.parcelaN>1)) return todos;
+      return pjAlocarPagos(todos,l.parcelasVals)[l.parcela-1]||[]; }
     if(l.tipo==="vt") return (pagamentosCLT[String(l.pid)]||[]).filter(p=>p.tipo==="vt" && p.comp===ymRef);
     if(l.tipo==="free") return (pagamentosFreela[String(l.pid)]||[]).filter(p=>p.comp?p.comp===ymRef:(p.semana?p.semana.slice(0,7)===ymRef:naData(p.ref||p.data||"")));
     return (pagamentosCLT[String(l.pid)]||[]).filter(p=>p.tipo!=="vt" && pagoNaCompetencia(p,ymRef,naData)); };
@@ -3483,7 +3487,7 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
     const forma=baixa.forma||"Pix";
     const pg={ data:baixa.data, ref:ymRef+"-01", comp:ymRef, valor:v, forma, obs:baixa.obs||(l.tipo==="vt"?"Vale-transporte":"Pagamento")+" "+fmtCompetencia(ymRef)+" · "+forma, origem:"contas" };
     if(l.tipo==="manual") salvar(c=>({...c,manuais:c.manuais.map(m=>m.id===l.id?{...m,baixas:[...(m.baixas||[]),{...pg,id:Math.random().toString(36).slice(2)}]}:m)}));
-    else if(l.tipo==="pj") addPagamentoPJ(l.pid,pg);
+    else if(l.tipo==="pj") addPagamentoPJ(l.pid,l.parcelaN>1?{...pg,parcela:l.parcela,obs:baixa.obs||("Parcela "+l.parcela+"/"+l.parcelaN+" · "+fmtCompetencia(ymRef)+" · "+forma)}:pg);
     else if(l.tipo==="free") addPagamentoFreela(l.pid,pg);
     else addPagamentoCLT(l.pid,{...pg, tipo:l.tipo==="vt"?"vt":"salario"});
     const falta=r2(l.saldo-v);
@@ -3619,7 +3623,7 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
         doDia.forEach(l=>{ if(precisa(28)) cabPix(); nPix++; const r=l.ref||{}; const chave=r.pix||l.pix||""; if(!chave) semPix++;
           const valor=Math.max(0,l.saldo);
           txt(String(nPix),X.n,y,{size:8,cor:C.cinza}); txt(corta(l.nome,X.chave-X.nome-8,b,8.5),X.nome,y,{bold:true,size:8.5});
-          txt(corta(rotTipo(l.tipo)+(l.pago>0?" · já pago "+fmtBRL(l.pago):""),X.chave-X.nome-8,f,7),X.nome,y-10,{size:7,cor:C.cinza});
+          txt(corta(rotTipo(l.tipo)+(l.parcelaN>1?" · parcela "+l.parcela+"/"+l.parcelaN:"")+(l.pago>0?" · já pago "+fmtBRL(l.pago):""),X.chave-X.nome-8,f,7),X.nome,y-10,{size:7,cor:C.cinza});
           if(chave){ txt(corta(chave,X.venc-X.chave-8,b,8.5),X.chave,y,{bold:true,size:8.5,cor:C.azul}); txt(corta([tipoChave(chave,r.tipoPix),r.banco].filter(Boolean).join(" · "),X.venc-X.chave-8,f,7),X.chave,y-10,{size:7,cor:C.cinza}); }
           else txt("SEM PIX CADASTRADO",X.chave,y,{bold:true,size:8,cor:C.verm});
           txt(l.venc?fmtDataBR(l.venc):"-",X.venc,y,{size:8.5});
@@ -3939,7 +3943,10 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
   const linhas=lista.map(c=>{
     let total, det=null;
     if(ehPJ){ const pv=pjValorNoPeriodo(c,ini,fim); const meses=pv.meses; total=pv.total;
-      det={ meses, valorMensal:Number(c.valor||0), venc:pjVencimento(c,ymRef), forma:c.formaPagamento||"Pix", cnpj:c.cnpj }; }
+      const parc=pjParcelasNoMes(c,ymRef,total); const pagosPJ=(pagamentosPJ[String(c.id)]||[]).filter(p=>pagoNaCompetencia(p,ymRef,naData)); const aloc=parc.length>1?pjAlocarPagos(pagosPJ,parc):[pagosPJ];
+      const parcSt=parc.map((p,i)=>{ const pg=Math.round((aloc[i]||[]).reduce((s2,x)=>s2+(Number(x.valor)||0),0)*100)/100; return {...p, pago:pg, falta:Math.max(0,Math.round((p.valor-pg)*100)/100)}; });
+      const prox=parcSt.find(p=>p.falta>0.009);
+      det={ meses, valorMensal:Number(c.valor||0), venc:(prox||parcSt[parcSt.length-1]).venc, forma:c.formaPagamento||"Pix", cnpj:c.cnpj, parcelas:parcSt.length>1?parcSt:null }; }
     else if(modo==="confianca"){ total=Number(c.salario||0); }
     else { det=calcFolhaLinha(c,folhaCtx); total=det.liquido; }
     const oculto = modo==="confianca" && c.sigiloso && !podeSigilo;
@@ -4024,7 +4031,8 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
                   {modo==="confianca" && <div className="flex justify-between"><span className="text-slate-500">Salário mensal</span><span className="tabular-nums">{fmtBRL(l.total)}</span></div>}
                   {ehPJ && l.det && <>
                     <div className="flex justify-between"><span className="text-slate-500">Valor mensal × {l.det.meses.length} mês(es){l.total!==Number((l.det&&l.det.valorMensal)||0)*l.det.meses.length?" (proporcional à vigência)":""}</span><span className="tabular-nums">{fmtBRL(l.total)}</span></div>
-                    <div className="flex justify-between"><span className="text-slate-500">Vencimento</span><span>{l.det.venc?fmtDataBR(l.det.venc):"—"} · {l.det.forma}</span></div>
+                    {l.det.parcelas ? l.det.parcelas.map(p=><div key={p.n} className="flex justify-between" aria-label={"Parcela "+p.n+" de "+l.nome}><span className="text-slate-500">Parcela {p.n}/{p.N} ({p.pct}%) · vence {fmtDataBR(p.venc)}</span><span className={cx("tabular-nums",p.falta<=0.009?"text-emerald-600":"")}>{fmtBRL(p.valor)}{p.falta<=0.009?" · paga":p.pago>0?" · falta "+fmtBRL(p.falta):""}</span></div>)
+                      : <div className="flex justify-between"><span className="text-slate-500">Vencimento</span><span>{l.det.venc?fmtDataBR(l.det.venc):"—"} · {l.det.forma}</span></div>}
                     {l.det.cnpj && <div className="flex justify-between"><span className="text-slate-500">CNPJ</span><span className="font-mono text-xs">{l.det.cnpj}</span></div>}
                   </>}
                   {l.abateVT>0 && <div className="flex justify-between"><span className="text-slate-500">Desconto: VT pago a mais neste mês</span><span className="tabular-nums text-violet-700" aria-label={"Abate VT "+l.nome}>-{fmtBRL(l.abateVT)}</span></div>}
@@ -5837,11 +5845,22 @@ function quintoDiaUtil(ym, feriadosExtras){ const [y,m]=String(ym||"").split("-"
 function pagoNaCompetencia(p, ym, naData){ if(p && p.comp) return p.comp===ym; const r=(p&&(p.ref||p.data))||""; return r.slice(0,7)===ym || (naData?naData(r):false); }
 function mesSeguinte(ym){ const [y,m]=String(ym||"").split("-").map(Number); if(!y||!m) return ""; return m===12?(y+1)+"-01":y+"-"+String(m+1).padStart(2,"0"); }
 // Vencimento do PJ: dia do contrato no MÊS SEGUINTE à competência (ex.: outubro → 10/11)
-function pjVencimento(pj, ym){
-  const dia=Number(pj.diaPagamento)||10; if(!ym) return "";
-  const prox=mesSeguinte(ym); const [y,m]=prox.split("-").map(Number); const ult=new Date(y,m,0).getDate();
-  return prox+"-"+String(Math.min(dia,ult)).padStart(2,"0");
-}
+function pjVencimento(pj, ym){ if(!ym) return ""; const ps=pjParcelasNoMes(pj,ym,0); return ps[0].venc; }
+// PJ com pagamento dividido (ex.: 50% dia 5 e 50% dia 20). Sem parcelas = 1 parcela (100%) no dia do contrato do mês seguinte.
+function pjParcelasDef(pj){ const ps=Array.isArray(pj&&pj.parcelas)?pj.parcelas.filter(p=>Number(p.pct)>0&&Number(p.dia)>=1):[];
+  return ps.length>1 ? ps : [{dia:Number(pj&&pj.diaPagamento)||10, mes:"seguinte", pct:100}]; }
+function pjParcelasNoMes(pj, ym, total){ const defs=pjParcelasDef(pj); const soma=defs.reduce((s,p)=>s+Number(p.pct),0)||100; let acc=0;
+  return defs.map((p,i)=>{ const v = i===defs.length-1 ? Math.round((Number(total||0)-acc)*100)/100 : Math.round(Number(total||0)*Number(p.pct)/soma*100)/100; acc+=v;
+    const ymV = p.mes==="mesmo" ? ym : mesSeguinte(ym); const [y,m]=ymV.split("-").map(Number); const ult=new Date(y,m,0).getDate();
+    return { n:i+1, N:defs.length, pct:Number(p.pct), dia:Number(p.dia), mes:p.mes||"seguinte", valor:v, venc:ymV+"-"+String(Math.min(Number(p.dia)||10,ult)).padStart(2,"0") }; }); }
+// Distribui os pagamentos do mês entre as parcelas: o que foi baixado numa parcela fica nela; o resto (ex.: pago pela aba PJ)
+// preenche as parcelas em ordem (um pagamento pode cobrir parte de uma e parte da seguinte).
+function pjAlocarPagos(pagos, parcelas){ const out=parcelas.map(()=>[]); const soma=(arr)=>arr.reduce((s,p)=>s+(Number(p.valor)||0),0); const livres=[];
+  (pagos||[]).forEach(p=>{ const n=Number(p.parcela); if(n>=1&&n<=parcelas.length) out[n-1].push(p); else livres.push(p); });
+  livres.sort((a,b)=>String(a.data||"").localeCompare(String(b.data||""))).forEach(p=>{ let resto=Number(p.valor)||0;
+    for(let i=0;i<parcelas.length && resto>0.004;i++){ const falta=Math.max(0,parcelas[i].valor-soma(out[i])); const ultima=i===parcelas.length-1; if(falta<=0.004 && !ultima) continue;
+      const parte = ultima ? resto : Math.min(resto,falta); out[i].push(parte===Number(p.valor)?p:{...p,valor:Math.round(parte*100)/100,_parte:true}); resto-=parte; } });
+  return out; }
 // Valor do PJ no período, proporcional nos meses de início e de encerramento do contrato:
 // mês cheio = valor mensal; mês parcial = valor ÷ 30 × dias corridos de contrato no mês (máx. 30)
 function pjValorNoPeriodo(pj, ini, fim){ const v=Number(pj.valor||0); if(!v) return {total:0,meses:[],det:[]};
@@ -5879,7 +5898,11 @@ function PjForm({inicial,onSalvar,onClose}){
   const { unidades, cargosDesc } = useStore();
   const [f,setF]=useState(()=>({ nome:"", cnpj:"", responsavel:"", cpf:"", email:"", tel:"", servico:"", valor:0, diaPagamento:10, formaPagamento:"Pix", unidade:"todas", inicio:"", fim:"", tipoPix:"CNPJ", pix:"", banco:"", obs:"", ...(inicial||{}) }));
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
-  const falta=[]; if(!f.nome.trim()) falta.push("razão social / nome"); if(soDigitos(f.cnpj).length!==14) falta.push("CNPJ (14 dígitos)"); if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email||"")) falta.push("e-mail"); if(!(Number(f.valor)>0)) falta.push("valor mensal"); if(!(Number(f.diaPagamento)>=1&&Number(f.diaPagamento)<=31)) falta.push("dia de pagamento"); if(f.grupoFolga==="cinco" && (f.folgaDias||[]).length!==2) falta.push("os 2 dias de folga (5x2)");
+  const falta=[]; if(!f.nome.trim()) falta.push("razão social / nome"); if(soDigitos(f.cnpj).length!==14) falta.push("CNPJ (14 dígitos)"); if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email||"")) falta.push("e-mail"); if(!(Number(f.valor)>0)) falta.push("valor mensal"); if(!(Number(f.diaPagamento)>=1&&Number(f.diaPagamento)<=31)) falta.push("dia de pagamento");
+  const parcOn=Array.isArray(f.parcelas)&&f.parcelas.length>1; const somaPct=parcOn?f.parcelas.reduce((s2,p)=>s2+(Number(p.pct)||0),0):100;
+  if(parcOn && Math.abs(somaPct-100)>0.01) falta.push("parcelas somando 100% (hoje "+somaPct+"%)");
+  if(parcOn && f.parcelas.some(p=>!(Number(p.dia)>=1&&Number(p.dia)<=31))) falta.push("dia de cada parcela");
+  const setParc=(i,k,v)=>setF(prev=>{ const ps=(prev.parcelas||[]).map((p,j)=>j===i?{...p,[k]:v}:p); return {...prev,parcelas:ps,...(i===0&&k==="dia"?{diaPagamento:v}:{})}; }); if(f.grupoFolga==="cinco" && (f.folgaDias||[]).length!==2) falta.push("os 2 dias de folga (5x2)");
   return <div className="p-6">
     <div className="flex items-center gap-2 mb-4"><button onClick={onClose} className="flex items-center gap-1 text-sm font-semibold text-slate-600 hover:text-slate-900"><Icon d={I.arrow} className="w-4 h-4 rotate-180"/>Voltar</button>
       <h3 className="text-base font-bold text-slate-900 ml-1">{inicial?"Editar prestador PJ":"Novo prestador PJ"}</h3></div>
@@ -5905,11 +5928,29 @@ function PjForm({inicial,onSalvar,onClose}){
     <div className="mt-4 mb-1 text-xs font-bold text-slate-400 uppercase tracking-wide flex items-center gap-1.5"><Icon d={I.wallet} className="w-3.5 h-3.5"/>Financeiro</div>
     <div className="grid sm:grid-cols-3 gap-3 p-3 rounded-2xl border border-slate-200 bg-slate-50/50">
       <Field label="Valor mensal (R$) *"><Input type="number" min="0" step="0.01" value={f.valor} onChange={e=>set("valor",Number(e.target.value))}/></Field>
-      <Field label="Dia de pagamento *"><Select value={f.diaPagamento} onChange={e=>set("diaPagamento",Number(e.target.value))}>{Array.from({length:31},(_,i)=>i+1).map(d=><option key={d} value={d}>Dia {d} do mês seguinte</option>)}</Select></Field>
+      {parcOn ? <Field label="Dia de pagamento *"><div className="px-3 py-2.5 rounded-xl border border-slate-200 bg-white text-sm text-slate-600">Dividido em {f.parcelas.length} parcelas ↓</div></Field>
+        : <Field label="Dia de pagamento *"><Select value={f.diaPagamento} onChange={e=>set("diaPagamento",Number(e.target.value))}>{Array.from({length:31},(_,i)=>i+1).map(d=><option key={d} value={d}>Dia {d} do mês seguinte</option>)}</Select></Field>}
       <Field label="Forma de pagamento"><Select value={f.formaPagamento} onChange={e=>set("formaPagamento",e.target.value)}>{FORMAS_PAG_PJ.map(x=><option key={x}>{x}</option>)}</Select></Field>
       <Field label="Tipo Pix"><Select value={f.tipoPix} onChange={e=>set("tipoPix",e.target.value)}>{PIX_TIPOS.map(t=><option key={t}>{t}</option>)}</Select></Field>
       <Field label="Chave Pix"><Input value={f.pix} onChange={e=>set("pix",e.target.value)}/></Field>
       <Field label="Banco"><Input value={f.banco} onChange={e=>set("banco",e.target.value)} placeholder="Ex.: Itaú ag. 0001 c/c 12345-6"/></Field>
+    </div>
+    <div className="mt-2 p-3 rounded-2xl border border-slate-200 bg-white">
+      <label className="flex items-center gap-2 text-sm font-semibold text-slate-700"><input type="checkbox" checked={parcOn} aria-label="Pagamento dividido em parcelas"
+        onChange={e=>setF(prev=>e.target.checked ? {...prev,parcelas:[{dia:5,mes:"seguinte",pct:50},{dia:20,mes:"seguinte",pct:50}],diaPagamento:5} : {...prev,parcelas:[]})}/>Pagamento dividido em parcelas (ex.: metade dia 5 e metade dia 20)</label>
+      {parcOn && <div className="mt-2 space-y-2">
+        {f.parcelas.map((p,i)=><div key={i} className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="font-semibold text-slate-600 w-20">{i+1}ª parcela</span>
+          <span className="text-slate-500">dia</span><select className="px-2 py-1.5 rounded-lg border border-slate-200 bg-white" value={p.dia} onChange={e=>setParc(i,"dia",Number(e.target.value))} aria-label={"Dia da parcela "+(i+1)}>{Array.from({length:31},(_,k)=>k+1).map(d=><option key={d} value={d}>{d}</option>)}</select>
+          <select className="px-2 py-1.5 rounded-lg border border-slate-200 bg-white" value={p.mes||"seguinte"} onChange={e=>setParc(i,"mes",e.target.value)} aria-label={"Mês da parcela "+(i+1)}><option value="seguinte">do mês seguinte</option><option value="mesmo">do próprio mês</option></select>
+          <input type="number" min="1" max="100" className="w-20 px-2 py-1.5 rounded-lg border border-slate-200" value={p.pct} onChange={e=>setParc(i,"pct",Number(e.target.value))} aria-label={"Percentual da parcela "+(i+1)}/><span className="text-slate-500">%</span>
+          <span className="text-slate-700 font-semibold tabular-nums">= {fmtBRL(Math.round((Number(f.valor)||0)*(Number(p.pct)||0))/100)}</span>
+          {f.parcelas.length>2 && <button type="button" onClick={()=>set("parcelas",f.parcelas.filter((_,j)=>j!==i))} className="text-xs text-rose-500 hover:underline">remover</button>}
+        </div>)}
+        <div className="flex items-center gap-3 text-xs"><button type="button" onClick={()=>set("parcelas",[...f.parcelas,{dia:25,mes:"seguinte",pct:0}])} className="font-semibold text-brand-700 hover:underline">+ adicionar parcela</button>
+          <span className={cx("font-semibold",Math.abs(somaPct-100)>0.01?"text-rose-600":"text-emerald-600")}>Total: {somaPct}%</span>
+          <span className="text-slate-400">Em Contas do mês cada parcela vira uma conta com o seu vencimento (competência dia 01 ao último dia).</span></div>
+      </div>}
     </div>
     <div className="grid sm:grid-cols-2 gap-3 mt-3">
       <Field label="Unidade"><Select value={f.unidade} onChange={e=>set("unidade",e.target.value==="todas"?"todas":Number(e.target.value))}><option value="todas">Todas as casas</option>{unidades.map(u=><option key={u.id} value={u.id}>{u.nome}</option>)}</Select></Field>
@@ -5955,7 +5996,7 @@ function PrestadoresPJ(){
           </div>
           <div className="flex items-center justify-between mt-3">
             <Badge tone={tone}><Icon d={I.sign} className="w-3 h-3"/>{st}</Badge>
-            {Number(pj.valor)>0 && <span className="text-right"><span className="text-sm font-bold text-slate-700">{fmtR$(pj.valor)}<span className="text-xs text-slate-400 font-normal">/mês</span></span>{pj.diaPagamento && <span className="block text-[11px] text-slate-400">paga todo dia {pj.diaPagamento}</span>}</span>}
+            {Number(pj.valor)>0 && <span className="text-right"><span className="text-sm font-bold text-slate-700">{fmtR$(pj.valor)}<span className="text-xs text-slate-400 font-normal">/mês</span></span>{pjParcelasDef(pj).length>1 ? <span className="block text-[11px] text-slate-400">paga {pjParcelasDef(pj).map(p=>"dia "+p.dia+" ("+p.pct+"%)").join(" e ")}</span> : pj.diaPagamento && <span className="block text-[11px] text-slate-400">paga todo dia {pj.diaPagamento}</span>}</span>}
           </div>
         </Card></button> };
   const fmtR$=(v)=>Number(v||0).toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
@@ -5995,7 +6036,7 @@ function PrestadoresPJ(){
             <div className="rounded-xl bg-white/10 px-3 py-2"><div className="text-white/50 text-xs">E-mail</div><span className="break-all">{pjAtual.email||"—"}</span></div>
             <div className="rounded-xl bg-white/10 px-3 py-2"><div className="text-white/50 text-xs">Vigência</div>{pjAtual.inicio?fmtDataBR(pjAtual.inicio):"—"} {pjAtual.fim?"até "+fmtDataBR(pjAtual.fim):""}</div>
             <div className="rounded-xl bg-white/10 px-3 py-2"><div className="text-white/50 text-xs">Valor mensal</div>{fmtR$(pjAtual.valor)}</div>
-            <div className="rounded-xl bg-white/10 px-3 py-2"><div className="text-white/50 text-xs">Pagamento</div>{pjAtual.diaPagamento?"Dia "+pjAtual.diaPagamento+" do mês seguinte":"—"} · {pjAtual.formaPagamento||"Pix"}</div>
+            <div className="rounded-xl bg-white/10 px-3 py-2"><div className="text-white/50 text-xs">Pagamento</div>{pjParcelasDef(pjAtual).length>1 ? pjParcelasDef(pjAtual).map(p=>"dia "+p.dia+(p.mes==="mesmo"?" do mês":" do mês seguinte")+" ("+p.pct+"%)").join(" + ") : pjAtual.diaPagamento?"Dia "+pjAtual.diaPagamento+" do mês seguinte":"—"} · {pjAtual.formaPagamento||"Pix"}</div>
             <div className="rounded-xl bg-white/10 px-3 py-2"><div className="text-white/50 text-xs">Pix / banco</div><span className="break-all">{pjAtual.pix||pjAtual.banco||"—"}</span></div>
           </div>
           <div className="flex gap-2 mt-4">
