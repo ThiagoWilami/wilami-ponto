@@ -1504,9 +1504,10 @@ function StoreProvider({children}) {
   const removePagamentoFreela=(fid,pid)=>setPagFreela(prev=>{ const arr=(prev[String(fid)]||[]).filter(x=>x.id!==pid); return {...prev,[String(fid)]:arr}; });
   // Data de início do desconto automático de faltas (evita descontar retroativamente dias antes da adoção).
   // Padrão: hoje (só desconta faltas de hoje em diante); faltas marcadas manualmente pelo gestor contam sempre.
-  const [faltaDescontoDesde,setFaltaDescontoDesde]=usePersist("faltaDescontoDesde","");
+  const [faltaDescontoDesde,setFaltaDescontoDesde,faltaDesdePronto]=usePersist("faltaDescontoDesde","");
   const [feriadosExtras,setFeriadosExtras]=usePersist("feriadosExtras","");   // feriados estaduais/municipais (AAAA-MM-DD ou MM-DD)
-  useEffect(()=>{ if(!faltaDescontoDesde) setFaltaDescontoDesde(hojeStr()); },[]); // eslint-disable-line
+  // Só inicializa DEPOIS de ler o valor salvo no servidor (antes podia sobrescrever a data configurada com "hoje").
+  useEffect(()=>{ if(!faltaDesdePronto) return; if(!faltaDescontoDesde) setFaltaDescontoDesde(hojeStr()); },[faltaDesdePronto]); // eslint-disable-line
   // Dia do mês em que o Vale Transporte é pago (global para todos os CLTs). Padrão: dia 5.
   const [vtDiaPagamento,setVtDiaPagamento]=usePersist("vtDiaPagamento",5);
   // Pagamentos de CLT e cargos de confiança (parcelados/adiantamentos), chaveados pelo id do colaborador na lista de CLTs.
@@ -1571,6 +1572,13 @@ function StoreProvider({children}) {
     cadAuto.filter(c=>c.tipo==="pj" && Number(c.diaPagamento)===5).forEach(c=>cadOps.update(c._docId||String(c.id).replace(/^auto_/,""),{diaPagamento:10}));
     setMigr(prev=>({...(prev||{}),pjDia10:Date.now()}));
   },[migrPronto,pjsPronto,cadPronto,migr]); // eslint-disable-line
+  // Uma vez só: o ponto passou a valer em 01/11/2026 — faltas automáticas não contam antes disso (ajustável em Configurações).
+  useEffect(()=>{
+    if(!migrPronto || !faltaDesdePronto || (migr&&migr.faltasDesde202611)) return;
+    if(window.__WPAUTH && (!window.__WPAUTH.currentUser || window.__WPAUTH.currentUser.isAnonymous)) return;
+    if(!faltaDescontoDesde || faltaDescontoDesde<"2026-11-01") setFaltaDescontoDesde("2026-11-01");
+    setMigr(prev=>({...(prev||{}),faltasDesde202611:Date.now()}));
+  },[migrPronto,faltaDesdePronto,migr]); // eslint-disable-line
   const aguardandoInicio=useMemo(()=>[...cadAuto.filter(c=>c.tipo==="clt"&&c.origem==="convite"&&!c.admissao), ...cadAuto.filter(c=>c.tipo==="pj"&&c.origem==="convite"&&!c.inicio)].map(comNomeBonito),[cadAuto]);
 
   // Migração 1x: freelas que estavam no PADRÃO SEMANAL (replicando) → viram exceção só da SEMANA ATUAL,
