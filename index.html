@@ -1853,6 +1853,8 @@ const textoSobreCor=(hex)=>{ const m=/^#?([0-9a-f]{6})$/i.exec(hex||""); if(!m) 
 // Nome digitado todo em MAIÚSCULAS (caps lock / documento) → "Nome Sobrenome". Siglas de empresa ficam em maiúsculas.
 const NOME_MINUSC=new Set(["da","de","do","das","dos","e","di","du"]);
 const NOME_SIGLAS=new Set(["ME","MEI","EPP","LTDA","EIRELI","SLU","SA","S/A","II","III","IV"]);
+// Nome de pessoa precisa ter letras (evita gravar CPF/telefone no campo do nome)
+const nomePessoaValido=(s)=>{ const t=String(s||"").trim(); const letras=t.replace(/[^A-Za-zÀ-ÖØ-öø-ÿ]/g,"").length; const dig=t.replace(/\D/g,"").length; return letras>=2 && dig<=letras; };
 function nomeBonito(s){ s=String(s==null?"":s).replace(/\s+/g," ").trim(); if(!s) return s;
   const letras=s.replace(/[^A-Za-zÀ-ÖØ-öø-ÿ]/g,""); const maius=letras.replace(/[^A-ZÀ-ÖØ-Þ]/g,"").length;
   if(letras.length<3 || maius/letras.length<0.7) return s;
@@ -2904,10 +2906,10 @@ function ColabForm({ tipo, inicial, onSalvar, onClose, vinculo }) {
   const rmDoc=(k)=>setF(p=>{ const d={...(p.docs||{})}; delete d[k]; return {...p,docs:d}; });
   const [showDocs,setShowDocs]=useState(false);
   const nDocsUp=DOC_TIPOS.filter(([k])=>f.docs&&f.docs[k]).length;
-  const nomeOk=f.nome.trim().length>=2;
+  const nomeOk=f.nome.trim().length>=2 && nomePessoaValido(f.nome);
   // Lista clara do que falta — evita "botão desativado sem explicação"
   const faltando=[];
-  if(!nomeOk) faltando.push("nome");
+  if(!nomeOk) faltando.push(f.nome.trim() && !nomePessoaValido(f.nome) ? "nome (digite o nome da pessoa, não o CPF)" : "nome");
   if(!ehConf && !f.foto) faltando.push("foto");           // confiança não bate ponto → foto não é obrigatória
   if(!ehConf && !(f.cpf||"").trim()) faltando.push("CPF");
   if(tipo==="clt" && f.grupoFolga==="cinco" && (f.folgaDias||[]).length!==2) faltando.push("os 2 dias de folga (5x2)");
@@ -8536,7 +8538,7 @@ function juntarLeituras(leituras){
   // endereço vem inteiro do mesmo documento (prioriza o comprovante de residência)
   const comEnd=[...ord.filter(l=>l.tipoDocumento==="comprovante_residencia"), ...ord].find(l=>l.campos && l.campos.logradouro);
   if(comEnd) CAMPOS_ENDERECO.forEach(k=>{ if(comEnd.campos[k]) out[k]=comEnd.campos[k]; });
-  ord.forEach(l=>{ Object.entries(l.campos||{}).forEach(([k,v])=>{ if(v && String(v).trim() && out[k]==null && !CAMPOS_ENDERECO.includes(k)) out[k]=String(v).trim(); }); });
+  ord.forEach(l=>{ Object.entries(l.campos||{}).forEach(([k,v])=>{ if(v && String(v).trim() && out[k]==null && !CAMPOS_ENDERECO.includes(k) && !(["nome","mae","pai","responsavel"].includes(k) && !nomePessoaValido(v))) out[k]=String(v).trim(); }); });
   return out;
 }
 const gerarTokenConvite=()=>{ const a=new Uint8Array(18); crypto.getRandomValues(a); return Array.from(a).map(b=>"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"[b%62]).join(""); };
@@ -8795,6 +8797,7 @@ function ConviteCadastro({onClose}){
   const obrigForm = tipo==="pj" ? [["razaoSocial","Razão social"],["cnpj","CNPJ"],["responsavel","Responsável"],["telefone","Telefone"],["email","E-mail"]]
     : [["nome","Nome completo"],["cpf","CPF"],["nascimento","Nascimento"],["telefone","Telefone"]];
   const faltaForm=obrigForm.filter(([k])=>!String(f[k]||"").trim()).map(([,l])=>l);
+  if(tipo!=="pj" && String(f.nome||"").trim() && !nomePessoaValido(f.nome)) faltaForm.push("Nome completo (digite o nome, não o CPF)");
   if(tipo!=="pj" && !foto) faltaForm.push("selfie");
   if(!aceite) faltaForm.push("aceite LGPD");
   const enviar=async(assinaturaTermo)=>{
