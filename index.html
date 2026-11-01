@@ -99,7 +99,7 @@
 <body>
 <div id="root"></div>
 <script type="text/babel" data-presets="react">
-const { useState, useEffect, useRef, useMemo, useContext, createContext } = React;
+const { useState, useEffect, useRef, useMemo, useContext, createContext, useCallback } = React;
 
 /* ============================ ÍCONES ============================ */
 const I = {
@@ -730,7 +730,11 @@ function calcFolhaLinha(c, ctx){
   let vt=0, vtDia=0, vtDias=0, descVTFaltas=0, vtFaltasAnt=0, vtMesAnt="";
   if(vtDiaCad>0){
     vtDia=vtDiaCad;
-    vtDias = faltasCtx ? diasTrabalhoNoPeriodo(c,faltasCtx.ini,faltasCtx.fim,faltasCtx.escala,faltasCtx.escalaOv) : 0;
+    // VT é pago ADIANTADO no início do mês: dias de trabalho PREVISTOS pela escala semanal da pessoa (folgas fora),
+    // da admissão (ou dia 01) ao fim do contrato (ou último dia) — proporcional. Não usa as edições de datas da grade
+    // (trocas pontuais), que podem ter sido feitas antes de a pessoa entrar e a deixariam de fora desses dias.
+    // Faltas do mês são descontadas no VT do mês SEGUINTE (descVTFaltas abaixo).
+    vtDias = faltasCtx ? diasTrabalhoNoPeriodo(c,faltasCtx.ini,faltasCtx.fim,faltasCtx.escala,{}) : 0;
     vt=Math.round(vtDia*vtDias*100)/100;
     if(faltasCtx){ const [pi,pf]=mesAnteriorDe(faltasCtx.ini); vtMesAnt=pi.slice(0,7);
       const manPrev=(dos.faltas||[]).filter(x=>x.tipo==="falta" && x.descontar && x.data>=pi && x.data<=pf).map(x=>x.data);
@@ -1112,6 +1116,18 @@ function imprimirDoc(titulo, corpoHTML){
 // O painel "Ponto ao vivo" escuta em tempo real e mostra na hora.
 function useRegistrosPub(){
   const [items,setItems]=useState([]);
+  // Batidas de um MÊS inteiro (por data), carregadas sob demanda pelas telas de folha/pagamento/relatórios.
+  // O feed ao vivo acima traz só as 300 mais recentes — sem isto a folha do mês perderia batidas antigas.
+  const [porMes,setPorMes]=useState({}); const subsMes=useRef({});
+  const garantirMes=useCallback((ym)=>{ if(!/^\d{4}-\d{2}$/.test(String(ym||"")) || subsMes.current[ym]) return; const db=window.__WPDB; if(!db) return;
+    const [y,m]=ym.split("-").map(Number); const ini=ym+"-01", fim=ymd(new Date(y,m,0));
+    try{ subsMes.current[ym]=tCol("registros").where("data",">=",ini).where("data","<=",fim).onSnapshot(function(snap){
+        const arr=[]; snap.forEach(function(d){ const x=d.data()||{}; arr.push({...x, id:d.id, _docId:d.id}); }); setPorMes(p=>({...p,[ym]:arr})); },
+        function(){ /* sem permissão: fica só com o feed ao vivo */ }); }catch(e){ subsMes.current[ym]=null; } },[]);
+  useEffect(()=>()=>{ Object.values(subsMes.current).forEach(u=>{ try{ u&&u(); }catch(e){} }); },[]);
+  const todos=useMemo(()=>{ const meses=Object.values(porMes); if(!meses.length) return items;
+    const mp=new Map(); items.forEach(r=>mp.set(r._docId||r.id,r)); meses.forEach(arr=>arr.forEach(r=>{ if(!mp.has(r._docId)) mp.set(r._docId,r); }));
+    return [...mp.values()].sort((a,b)=>(Number(b.ts)||0)-(Number(a.ts)||0)); },[items,porMes]);
   useEffect(()=>{
     const db=window.__WPDB; if(!db) return;
     try{
@@ -1122,7 +1138,7 @@ function useRegistrosPub(){
     }catch(e){}
   },[]);
   const add=(obj)=>{ const db=window.__WPDB; if(!db) return Promise.reject(new Error("sem-banco")); return tCol("registros").add(obj); };
-  return [items,{add}];
+  return [todos,{add,garantirMes}];
 }
 // Coleção PÚBLICA de atestados enviados pelo colaborador (sem login) → vão para o dossiê em tempo real.
 function useAtestados(){
@@ -1289,7 +1305,11 @@ function StoreProvider({children}) {
   const [assinaturaCfg,setAssinaturaCfg]=usePersist("assinaturaCfg",{signatarios:[]}); // signatários padrão da empresa
   const logado = !!authUser || !window.__WPAUTH;
   const [arquivos]=useArquivosMeta(logado);                            // metadados dos arquivos (só no painel)
-  const [acessosColab]=useAcessosColab(logado);                        // PINs do app do colaborador (hash)
+  const [acessosColab]=useAcessosColab(logado);
+  // Gestor logado: carrega as batidas do mês atual e do anterior inteiros (o quiosque sem login fica só com o feed ao vivo).
+  const garantirRegistros=useCallback((ini,fim)=>{ if(!regPubOps.garantirMes) return; const a=String(ini||hojeStr()).slice(0,7), b=String(fim||ini||hojeStr()).slice(0,7);
+    let [y,m]=a.split("-").map(Number); for(let i=0;i<24;i++){ const ym=y+"-"+String(m).padStart(2,"0"); regPubOps.garantirMes(ym); if(ym>=b) break; m++; if(m>12){ m=1; y++; } } },[regPubOps.garantirMes]); // eslint-disable-line
+  useEffect(()=>{ if(!logado) return; const h=hojeStr(); const [y,m]=h.split("-").map(Number); const ant=m===1?(y-1)+"-12":y+"-"+String(m-1).padStart(2,"0"); garantirRegistros(ant+"-01",h); },[logado]); // eslint-disable-line                        // PINs do app do colaborador (hash)
   const pjsTodos=useMemo(()=>[...pjsBase, ...cadAuto.filter(c=>c.tipo==="pj")].map(comNomeBonito),[pjsBase,cadAuto]);
   useMemo(()=>{ const cont={}; Object.values(escala||{}).forEach(dias=>Object.values(dias||{}).forEach(arr=>(arr||[]).forEach(a=>{ if(!a||a.turno==="folga"||a.tipo==="free") return; const k=chaveVig(a.tipo,a.pid); (cont[k]=cont[k]||{})[a.turno]=((cont[k]||{})[a.turno]||0)+1; })));
     const t={}; Object.entries(cont).forEach(([k,c])=>{ t[k]=Object.entries(c).sort((x,y)=>y[1]-x[1])[0][0]; }); GRUPO_FOLGA.turno=t; },[escala]);
@@ -1619,7 +1639,7 @@ function StoreProvider({children}) {
   const registrosVis = casaRestrita!=null ? registros.filter(r=>_nomesVis.has(r.nome)) : registros;
 
   const value={ unidades:unidadesVis,salvarUnidade,excluirUnidade, clts:cltsVis,freelas:freelasVis,freelasComPagamentos:freelasPagVis,salvarClt,salvarFreela,excluirColab,cadastrarPublico, anexarDoc,
-    escala,setEscala, escalaOv,setEscalaOv, registros:registrosVis,addRegistro, pontoHist, freelancerEscaladoHoje, valorFreela, setFreelaAjuste, cltExtraAjuste,setCltExtra, gorjetasCLT,setGorjetaCLT, pagamentosFreela,addPagamentoFreela,removePagamentoFreela, pagamentosCLT,addPagamentoCLT,removePagamentoCLT, faltaDescontoDesde,setFaltaDescontoDesde, feriadosExtras,setFeriadosExtras, vtDiaPagamento,setVtDiaPagamento,
+    escala,setEscala, escalaOv,setEscalaOv, registros:registrosVis,addRegistro, garantirRegistros, pontoHist, freelancerEscaladoHoje, valorFreela, setFreelaAjuste, cltExtraAjuste,setCltExtra, gorjetasCLT,setGorjetaCLT, pagamentosFreela,addPagamentoFreela,removePagamentoFreela, pagamentosCLT,addPagamentoCLT,removePagamentoCLT, faltaDescontoDesde,setFaltaDescontoDesde, feriadosExtras,setFeriadosExtras, vtDiaPagamento,setVtDiaPagamento,
     cargosFreela,salvarCargoFreela,excluirCargoFreela, atestados,enviarAtestado, ajustes,enviarAjuste,resolverAjuste,
     dossie,getDossie,addFalta,addFeedback,addAnexo, perfil,setPerfil, perms,setPerms, can, envContab,setEnvContab, apontContab,setApontContab, contabCfg,setContabCfg, finCfg,setFinCfg, pcmso,setPcmso, cadastrosRS, cadOpsRS:cadOps, criarFreela, escalarNaData, tirarDaData,
     clientes,clienteAtivo,tenantAtual,criarCliente,trocarCliente,
@@ -2858,7 +2878,7 @@ function PreviaVT({p}){
   const v=Number(p.vtDia||0);
   if(!(v>0)){ return Number(p.vt||0)>0 ? <span className="block text-[11px] text-amber-600 mt-1 normal-case font-normal tracking-normal">Hoje está como valor fixo de {fmtBRL(p.vt)}/mês. Informe o valor por dia para o sistema calcular pelos dias da escala.</span> : null; }
   const h=new Date(); const meses=[[h.getFullYear(),h.getMonth()+1],[h.getMonth()===11?h.getFullYear()+1:h.getFullYear(),h.getMonth()===11?1:h.getMonth()+2]];
-  return <span className="block text-[11px] text-slate-500 mt-1 normal-case font-normal tracking-normal space-y-0.5">{meses.map(([a,m])=>{ const [ini,fim]=mesDe(a,m); const d=diasTrabalhoNoPeriodo(p,ini,fim,escala,escalaOv);
+  return <span className="block text-[11px] text-slate-500 mt-1 normal-case font-normal tracking-normal space-y-0.5">{meses.map(([a,m])=>{ const [ini,fim]=mesDe(a,m); const d=diasTrabalhoNoPeriodo(p,ini,fim,escala,{});
     return <span key={ini} className="block"><b className="text-slate-700">{MESES_LONGO[m-1]}/{a}:</b> {d} dias × {fmtBRL(v)} = <b className="text-brand-700">{fmtBRL(Math.round(d*v*100)/100)}</b></span>; })}
     <span className="block">Folgas da escala já descontadas. Faltas do mês são descontadas do VT do mês seguinte.</span></span>;
 }
@@ -3261,6 +3281,7 @@ function Relatorios() {
   const [casa,setCasa]=useState("todas");
   const [ym,setYm]=useState(hojeStr().slice(0,7));
   const [y_,m_]=ym.split("-").map(Number); const [ini,fim]=mesDe(y_,m_);
+  useRegistrosPeriodo(ini,fim);
   const naData=(d)=> !!d && d>=ini && d<=fim;
   const podeSigilo=!acesso||acesso.podeSigilo;
   const naCasa=(u)=> casa==="todas" || Number(u)===Number(casa);
@@ -3279,7 +3300,7 @@ function Relatorios() {
     folha:()=>{ const rows=folha.map(({c,l})=>[S(c.nome),S(vinc(c)),N((l.dias||[]).length),N(l.faltasQtd),B(l.salario),B(l.extrasVal),B(l.notVal+l.dsrReflexo),B(l.reposicao),B(l.descontos),B(l.liquido),B(l.vt)]);
       return {cols:["Colaborador","Vínculo","Dias trab.","Faltas","Salário","Extras","Noturno + DSR","Complemento","Descontos","Líquido","VT (à parte)"], rows, tot:[4,5,6,7,8,9,10,2,3],
         nota:"Mesma conta da folha e de Pagamentos: salário proporcional aos dias de contrato + extras + adicional noturno + DSR + complemento do combinado − descontos (faltas, DSR, atrasos, 6% VT). O VT é pago à parte."}; },
-    dias:()=>{ const rows=folha.map(({c,l})=>{ const esc=diasTrabalhoNoPeriodo(c,ini,fim,escala,escalaOv); return [S(c.nome),S(vinc(c)),S(c.admissao?fmtDataBR(c.admissao):""),N(l.diasContrato),N(esc),N((l.dias||[]).length),N(l.faltasQtd),S((l.faltaDatas||[]).map(d=>d.slice(8,10)+"/"+d.slice(5,7)).join(", ")),N(atestadosDe(c)),N(l.atrasosQtd)]; });
+    dias:()=>{ const rows=folha.map(({c,l})=>{ const esc=diasTrabalhoNoPeriodo(c,ini,fim,escala,{}); return [S(c.nome),S(vinc(c)),S(c.admissao?fmtDataBR(c.admissao):""),N(l.diasContrato),N(esc),N((l.dias||[]).length),N(l.faltasQtd),S((l.faltaDatas||[]).map(d=>d.slice(8,10)+"/"+d.slice(5,7)).join(", ")),N(atestadosDe(c)),N(l.atrasosQtd)]; });
       return {cols:["Colaborador","Vínculo","Admissão","Dias de contrato","Dias na escala","Dias trabalhados (ponto)","Faltas","Datas das faltas","Atestados","Atrasos"], rows, tot:[4,5,6,8,9],
         nota:"Dias na escala = dias de trabalho previstos (folgas fora) dentro do contrato. Dias trabalhados = dias com entrada e saída no ponto. Faltas = escalado sem ponto e sem atestado (a partir da data de início do controle em Configurações)."}; },
     extras:()=>{ const rows=folha.filter(({l})=>l.extrasMin+l.extras100Min>0||l.extrasVal>0).map(({c,l})=>[S(c.nome),S(vinc(c)),H(l.extrasMin),H(l.extras100Min),H(l.extSemanal),B(l.extrasVal),S(l.extrasEditado?"valor ajustado à mão":"")]);
@@ -3375,6 +3396,7 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
   const toast=useContext(ToastCtx);
   const r2=(x)=>Math.round((Number(x)||0)*100)/100;
   const ymRef=(ini||hojeStr()).slice(0,7);
+  useRegistrosPeriodo(ini,fim);
   const hoje=hojeStr();
   // ajustes do mês (valor previsto, vencimento, observação, inclusão no relatório) e lançamentos manuais
   const chave=ymRef;
@@ -3475,7 +3497,7 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
   const kProp=(c)=> (c.vinculo==="confianca"?"conf-":c.vinculo==="fixo"?"fixo-":"clt-")+c.id;
   const diasEntre=(a,b)=> (a&&b&&a<=b) ? Math.min(30,datasEntre(a,b).length) : 0;
   const abrirProp=()=>setProp({pid:"",salario:"",de:ini,ate:fim,dias:"",acresc:"",desconto:"",obs:"",pago:false,dataPago:hoje,forma:"Pix",vtDia:"",vtDias:"",com6:true,vtPago:false,vtForma:"Dinheiro"});
-  const diasVTde=(pid,de,ate)=>{ const c=clts.find(x=>String(x.id)===String(pid)); if(!c||!de||!ate||de>ate) return 0; let n=0; try{ n=diasTrabalhoNoPeriodo(c,de,ate,escala,escalaOv); }catch(e){ n=0; } return n||datasEntre(de,ate).length; };
+  const diasVTde=(pid,de,ate)=>{ const c=clts.find(x=>String(x.id)===String(pid)); if(!c||!de||!ate||de>ate) return 0; let n=0; try{ n=diasTrabalhoNoPeriodo(c,de,ate,escala,{}); }catch(e){ n=0; } return n||datasEntre(de,ate).length; };
   const escolherProp=(pid)=>{ const c=clts.find(x=>String(x.id)===String(pid)); if(!c){ setProp(p=>({...p,pid:""})); return; }
     const de=(c.admissao&&c.admissao>ini)?c.admissao:ini, ate=(c.fimContrato&&c.fimContrato<fim)?c.fimContrato:fim;
     setProp(p=>({...p,pid:String(c.id),salario:String(Number(c.salario)||0),de,ate,dias:String(de===ini&&ate===fim?30:diasEntre(de,ate)),vtDia:c.vtDia?String(c.vtDia):"",vtDias:String(diasVTde(c.id,de,ate))})); };
@@ -3862,6 +3884,7 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
   const [aberto,setAberto]=useState(null);
   const [novoPag,setNovoPag]=useState({});
   const [novoVT,setNovoVT]=useState({});
+  useRegistrosPeriodo(ini,fim);
   const podeSigilo=!acesso||acesso.podeSigilo;
   const naData=(d)=> (!ini||d>=ini)&&(!fim||d<=fim);
   const ymRef=(ini||hojeStr()).slice(0,7);
@@ -4477,6 +4500,7 @@ function Financeiro() {
   const _mr=mesAtualRange();
   const [ini,setIni]=useState(_mr.ini);
   const [fim,setFim]=useState(_mr.fim);
+  useRegistrosPeriodo(ini,fim);
   const [uni,setUni]=useState(unidades[0]?.id ?? "todas");
   const uNome = uni==="todas"?"Todas as casas":unidadeNome(Number(uni),unidades);
   const naData=(d)=> (!ini||d>=ini) && (!fim||d<=fim);
@@ -8054,7 +8078,10 @@ const baixarBlob=(blob,nome)=>{ const u=URL.createObjectURL(blob); const a=docum
 
 const STATUS_CONTAB={ enviado:["Enviado","blue"], recebido:["Recebido pela contabilidade","amber"], concluido:["Admissão concluída","green"] };
 // Folha do período (CLT + Freela Fixo) com o mesmo cálculo do Financeiro — usada nos apontamentos da contabilidade
+// Garante que as batidas do período (mês a mês) estejam carregadas para o cálculo.
+function useRegistrosPeriodo(ini, fim){ const { garantirRegistros }=useStore(); useEffect(()=>{ if(garantirRegistros) garantirRegistros(ini,fim); },[ini,fim]); } // eslint-disable-line
 function useFolhaPeriodo(ini, fim, uni){
+  useRegistrosPeriodo(ini, fim);
   const { clts, registros, pontoHist, getDossie, cltExtraAjuste, gorjetasCLT, escala, escalaOv, atestados, faltaDescontoDesde, feriadosExtras } = useStore();
   const naData=(d)=> (!ini||d>=ini) && (!fim||d<=fim);
   const apurCLT=apurarHoras([...(pontoHist||[]),...(registros||[])]).filter(x=>x.tipo==="clt" && x.completo && naData(x.dia));
@@ -8946,6 +8973,99 @@ class ErroTela extends React.Component{
 }
 /* ============================ APP SHELL ============================ */
 /* ============================ AJUSTES DE PONTO (aprovação do gestor) ============================ */
+/* ===== Lançar dias trabalhados SEM ponto (gestor) =====
+   Para quem trabalhou e não bateu o ponto (ex.: antes de o ponto começar a valer). Grava as 4 batidas do dia
+   (entrada, início e fim da pausa, saída) com a marca "lancadoGestor" — iguais às do quiosque para a apuração,
+   mas SÓ em dias passados e SÓ onde a pessoa ainda não tem nenhuma batida. Não mexe no quiosque nem em pontos reais. */
+function LancarDiasSemPonto(){
+  const { clts, unidades, registros, addRegistro, escala, escalaOv, garantirRegistros } = useStore();
+  const toast=useContext(ToastCtx);
+  const hoje=hojeStr();
+  const ymPadrao=(()=>{ const [y,m,d]=hoje.split("-").map(Number); if(d>10) return hoje.slice(0,7); return m===1?(y-1)+"-12":y+"-"+String(m-1).padStart(2,"0"); })();
+  const [ym,setYm]=useState(ymPadrao);
+  const [pid,setPid]=useState("");
+  const [h,setH]=useState({ent:"08:00",pi:"12:00",pf:"13:00",sai:"17:00"});
+  const [sel,setSel]=useState(()=>new Set());
+  const [salvando,setSalvando]=useState(false);
+  const [y_,m_]=ym.split("-").map(Number); const [ini,fim]=mesDe(y_,m_);
+  useEffect(()=>{ if(garantirRegistros) garantirRegistros(ini,fim); },[ini,fim]); // eslint-disable-line
+  const pessoas=(clts||[]).filter(c=>c.status!=="inativo" && c.vinculo!=="confianca").sort((a,b)=>String(a.nome).localeCompare(b.nome));
+  const c=pessoas.find(x=>String(x.id)===String(pid));
+  const toMin=(t)=>{ const [a,b]=String(t||"").split(":").map(Number); return (a||0)*60+(b||0); };
+  const toHH=(mn)=>{ mn=((mn%1440)+1440)%1440; return String(Math.floor(mn/60)).padStart(2,"0")+":"+String(mn%60).padStart(2,"0"); };
+  const escolher=(id)=>{ setPid(id); setSel(new Set()); const p=pessoas.find(x=>String(x.id)===String(id)); if(!p) return;
+    const e=p.horaEntrada||"08:00", sa=p.horaSaida||toHH(toMin(e)+9*60); const meio=toMin(e)+Math.max(60,Math.floor(((toMin(sa)-toMin(e)+1440)%1440)/2)-30);
+    const meioDia = toMin(e)<=11*60 && toMin(sa)>=14*60; setH({ent:e, pi:meioDia?"12:00":toHH(meio), pf:meioDia?"13:00":toHH(meio+60), sai:sa}); };
+  const doDia=(ds)=> c ? (registros||[]).filter(r=>(r.data===ds||r.dia===ds) && ((r.pid!=null&&String(r.pid)===String(c.id))||(c.cpf&&r.cpf&&soDigitos(r.cpf)===soDigitos(c.cpf))||r.nome===c.nome)) : [];
+  const naEscala=(ds)=>{ if(!c||c.unidade==null) return false; const a=diaEscala(escala,escalaOv,c.unidade,ds,wdDe(ds)).find(x=>String(x.pid)===String(c.id)&&x.tipo==="clt"); return !!(a&&a.turno!=="folga"); };
+  const dias=datasEntre(ini,fim).map(ds=>{ const motivo= ds>=hoje ? "futuro" : (c&&c.admissao&&ds<c.admissao) ? "antes" : (c&&c.fimContrato&&ds>c.fimContrato) ? "depois" : doDia(ds).length ? "ponto" : "";
+    return { ds, wd:wdDe(ds), motivo, esc:naEscala(ds) }; });
+  const toggle=(ds)=>setSel(p=>{ const n=new Set(p); n.has(ds)?n.delete(ds):n.add(ds); return n; });
+  const marcarEscala=()=>{ const n=new Set(); dias.forEach(d=>{ if(!d.motivo && d.esc) n.add(d.ds); }); setSel(n); if(!n.size) toast("Nenhum dia da escala disponível neste mês — marque os dias à mão"); };
+  const marcarSegSab=()=>{ const n=new Set(); dias.forEach(d=>{ if(!d.motivo && d.wd!==6) n.add(d.ds); }); setSel(n); };
+  const jorn=(()=>{ const t=(toMin(h.sai)-toMin(h.ent)+1440)%1440, p=(toMin(h.pf)-toMin(h.pi)+1440)%1440; return Math.max(0,t-p); })();
+  const ordemOk = jorn>0 && toMin(h.pi)>=toMin(h.ent) && toMin(h.pf)>toMin(h.pi) && toMin(h.sai)>toMin(h.pf);
+  const diasSel=[...sel].filter(ds=>{ const d=dias.find(x=>x.ds===ds); return d && !d.motivo; }).sort();
+  const lancar=async()=>{ if(!c){ toast("Escolha o colaborador"); return; } if(!diasSel.length){ toast("Marque os dias trabalhados"); return; }
+    if(!ordemOk){ toast("Confira os horários: entrada < início da pausa < fim da pausa < saída (mesmo dia)"); return; }
+    if(!confirm("Lançar "+diasSel.length+" dia(s) para "+c.nome+" ("+h.ent+" às "+h.sai+", pausa "+h.pi+"–"+h.pf+")?")) return;
+    setSalvando(true);
+    const uniNome=(unidades.find(u=>String(u.id)===String(c.unidade))||{}).nome||"";
+    try{ for(const ds of diasSel){ const [yy,mm,dd]=ds.split("-").map(Number);
+        [["Entrada",h.ent],["Início intervalo",h.pi],["Fim intervalo",h.pf],["Saída",h.sai]].forEach(([acao,t],i)=>{ const mn=toMin(t);
+          addRegistro({ nome:c.nome, pid:String(c.id), cpf:soDigitos(c.cpf||""), tipo:"clt", acao, unidade:uniNome, hora:t+":00", min:mn, data:ds, dia:ds,
+            ts:new Date(yy,mm-1,dd,Math.floor(mn/60),mn%60).getTime()+i, geo:false, selfie:false, foto:null, ajuste:true, lancadoGestor:true, obsGestor:"Dia lançado pelo gestor (sem ponto)" }); }); }
+      toast(diasSel.length+" dia(s) lançados para "+c.nome+" — a folha e o VT já consideram esses dias"); setSel(new Set());
+    } finally { setSalvando(false); } };
+  const WD=["Seg","Ter","Qua","Qui","Sex","Sáb","Dom"];
+  const primeiroWd=wdDe(ini);
+  const lancadosGestor=c ? (registros||[]).filter(r=>r.lancadoGestor && String(r.pid)===String(c.id) && r.data>=ini && r.data<=fim && r.acao==="Entrada").length : 0;
+  return <Card className="p-4">
+    <div className="font-bold text-slate-800">Lançar dias trabalhados sem ponto</div>
+    <p className="text-xs text-slate-500 mb-3">Para quem trabalhou e não bateu o ponto. O sistema grava entrada, pausa e saída de cada dia marcado (marcado como “lançado pelo gestor”), e a folha, as faltas e o VT passam a contar esses dias. Só aceita <b>dias passados</b> e dias <b>sem nenhuma batida</b> — nunca altera um ponto real.</p>
+    <div className="flex flex-wrap items-end gap-2">
+      <Field label="Colaborador"><Select value={pid} onChange={e=>escolher(e.target.value)} aria-label="Colaborador sem ponto"><option value="">Escolha…</option>{pessoas.map(p=><option key={p.id} value={p.id}>{p.nome} · {p.vinculo==="fixo"?"Freela Fixo":"CLT"}</option>)}</Select></Field>
+      <Field label="Mês"><Input type="month" value={ym} onChange={e=>{ if(e.target.value){ setYm(e.target.value); setSel(new Set()); } }} aria-label="Mês dos dias sem ponto"/></Field>
+      <Field label="Entrada"><Input type="time" value={h.ent} onChange={e=>setH({...h,ent:e.target.value})} aria-label="Entrada sem ponto"/></Field>
+      <Field label="Início pausa"><Input type="time" value={h.pi} onChange={e=>setH({...h,pi:e.target.value})} aria-label="Início pausa sem ponto"/></Field>
+      <Field label="Fim pausa"><Input type="time" value={h.pf} onChange={e=>setH({...h,pf:e.target.value})} aria-label="Fim pausa sem ponto"/></Field>
+      <Field label="Saída"><Input type="time" value={h.sai} onChange={e=>setH({...h,sai:e.target.value})} aria-label="Saída sem ponto"/></Field>
+      <span className={cx("text-xs pb-2.5", ordemOk?"text-slate-500":"text-rose-600 font-semibold")}>{ordemOk?"Jornada de "+fmtHoras(jorn)+" por dia (pausa de "+fmtHoras((toMin(h.pf)-toMin(h.pi)+1440)%1440)+")":"Horários fora de ordem"}</span>
+    </div>
+    {c && <>
+      <div className="flex flex-wrap items-center gap-2 mt-3 text-xs">
+        <span className="text-slate-500">Admissão: <b>{c.admissao?fmtDataBR(c.admissao):"—"}</b></span>
+        {lancadosGestor>0 && <Badge tone="amber">{lancadosGestor} dia(s) já lançados pelo gestor neste mês</Badge>}
+        <div className="flex-1"/>
+        <Btn size="sm" variant="soft" onClick={marcarEscala}>Marcar dias da escala</Btn>
+        <Btn size="sm" variant="soft" onClick={marcarSegSab}>Marcar seg. a sáb.</Btn>
+        <Btn size="sm" variant="ghost" onClick={()=>setSel(new Set())}>Limpar</Btn>
+      </div>
+      <div className="grid grid-cols-7 gap-1.5 mt-2" aria-label="Calendário de dias sem ponto">
+        {WD.map(w=><div key={w} className="text-[10px] font-bold text-slate-400 text-center uppercase">{w}</div>)}
+        {Array.from({length:primeiroWd}).map((_,i)=><div key={"v"+i}/>)}
+        {dias.map(d=>{ const on=sel.has(d.ds)&&!d.motivo; const bloq=!!d.motivo;
+          return <button key={d.ds} disabled={bloq} onClick={()=>toggle(d.ds)} aria-label={"Dia "+d.ds} aria-pressed={on}
+            title={d.motivo==="ponto"?"Já tem ponto neste dia":d.motivo==="antes"?"Antes da admissão":d.motivo==="futuro"?"Dia futuro":d.motivo==="depois"?"Depois do fim do contrato":(d.esc?"Dia de trabalho na escala":"Folga / fora da escala")}
+            className={cx("rounded-lg border px-1 py-1.5 text-center text-sm transition",
+              on?"grad-brand text-white border-transparent":
+              d.motivo==="ponto"?"bg-emerald-50 border-emerald-200 text-emerald-700 cursor-not-allowed":
+              bloq?"bg-slate-50 border-slate-100 text-slate-300 cursor-not-allowed":
+              d.esc?"bg-white border-slate-200 text-slate-800 hover:bg-brand-50":"bg-white border-dashed border-slate-200 text-slate-400 hover:bg-slate-50")}>
+            <div className="font-bold leading-none">{Number(d.ds.slice(8))}</div>
+            <div className="text-[9px] mt-0.5 leading-none">{d.motivo==="ponto"?"com ponto":d.motivo==="antes"?"antes adm.":d.motivo==="futuro"?"":d.esc?"escala":"folga"}</div>
+          </button>; })}
+      </div>
+      <div className="flex flex-wrap items-center gap-3 mt-3">
+        <span className="text-sm text-slate-700"><b>{diasSel.length}</b> dia(s) marcado(s){diasSel.length?" · "+fmtHoras(jorn*diasSel.length)+" no total":""}</span>
+        <div className="flex-1"/>
+        <Btn icon={I.check} onClick={lancar} disabled={salvando||!diasSel.length}>{salvando?"Lançando…":"Lançar "+diasSel.length+" dia(s)"}</Btn>
+      </div>
+      <p className="text-[11px] text-slate-400 mt-2">Dias em verde já têm ponto e não podem ser alterados aqui. Se a pessoa tiver “Pagamento proporcional (sem ponto)” lançado em Contas do mês, use “Usar cálculo da folha” para valer o cálculo com estes dias.</p>
+    </>}
+  </Card>;
+}
+
 function AjustesPonto(){
   const { ajustes, resolverAjuste, addRegistro } = useStore();
   const toast=useContext(ToastCtx);
@@ -8964,10 +9084,10 @@ function AjustesPonto(){
   return <div className="fade-in">
     <PageHeader title="Ajustes de ponto" sub="Solicitações de correção enviadas pelos colaboradores · aprovar, ajustar o horário ou recusar"/>
     <div className="inline-flex p-1 bg-slate-100 rounded-xl mb-4">
-      {[["pendente","Pendentes ("+pend.length+")"],["resolvidos","Resolvidos"]].map(([k,l])=>
+      {[["pendente","Pendentes ("+pend.length+")"],["resolvidos","Resolvidos"],["lancar","Lançar dias sem ponto"]].map(([k,l])=>
         <button key={k} onClick={()=>setAba(k)} className={cx("px-5 py-2 rounded-lg text-sm font-semibold transition", aba===k?"grad-brand text-white shadow-glow":"text-slate-500 hover:text-slate-700")}>{l}</button>)}
     </div>
-    <div className="space-y-3">
+    {aba==="lancar" ? <LancarDiasSemPonto/> : <div className="space-y-3">
       {lista.length===0 && <Card className="p-8 text-center text-slate-400 text-sm">{aba==="pendente"?"Nenhuma solicitação pendente. 👍":"Nenhum ajuste resolvido ainda."}</Card>}
       {lista.map(a=>{ const editing=editHora[a._docId]!==undefined; const pendente=a.status==="pendente"||!a.status;
         return <Card key={a._docId} className="p-4">
@@ -8989,7 +9109,7 @@ function AjustesPonto(){
               : <Badge tone={a.status==="aprovado"?"green":"red"}>{a.status==="aprovado"?("Aprovado"+(a.horaFinal?" · "+a.horaFinal:"")):"Recusado"}</Badge>}
           </div>
         </Card>; })}
-    </div>
+    </div>}
   </div>;
 }
 
