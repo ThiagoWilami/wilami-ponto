@@ -3312,16 +3312,24 @@ function minutosNoturnos(punches){ const g=a=>{ const p=punches.find(x=>x.acao==
 const fmtSaldo=(min)=> (min<0?"-":"+")+fmtHoras(min);
 function Relatorios() {
   const { clts, freelasComPagamentos, pjs, unidades, registros, pontoHist, getDossie, cltExtraAjuste, gorjetasCLT, escala, escalaOv, atestados, faltaDescontoDesde, feriadosExtras,
-    pagamentosCLT, pagamentosPJ, pagamentosFreela, relFin, acesso } = useStore();
+    pagamentosCLT, pagamentosPJ, pagamentosFreela, relFin, acesso, empresaContratante } = useStore();
   const toast=useContext(ToastCtx);
   const _clock=useClock(60000);
   const [f,setF]=useState("pontodia");
   const [casa,setCasa]=useState("todas");
-  const [ym,setYm]=useState(hojeStr().slice(0,7));
-  const [diaSel,setDiaSel]=useState(hojeStr());      // "Ponto por dia": data escolhida
-  const [pessoaSel,setPessoaSel]=useState("");      // ou um colaborador (todos os dias do mês)
-  const [y_,m_]=ym.split("-").map(Number); const [ini,fim]=mesDe(y_,m_);
-  useRegistrosPeriodo(ini,fim);
+  // Período livre (De / Até): um dia, uma semana, o mês... Folha do mês e PJ usam o mês da data "De" (competência).
+  const [per,setPer]=useState(()=>{ const r=mesAtualRange(); return {ini:r.ini,fim:r.fim}; });
+  const [pessoaSel,setPessoaSel]=useState("");      // colaborador (opcional)
+  const ini=per.ini, fim=per.fim<per.ini?per.ini:per.fim; const ym=ini.slice(0,7);
+  const [y_,m_]=ym.split("-").map(Number); const [mi,mf]=mesDe(y_,m_);
+  useRegistrosPeriodo(mi<ini?mi:ini, mf>fim?mf:fim);
+  const atalho=(k)=>{ const h=hojeStr(); const d=new Date(); const iso=(x)=>ymd(x);
+    if(k==="hoje") setPer({ini:h,fim:h});
+    else if(k==="ontem"){ const o=iso(addDias(d,-1)); setPer({ini:o,fim:o}); }
+    else if(k==="semana"){ setPer({ini:iso(segDaSemana(d)),fim:h}); }
+    else if(k==="mes"){ const r=mesAtualRange(); setPer({ini:r.ini,fim:r.fim}); }
+    else if(k==="mesant"){ const a=new Date(d.getFullYear(),d.getMonth()-1,1); const [x,y]=mesDe(a.getFullYear(),a.getMonth()+1); setPer({ini:x,fim:y}); } };
+  const rotPer = ini===fim ? fmtDataBR(ini) : fmtDataBR(ini)+" a "+fmtDataBR(fim);
   const naData=(d)=> !!d && d>=ini && d<=fim;
   const podeSigilo=!acesso||acesso.podeSigilo;
   const naCasa=(u)=> casa==="todas" || Number(u)===Number(casa);
@@ -3332,7 +3340,11 @@ function Relatorios() {
   const folhaCtx={ apurCLT:apur, cltExtraAjuste, gorjetasCLT, ymRef:ym, getDossie, naData, faltasCtx, feriados:feriadosExtras };
   const salariados=clts.filter(c=>c.status!=="inativo" && naCasa(c.unidade) && (!c.admissao||c.admissao<=fim) && (!c.fimContrato||c.fimContrato>=ini));
   const vinc=(c)=> c.vinculo==="fixo"?"Freela Fixo":c.vinculo==="confianca"?"Gerência":"CLT";
-  const folha=useMemo(()=>salariados.filter(c=>c.vinculo!=="confianca").map(c=>({c,l:calcFolhaLinha(c,folhaCtx)})),[clts,casa,ym,apurTodas,escala,escalaOv,atestados,cltExtraAjuste,feriadosExtras]); // eslint-disable-line
+  const folha=useMemo(()=>salariados.filter(c=>c.vinculo!=="confianca").map(c=>({c,l:calcFolhaLinha(c,folhaCtx)})),[clts,casa,ini,fim,apurTodas,escala,escalaOv,atestados,cltExtraAjuste,feriadosExtras]); // eslint-disable-line
+  // contexto da folha para outro período (ex.: mês inteiro da competência)
+  const folhaDe=(a,b)=>{ const nd=(d)=>!!d&&d>=a&&d<=b; const ap=apurTodas.filter(x=>x.tipo==="clt"&&x.completo&&nd(x.dia));
+    const ctx={ apurCLT:ap, cltExtraAjuste, gorjetasCLT, ymRef:a.slice(0,7), getDossie, naData:nd, faltasCtx:{...faltasCtx,ini:a,fim:b}, feriados:feriadosExtras };
+    return clts.filter(c=>c.status!=="inativo"&&c.vinculo!=="confianca"&&naCasa(c.unidade)&&(!c.admissao||c.admissao<=b)&&(!c.fimContrato||c.fimContrato>=a)).map(c=>({c,l:calcFolhaLinha(c,ctx)})); };
   const B=(v)=>({v:Math.round((Number(v)||0)*100)/100,t:"brl"}), H=(v)=>({v:Number(v)||0,t:"h"}), N=(v)=>({v:Number(v)||0,t:"n"}), S=(v)=>({v:v==null?"":String(v),t:"s"});
   const soma=(rows,i)=>rows.reduce((s,r)=>s+(Number(r[i]&&r[i].v)||0),0);
   const atestadosDe=(c)=>(atestados||[]).filter(a=>naData(a.data) && ((a.pid!=null&&String(a.pid)===String(c.id))||(c.cpf&&a.cpf&&soDigitos(a.cpf)===soDigitos(c.cpf)))).length;
@@ -3352,19 +3364,19 @@ function Relatorios() {
         const rows=datasEntre(ini,fim).filter(ds=>ds<=hojeStr()).map(ds=>{ const L=linhaDia(p,ds); if(!L.rr.length && !escalado(p,ds)) return null;
           return [S(fmtDataBR(ds)),S(WD[wdDe(ds)]),...L.cells.slice(0,6),S(L.rr.length?L.cells[6].v:"Sem registro (escalado)")]; }).filter(Boolean);
         return {cols:["Data","Dia","Entrada","Saída almoço","Retorno","Saída","Trabalhado","Pausas","Situação"], rows, tot:[6,7],
-          nota:p.nome+" · "+fmtCompetencia(ym)+" · dias com ponto e dias escalados sem ponto. Trabalhado = tempo real entre as marcações, sem as pausas."}; }
-      const rows=pessoasPonto.map(p=>{ const L=linhaDia(p,diaSel); if(!L.rr.length && !escalado(p,diaSel)) return null;
-        return [S(p.nome),S(p._t==="free"?"Freelancer":vinc(p)),...L.cells.slice(0,6),S(L.rr.length?L.cells[6].v:"Sem registro (escalado)")]; }).filter(Boolean);
-      return {cols:["Colaborador","Vínculo","Entrada","Saída almoço","Retorno","Saída","Trabalhado","Pausas","Situação"], rows, tot:[6,7],
-        nota:"Dia "+fmtDataBR(diaSel)+" ("+WD[wdDe(diaSel)]+") · quem bateu ponto e quem estava escalado sem ponto. Trabalhado = tempo real entre as marcações, sem as pausas."}; },
+          nota:p.nome+" · "+rotPer+" · dias com ponto e dias escalados sem ponto. Trabalhado = tempo real entre as marcações, sem as pausas."}; }
+      const rows=[]; datasEntre(ini,fim).filter(ds=>ds<=hojeStr()).forEach(ds=>pessoasPonto.forEach(p=>{ const L=linhaDia(p,ds); if(!L.rr.length && !escalado(p,ds)) return;
+        rows.push([S(fmtDataBR(ds)+" "+WD[wdDe(ds)]),S(p.nome),S(p._t==="free"?"Freelancer":vinc(p)),...L.cells.slice(0,6),S(L.rr.length?L.cells[6].v:"Sem registro (escalado)")]); }));
+      return {cols:["Data","Colaborador","Vínculo","Entrada","Saída almoço","Retorno","Saída","Trabalhado","Pausas","Situação"], rows, tot:[7,8],
+        nota:rotPer+" · quem bateu ponto e quem estava escalado sem ponto. Trabalhado = tempo real entre as marcações, sem as pausas."}; },
     horasmes:()=>{ const dias=datasEntre(ini,fim).filter(ds=>ds<=hojeStr());
       const rows=pessoasPonto.map(p=>{ let n=0,inc=0,trab=0,pausa=0; dias.forEach(ds=>{ const rr=regsDe(p,ds); if(!rr.length) return; const j=jornadaDoDia(rr,null); if(j.estado==="fim"){ n++; trab+=j.trab; pausa+=j.pausa; } else inc++; });
         if(!n&&!inc) return null; return [S(p.nome),S(p._t==="free"?"Freelancer":vinc(p)),N(n),H(Math.round(trab/60)),H(n?Math.round(trab/60/n):0),H(Math.round(pausa/60)),N(inc)]; }).filter(Boolean);
-      return {cols:["Colaborador","Vínculo","Dias completos","Horas trabalhadas","Média por dia","Pausas no mês","Dias incompletos"], rows, tot:[2,3,5,6],
+      return {cols:["Colaborador","Vínculo","Dias completos","Horas trabalhadas","Média por dia","Pausas","Dias incompletos"], rows, tot:[2,3,5,6],
         nota:"Somente dias com entrada e saída. Dias incompletos = bateu entrada e não bateu a saída (conferir em Ajustes de ponto)."}; },
-    folha:()=>{ const rows=folha.map(({c,l})=>[S(c.nome),S(vinc(c)),N((l.dias||[]).length),N(l.faltasQtd),B(l.salario),B(l.extrasVal),B(l.notVal+l.dsrReflexo),B(l.reposicao),B(l.descontos),B(l.liquido),B(l.vt)]);
+    folha:()=>{ const rows=folhaDe(mi,mf).map(({c,l})=>[S(c.nome),S(vinc(c)),N((l.dias||[]).length),N(l.faltasQtd),B(l.salario),B(l.extrasVal),B(l.notVal+l.dsrReflexo),B(l.reposicao),B(l.descontos),B(l.liquido),B(l.vt)]);
       return {cols:["Colaborador","Vínculo","Dias trab.","Faltas","Salário","Extras","Noturno + DSR","Complemento","Descontos","Líquido","VT (à parte)"], rows, tot:[4,5,6,7,8,9,10,2,3],
-        nota:"Mesma conta da folha e de Pagamentos: salário proporcional aos dias de contrato + extras + adicional noturno + DSR + complemento do combinado − descontos (faltas, DSR, atrasos, 6% VT). O VT é pago à parte."}; },
+        nota:"Competência "+fmtCompetencia(ym)+" (mês inteiro da data inicial). Mesma conta da folha e de Pagamentos: salário proporcional aos dias de contrato + extras + adicional noturno + DSR + complemento do combinado − descontos (faltas, DSR, atrasos, 6% VT). O VT é pago à parte."}; },
     dias:()=>{ const rows=folha.map(({c,l})=>{ const esc=diasTrabalhoNoPeriodo(c,ini,fim,escala,{}); return [S(c.nome),S(vinc(c)),S(c.admissao?fmtDataBR(c.admissao):""),N(l.diasContrato),N(esc),N((l.dias||[]).length),N(l.faltasQtd),S((l.faltaDatas||[]).map(d=>d.slice(8,10)+"/"+d.slice(5,7)).join(", ")),N(atestadosDe(c)),N(l.atrasosQtd)]; });
       return {cols:["Colaborador","Vínculo","Admissão","Dias de contrato","Dias na escala","Dias trabalhados (ponto)","Faltas","Datas das faltas","Atestados","Atrasos"], rows, tot:[4,5,6,8,9],
         nota:"Dias na escala = dias de trabalho previstos (folgas fora) dentro do contrato. Dias trabalhados = dias com entrada e saída no ponto. Faltas = escalado sem ponto e sem atestado (a partir da data de início do controle em Configurações)."}; },
@@ -3378,10 +3390,10 @@ function Relatorios() {
         const pago=(pagamentosFreela[String(fr.id)]||[]).filter(p=>p.comp?p.comp===ym:(p.semana?p.semana.slice(0,7)===ym:naData(p.ref||p.data))).reduce((s,p)=>s+(Number(p.valor)||0),0);
         const tot=js.reduce((s,j)=>s+(Number(j.valor)||0),0); return [S(fr.nome),S(fr.cargo||""),N(js.length),H(js.reduce((s,j)=>s+(Number(j.horas)||0)*60,0)),B(tot),B(pago),B(tot-pago),S(fr.pix||"")]; }).filter(Boolean);
       return {cols:["Freelancer","Função","Diárias","Horas","Valor","Pago","Saldo","Pix"], rows, tot:[2,3,4,5,6], nota:"Diárias registradas no mês (dia 01 ao último dia)."}; },
-    pj:()=>{ const rows=(pjs||[]).filter(pj=>pjAtivoNoPeriodo(pj,ini,fim)&&(casa==="todas"||naCasa(pj.unidade)||pj.unidade==null||pj.unidade==="todas")).map(pj=>{ const pv=pjValorNoPeriodo(pj,ini,fim);
+    pj:()=>{ const rows=(pjs||[]).filter(pj=>pjAtivoNoPeriodo(pj,mi,mf)&&(casa==="todas"||naCasa(pj.unidade)||pj.unidade==null||pj.unidade==="todas")).map(pj=>{ const pv=pjValorNoPeriodo(pj,mi,mf);
         const pago=(pagamentosPJ[String(pj.id)]||[]).filter(p=>pagoNaCompetencia(p,ym,naData)).reduce((s,p)=>s+(Number(p.valor)||0),0);
         return [S(pj.nome),S(pj.servico||""),B(pj.valor),B(pv.total),S(pv.det.filter(d=>!d.cheio).map(d=>d.dias+" dia(s)").join(", ")||"mês cheio"),S(pjParcelasNoMes(pj,ym,pv.total).map(p=>fmtDataBR(p.venc)+(p.N>1?" ("+fmtBRL(p.valor)+")":"")).join(" + ")),B(pago),B(pv.total-pago)]; });
-      return {cols:["Prestador","Serviço","Valor mensal","Valor do mês","Proporcional","Vencimento","Pago","Saldo"], rows, tot:[3,6,7], nota:"Valor do contrato proporcional aos dias de vigência no mês; vencimento no dia do contrato do mês seguinte."}; },
+      return {cols:["Prestador","Serviço","Valor mensal","Valor do mês","Proporcional","Vencimento","Pago","Saldo"], rows, tot:[3,6,7], nota:"Competência "+fmtCompetencia(ym)+". Valor do contrato proporcional aos dias de vigência no mês; vencimento no dia do contrato do mês seguinte."}; },
     pagos:()=>{ const out=[]; const nomeClt=(id)=>{ const c=clts.find(x=>String(x.id)===String(id)); return c?c:null; };
       Object.keys(pagamentosCLT||{}).forEach(id=>{ const c=nomeClt(id); if(!c||!naCasa(c.unidade)) return; if(c.vinculo==="confianca"&&c.sigiloso&&!podeSigilo) return;
         (pagamentosCLT[id]||[]).filter(p=>naData(p.data)).forEach(p=>out.push([S(p.data),S(c.nome),S(p.tipo==="vt"?"Vale-transporte":vinc(c)),S(p.comp?fmtCompetencia(p.comp):""),S(p.forma||""),S(p.obs||""),B(p.valor)])); });
@@ -3391,16 +3403,78 @@ function Relatorios() {
       out.sort((a,b)=>a[0].v.localeCompare(b[0].v)); out.forEach(r=>{ r[0]={v:fmtDataBR(r[0].v),t:"s"}; });
       return {cols:["Pago em","Nome","Tipo","Referente a","Forma","Observação","Valor"], rows:out, tot:[6], nota:"Tudo o que saiu do caixa com data de pagamento neste mês (extrato), de qualquer competência."}; },
   };
-  const filtros=[["pontodia","Ponto por dia"],["horasmes","Horas no mês"],["folha","Folha do mês"],["dias","Dias trabalhados & faltas"],["extras","Horas extras"],["noturno","Adicional noturno"],["banco","Banco de horas"],["freelas","Freelancers"],["pj","Prestadores PJ"],["pagos","Pagamentos feitos"]];
+  const filtros=[["pontodia","Ponto por dia"],["horasmes","Horas no período"],["folha","Folha do mês"],["dias","Dias trabalhados & faltas"],["extras","Horas extras"],["noturno","Adicional noturno"],["banco","Banco de horas"],["freelas","Freelancers"],["pj","Prestadores PJ"],["pagos","Pagamentos feitos"]];
   const rel=R[f]();
   const fmtC=(c)=> c.t==="brl"?fmtBRL(c.v) : c.t==="h"?(c.v?fmtHoras(Math.round(c.v)):"—") : c.t==="saldo"?fmtSaldo(Math.round(c.v)) : c.t==="n"?String(c.v) : c.v;
   const totRow=rel.tot&&rel.rows.length ? rel.cols.map((_,i)=> i===0?{v:"Total",t:"s"} : rel.tot.includes(i) ? {v:soma(rel.rows,i),t:(rel.rows[0][i]||{}).t} : {v:"",t:"s"}) : null;
-  const nomeArq="Relatorio "+(filtros.find(x=>x[0]===f)||[])[1]+" "+ym+(casa!=="todas"?" "+unidadeNome(Number(casa),unidades):"");
+  // ===== Folha de ponto (espelho) individual em PDF, uma página por colaborador, com assinaturas =====
+  const exportarFolhaPonto=async()=>{
+    const alvo = pessoaSel ? pessoasPonto.filter(p=>String(p._t+"-"+p.id)===pessoaSel && p._t==="clt") : pessoasPonto.filter(p=>p._t==="clt");
+    const lista=alvo.map(p=>clts.find(c=>String(c.id)===String(p.id))).filter(c=>c && (!c.admissao||c.admissao<=fim) && (!c.fimContrato||c.fimContrato>=ini));
+    if(!lista.length){ toast("Nenhum colaborador CLT/Freela Fixo no período"+(pessoaSel?" (o escolhido é freelancer?)":"")); return; }
+    try{ const L=await carregarPdfLib(); const doc=await L.PDFDocument.create();
+      const f_=await doc.embedFont(L.StandardFonts.Helvetica), b_=await doc.embedFont(L.StandardFonts.HelveticaBold);
+      const limpo=(t)=>String(t??"").replace(/[—–]/g,"-").replace(/[^\x20-\x7E -ÿ]/g,"");
+      const C={esc:L.rgb(0.09,0.27,0.13),claro:L.rgb(0.94,0.97,0.93),faixa:L.rgb(0.97,0.97,0.97),linha:L.rgb(0.82,0.84,0.82),txt:L.rgb(0.12,0.12,0.12),cinza:L.rgb(0.42,0.42,0.42),verm:L.rgb(0.72,0.1,0.1),branco:L.rgb(1,1,1),amb:L.rgb(0.55,0.35,0.02)};
+      const emp=empresaEfetiva(empresaContratante); const W=595,H=842,M=30; const WD=["Seg","Ter","Qua","Qui","Sex","Sáb","Dom"];
+      const ctxP=folhaDe(ini,fim);
+      for(const c of lista){ const pg=doc.addPage([W,H]);
+        const txt=(t,x,y,o={})=>pg.drawText(limpo(t),{x,y,size:o.size||8,font:o.bold?b_:f_,color:o.cor||C.txt});
+        const cen=(t,xc,y,o={})=>{ const fn=o.bold?b_:f_, sz=o.size||8; txt(t,xc-fn.widthOfTextAtSize(limpo(t),sz)/2,y,o); };
+        // cabeçalho
+        pg.drawRectangle({x:0,y:H-58,width:W,height:58,color:C.esc});
+        txt("FOLHA DE PONTO",M,H-28,{bold:true,size:15,cor:C.branco}); txt("Espelho de ponto · Portaria MTP 671/2021",M,H-44,{size:8,cor:C.branco});
+        const dir=(t,xr,y,o={})=>{ const fn=o.bold?b_:f_, sz=o.size||8; txt(t,xr-fn.widthOfTextAtSize(limpo(t),sz),y,o); };
+        dir(limpo(emp.razao||""),W-M,H-28,{bold:true,size:9,cor:C.branco}); dir("CNPJ "+(emp.cnpj||""),W-M,H-42,{size:8,cor:C.branco});
+        let y=H-76;
+        const lin=[["Colaborador",c.nome],["CPF",c.cpf||"-"],["Cargo",c.cargo||"-"],["Vínculo",vinc(c)],["Admissão",c.admissao?fmtDataBR(c.admissao):"-"],["Casa",c.unidade==null||c.unidade==="todas"?"Todas":unidadeNome(Number(c.unidade),unidades)],["Período",rotPer],["Horário",(c.horaEntrada&&c.horaSaida)?c.horaEntrada+" às "+c.horaSaida:(c.escala||"-")]];
+        pg.drawRectangle({x:M,y:y-46,width:W-2*M,height:52,color:C.claro});
+        lin.forEach(([k,v],i)=>{ const col=i%4, row=(i/4)|0; const x=M+8+col*((W-2*M)/4); const yy=y-8-row*24; txt(k.toUpperCase(),x,yy,{size:6.5,bold:true,cor:C.cinza}); txt(String(v).slice(0,34),x,yy-10,{size:8.5,bold:k==="Colaborador"}); });
+        y-=62;
+        // tabela
+        const X=[M+4,M+52,M+80,M+128,M+176,M+224,M+272,M+330,M+384,M+430]; const cab=["Data","Dia","Entrada","Saída alm.","Retorno","Saída","Trabalhado","Pausas","Extras","Ocorrência"];
+        pg.drawRectangle({x:M,y:y-4,width:W-2*M,height:14,color:C.esc}); cab.forEach((t,i)=>txt(t,X[i],y,{bold:true,size:7,cor:C.branco})); y-=14;
+        const L_=(ctxP.find(x=>String(x.c.id)===String(c.id))||{}).l||{faltaDatas:[]};
+        let tTrab=0,tPausa=0,tExtra=0,nDias=0,nFaltas=0,nAtest=0,nFolga=0,nInc=0;
+        const hh=(sec)=> sec==null?"-":(()=>{ const t=((Math.round(sec/60))%1440+1440)%1440; return String(Math.floor(t/60)).padStart(2,"0")+":"+String(t%60).padStart(2,"0"); })();
+        datasEntre(ini,fim).forEach((ds,i)=>{ const rr=regsDe(c,ds); const j=jornadaDoDia(rr,null); const ap=apurTodas.find(x=>x.nome===c.nome&&x.dia===ds);
+          const antes=(c.admissao&&ds<c.admissao)||(c.fimContrato&&ds>c.fimContrato);
+          const atest=(atestados||[]).some(a=>a.data===ds&&((a.pid!=null&&String(a.pid)===String(c.id))||(c.cpf&&a.cpf&&soDigitos(a.cpf)===soDigitos(c.cpf))));
+          const falta=(L_.faltaDatas||[]).includes(ds); const esc=escalado({...c,_t:"clt"},ds); const fer=ehFeriado(ds,feriadosExtras);
+          let oc = antes ? "Fora do contrato" : rr.length ? (j.estado==="fim" ? (rr.some(r=>r.lancadoGestor)?"Lançado pelo gestor":rr.some(r=>r.ajuste)?"Com ajuste aprovado":"") : (ds>=hojeStr()?"Em andamento":"Incompleto (sem saída)")) : atest ? "Atestado" : falta ? "FALTA" : fer ? "Feriado" : !esc ? "Folga" : ds>hojeStr() ? "" : "Sem registro";
+          if(rr.length&&fer&&!oc) oc="Feriado trabalhado (100%)";
+          const dl=(L_.dias||[]).find(x=>x.data===ds); const ext = dl ? ((dl.ext50||0)+(dl.ext100||0)) : 0; const e100 = dl && dl.ext100>0;
+          if(i%2===0) pg.drawRectangle({x:M,y:y-3.5,width:W-2*M,height:12.6,color:C.faixa});
+          const cor = oc==="FALTA"?C.verm:(oc==="Folga"||oc==="Fora do contrato"||oc==="Feriado")?C.cinza:C.txt;
+          txt(fmtDataBR(ds).slice(0,5),X[0],y,{size:7.5,cor}); txt(WD[wdDe(ds)],X[1],y,{size:7.5,cor});
+          if(rr.length){ const pz=j.pausas||[]; txt(hh(j.ent),X[2],y,{size:7.5}); txt(pz[0]?hh(pz[0].ini):"-",X[3],y,{size:7.5}); txt(pz[0]&&pz[pz.length-1].fim!=null?hh(pz[pz.length-1].fim):"-",X[4],y,{size:7.5}); txt(j.sai!=null?hh(j.sai):"-",X[5],y,{size:7.5});
+            if(j.estado==="fim"){ txt(fmtHoras(Math.round(j.trab/60)),X[6],y,{size:7.5,bold:true}); txt(fmtHoras(Math.round(j.pausa/60)),X[7],y,{size:7.5}); tTrab+=j.trab; tPausa+=j.pausa; nDias++; } else if(ds<hojeStr()) nInc++;
+            if(ext>0){ txt(fmtHoras(ext)+(e100?"*":""),X[8],y,{size:7.5,cor:C.amb}); } }
+          if(oc==="FALTA") nFaltas++; if(oc==="Atestado") nAtest++; if(oc==="Folga") nFolga++;
+          txt(oc,X[9],y,{size:7,cor,bold:oc==="FALTA"}); y-=12.6; });
+        pg.drawLine({start:{x:M,y:y+8},end:{x:W-M,y:y+8},thickness:0.8,color:C.esc}); y-=6;
+        // totais
+        const tots=[["Dias trabalhados",String(nDias)],["Horas trabalhadas",fmtHoras(Math.round(tTrab/60))],["Pausas",fmtHoras(Math.round(tPausa/60))],["Horas extras",fmtHoras((L_.extrasMin||0)+(L_.extras100Min||0))],["Adic. noturno",fmtHoras(L_.notMin||0)],["Faltas",String(nFaltas)],["Atestados",String(nAtest)],["Incompletos",String(nInc)]];
+        pg.drawRectangle({x:M,y:y-34,width:W-2*M,height:40,color:C.claro});
+        tots.forEach(([k,v],i)=>{ const x=M+(W-2*M)/8*i+(W-2*M)/16; cen(k,x,y-8,{size:6.5,bold:true,cor:C.cinza}); cen(v,x,y-24,{size:11,bold:true,cor:k==="Faltas"&&nFaltas?C.verm:C.esc}); });
+        y-=52;
+        // declaração e assinaturas
+        const decl="Declaro que as marcações acima correspondem à minha jornada de trabalho no período, incluindo os horários de entrada, intervalos e saída.";
+        txt(decl,M,y,{size:8}); y-=12; txt("* Horas extras a 100% (folga da escala ou feriado). Demais: 50%. Horários em hora local; pausas não contam como trabalhado.",M,y,{size:7,cor:C.cinza}); y-=10; txt("Divergências devem ser apontadas antes da assinatura (Ajustes de ponto).",M,y,{size:7,cor:C.cinza});
+        y=Math.min(y-34,120);
+        [[c.nome,"Colaborador(a)",M],[emp.razao||"Empresa","Empresa / responsável",W/2+10]].forEach(([n,r,x])=>{ pg.drawLine({start:{x,y},end:{x:x+W/2-M-20,y},thickness:0.7,color:C.txt}); txt(limpo(n).slice(0,48),x,y-11,{size:8,bold:true}); txt(r,x,y-21,{size:7,cor:C.cinza}); });
+        txt("Data: ____/____/________",M,y-40,{size:8}); txt("Data: ____/____/________",W/2+10,y-40,{size:8});
+        txt(limpo("Gerado em "+new Date().toLocaleString("pt-BR")+" · Wilami Ponto & RH · marcações registradas com geolocalização e selfie"),M,22,{size:6.5,cor:C.cinza});
+      }
+      const nome="Folha de ponto "+(lista.length===1?lista[0].nome+" ":"")+ini+(ini!==fim?" a "+fim:"")+".pdf";
+      baixarBlob(new Blob([await doc.save()],{type:"application/pdf"}),nome.replace(/[\\/:*?"<>|]/g,"")); toast("Folha de ponto gerada ("+lista.length+" colaborador"+(lista.length>1?"es":"")+", 1 página cada)");
+    }catch(e){ console.error(e); toast("Não foi possível gerar a folha de ponto: "+e.message); } };
+  const nomeArq="Relatorio "+(filtros.find(x=>x[0]===f)||[])[1]+" "+(ini===fim?ini:ini+" a "+fim)+(casa!=="todas"?" "+unidadeNome(Number(casa),unidades):"");
   const exportarCSV=()=>{ const cel=(c)=> c.t==="s"?'"'+String(c.v).replace(/"/g,'""')+'"' : c.t==="h"||c.t==="saldo" ? fmtHoras(Math.round(c.v)).replace("h",":") : String(Math.round(c.v*100)/100).replace(".",",");
     const linhas=[rel.cols.join(";"), ...rel.rows.map(r=>r.map(cel).join(";")), ...(totRow?[totRow.map(cel).join(";")]:[])];
     baixarBlob(new Blob(["﻿"+linhas.join("\n")],{type:"text/csv;charset=utf-8"}),nomeArq.replace(/[\\/:*?"<>|]/g,"")+".csv"); toast("Relatório exportado ("+rel.rows.length+" linhas)"); };
   const exportarExcel=async()=>{ if(!window.ExcelJS){ exportarCSV(); return; } const wb=new ExcelJS.Workbook(); const ws=wb.addWorksheet("Relatório");
-    ws.addRow([nomeArq]).font={bold:true,size:13}; ws.addRow(["Competência "+fmtCompetencia(ym)+" (01 a "+fmtDataBR(fim)+")"]); ws.addRow([]);
+    ws.addRow([nomeArq]).font={bold:true,size:13}; ws.addRow(["Período "+rotPer]); ws.addRow([]);
     const h=ws.addRow(rel.cols); h.font={bold:true};
     const val=(c)=> c.t==="h"||c.t==="saldo" ? (c.v?fmtHoras(Math.round(c.v)):"") : c.v;
     rel.rows.forEach(r=>{ const row=ws.addRow(r.map(val)); r.forEach((c,i)=>{ if(c.t==="brl") row.getCell(i+1).numFmt='"R$" #,##0.00'; }); });
@@ -3408,7 +3482,8 @@ function Relatorios() {
     ws.columns.forEach(c=>{ c.width=18; }); ws.getColumn(1).width=30;
     const buf=await wb.xlsx.writeBuffer(); baixarBlob(new Blob([buf],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}),nomeArq.replace(/[\\/:*?"<>|]/g,"")+".xlsx"); toast("Excel gerado ("+rel.rows.length+" linhas)"); };
   return <div className="fade-in">
-    <PageHeader title="Relatórios" sub="Cálculo conforme CLT e Portaria 671/2021 · sempre do dia 01 ao último dia do mês · mesma conta da folha e de Pagamentos">
+    <PageHeader title="Relatórios" sub="Cálculo conforme CLT e Portaria 671/2021 · escolha o período (um dia, uma semana, o mês) · mesma conta da folha e de Pagamentos">
+      <Btn variant="soft" icon={I.file||I.download} onClick={exportarFolhaPonto}>Folha de ponto p/ assinatura (PDF)</Btn>
       <Btn variant="ghost" icon={I.download} onClick={exportarCSV}>CSV</Btn>
       <Btn icon={I.download} onClick={exportarExcel}>Exportar Excel</Btn>
     </PageHeader>
@@ -3416,9 +3491,10 @@ function Relatorios() {
       {filtros.map(([k,l])=><button key={k} onClick={()=>setF(k)} className={cx("px-4 py-2 rounded-xl text-sm font-semibold border transition", f===k?"grad-brand text-white border-transparent shadow-glow":"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>{l}</button>)}
     </div>
     <div className="flex flex-wrap items-center gap-3 mb-1">
-      {f==="pontodia" && !pessoaSel ? <Field label="Dia"><Input type="date" value={diaSel} onChange={e=>{ const v=e.target.value; if(!v) return; setDiaSel(v); setYm(v.slice(0,7)); }} aria-label="Dia do ponto"/></Field>
-        : <Field label="Mês (competência)"><Input type="month" value={ym} onChange={e=>e.target.value&&setYm(e.target.value)} aria-label="Mês do relatório"/></Field>}
-      {f==="pontodia" && <Field label="Colaborador (opcional)"><Select value={pessoaSel} onChange={e=>setPessoaSel(e.target.value)} aria-label="Colaborador do ponto"><option value="">Todos — ver um dia</option>{pessoasPonto.map(p=><option key={p._t+"-"+p.id} value={p._t+"-"+p.id}>{p.nome} · {p._t==="free"?"Freelancer":vinc(p)}</option>)}</Select></Field>}
+      <Field label="De"><Input type="date" value={per.ini} onChange={e=>{ const v=e.target.value; if(v) setPer(p=>({ini:v,fim:p.fim<v?v:p.fim})); }} aria-label="Data inicial"/></Field>
+      <Field label="Até"><Input type="date" value={per.fim} onChange={e=>{ const v=e.target.value; if(v) setPer(p=>({ini:p.ini>v?v:p.ini,fim:v})); }} aria-label="Data final"/></Field>
+      <div className="flex flex-wrap gap-1.5 pb-1">{[["hoje","Hoje"],["ontem","Ontem"],["semana","Esta semana"],["mes","Este mês"],["mesant","Mês anterior"]].map(([k,l])=><button key={k} onClick={()=>atalho(k)} className="px-2.5 py-1.5 rounded-lg text-xs font-semibold border bg-white border-slate-200 text-slate-600 hover:bg-slate-50">{l}</button>)}</div>
+      {(f==="pontodia"||f==="horasmes") && <Field label="Colaborador (opcional — também filtra a folha de ponto)"><Select value={pessoaSel} onChange={e=>setPessoaSel(e.target.value)} aria-label="Colaborador do ponto"><option value="">Todos</option>{pessoasPonto.map(p=><option key={p._t+"-"+p.id} value={p._t+"-"+p.id}>{p.nome} · {p._t==="free"?"Freelancer":vinc(p)}</option>)}</Select></Field>}
     </div>
     <FiltroCasa casa={casa} setCasa={setCasa} unidades={unidades}/>
     {rel.nota && <div className="mb-3 text-xs text-slate-500">{rel.nota}</div>}
