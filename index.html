@@ -413,10 +413,28 @@ function calcTrabalho(punches){ // punches: [{acao,min}]
   const ent=g("Entrada"), sai=g("Saída");
   if(ent==null||sai==null) return null;
   const fim = sai<ent ? sai+1440 : sai;
-  const ii=g("Início intervalo"), fi=g("Fim intervalo");
-  const interv = (ii!=null&&fi!=null) ? Math.max(0,(fi<ii?fi+1440:fi)-ii) : 0;
+  const nz=(m)=> m<ent ? m+1440 : m;   // horários depois da meia-noite (turno da noite)
+  // todas as pausas do dia (pode haver mais de uma), pareadas em ordem
+  const ini=punches.filter(x=>x.acao==="Início intervalo").map(x=>nz(x.min)).sort((a,b)=>a-b);
+  const fins=punches.filter(x=>x.acao==="Fim intervalo").map(x=>nz(x.min)).sort((a,b)=>a-b);
+  let interv=0; ini.forEach((ii,k)=>{ const fi=fins.find(f=>f>=ii && (k+1>=ini.length || f<=ini[k+1])); if(fi!=null) interv+=fi-ii; });
   return Math.max(0, fim-ent-interv);
 }
+// Jornada do dia em SEGUNDOS a partir das batidas (qualquer ordem): trabalhado e pausado de verdade, somando
+// todos os períodos; se o dia ainda está aberto e nowS é informado, conta até agora.
+function jornadaDoDia(regs, nowS){
+  const seg=(r)=>{ const h=String(r.hora||""); if(/^\d{1,2}:\d{2}/.test(h)){ const [a,b,c]=h.split(":").map(Number); return a*3600+b*60+(c||0); } return (Number(r.min)||0)*60; };
+  const ent=(regs||[]).filter(r=>r.acao==="Entrada").map(seg).sort((a,b)=>a-b)[0];
+  const nz=(x)=> ent!=null && x<ent-6*3600 ? x+86400 : x;
+  const ord=(regs||[]).filter(r=>r.min!=null||r.hora).map(r=>({acao:r.acao,s:nz(seg(r)),hora:r.hora})).sort((a,b)=>a.s-b.s);
+  let trab=0, pausa=0, estado=null, desde=null; const pausas=[];
+  ord.forEach(p=>{ if(estado==="trab"&&desde!=null) trab+=Math.max(0,p.s-desde); if(estado==="pausa"&&desde!=null){ pausa+=Math.max(0,p.s-desde); pausas[pausas.length-1].fim=p.s; }
+    if(p.acao==="Entrada"||p.acao==="Fim intervalo"){ estado="trab"; desde=p.s; }
+    else if(p.acao==="Início intervalo"){ estado="pausa"; desde=p.s; pausas.push({ini:p.s,fim:null}); }
+    else if(p.acao==="Saída"){ estado="fim"; desde=null; } });
+  let agoraEtapa=0; if((estado==="trab"||estado==="pausa") && nowS!=null && desde!=null){ const n=nz(nowS)<desde?nz(nowS)+86400:nz(nowS); agoraEtapa=Math.max(0,n-desde); if(estado==="trab") trab+=agoraEtapa; else pausa+=agoraEtapa; }
+  const sai=ord.filter(p=>p.acao==="Saída").pop();
+  return { trab, pausa, pausas, estado, etapa:agoraEtapa, ent: ent!=null?ent:null, sai: sai?sai.s:null, aberto: estado==="trab"||estado==="pausa", qtd:ord.length }; }
 const JORNADA_CLT=480, TOL=10; // 8h e tolerância 10min (Art. 58 CLT)
 // extras: minutos de hora extra "normal" (acima de 8h em dia útil)
 // extras100: minutos de hora extra 100% (trabalho em dia de FOLGA) — Freela nunca gera extras.
@@ -2648,7 +2666,8 @@ function PontoKiosk({ mode, onClose }) {
     const hora=now.toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit",second:"2-digit"});
     const protocolo=(soDigitos(pSel?.cpf).slice(-4)||"0000")+"-"+now.getTime().toString(36).slice(-5).toUpperCase();
     addRegistro({ nome: pSel?.nome || "Colaborador", pid: pSel?.id!=null?String(pSel.id):null, cpf: soDigitos(pSel?.cpf), tipo:mode, acao, unidade:unidade.nome, hora, geo:true, selfie:true, foto, protocolo });
-    setComprovante({ acao, label:acaoLabel||rotuloAcao(acao), hora, unidade:unidade.nome, nome:pSel?.nome, protocolo, encerrou:acao==="Saída" });
+    const jor = acao==="Saída" ? jornadaDoDia([...meusRegs,{acao,hora,min:now.getHours()*60+now.getMinutes()}]) : null;
+    setComprovante({ acao, label:acaoLabel||rotuloAcao(acao), hora, unidade:unidade.nome, nome:pSel?.nome, protocolo, encerrou:acao==="Saída", jor });
     setStep(0);
   };
   const registrarCadastro=(dados)=>{
@@ -2676,6 +2695,9 @@ function PontoKiosk({ mode, onClose }) {
               <div className="flex justify-between py-1"><span className="text-slate-500">Registro</span><b className="text-slate-800">{comprovante.label}</b></div>
               <div className="flex justify-between py-1"><span className="text-slate-500">Horário</span><b className="text-slate-800 tabular-nums">{comprovante.hora}</b></div>
               <div className="flex justify-between py-1"><span className="text-slate-500">Unidade</span><b className="text-slate-800">{comprovante.unidade}</b></div>
+              {comprovante.jor && <>
+                <div className="flex justify-between py-1 border-t border-slate-200 mt-1 pt-2"><span className="text-slate-500">Trabalhado hoje</span><b className="text-emerald-700 tabular-nums" aria-label="Comprovante trabalhado">{fmtHMS(comprovante.jor.trab)}</b></div>
+                <div className="flex justify-between py-1"><span className="text-slate-500">Pausas hoje</span><b className="text-amber-700 tabular-nums">{fmtHMS(comprovante.jor.pausa)}</b></div></>}
               <div className="flex justify-between py-1 border-t border-slate-200 mt-1 pt-2"><span className="text-slate-500">Protocolo</span><b className="text-slate-800 font-mono">{comprovante.protocolo}</b></div>
               <div className="flex items-center gap-1 justify-center mt-2 text-emerald-600 text-xs"><Icon d={I.check} className="w-3.5 h-3.5"/> Facial e GPS confirmados</div>
             </div>
@@ -2692,9 +2714,15 @@ function PontoKiosk({ mode, onClose }) {
             <div className={cx("rounded-2xl p-5 text-center mb-4", estado==="trabalhando"?"bg-emerald-50":estado==="pausa"?"bg-amber-50":estado==="encerrado"?"bg-slate-100":"bg-sky-50")}>
               <div className="text-xs font-bold uppercase tracking-wide mb-1" style={{color: estado==="trabalhando"?"#059669":estado==="pausa"?"#d97706":estado==="encerrado"?"#64748b":"#0284c7"}}>
                 {estado==="trabalhando"?"Em período de trabalho":estado==="pausa"?"Em pausa / almoço":estado==="encerrado"?"Jornada encerrada":"Aguardando entrada"}</div>
-              {(estado==="trabalhando"||estado==="pausa") && segStartMin!=null &&
-                <div className="text-4xl font-extrabold tabular-nums" style={{color:estado==="trabalhando"?"#059669":"#d97706"}}>{fmtHMS((()=>{let d=(clock.getHours()*3600+clock.getMinutes()*60+clock.getSeconds())-segStartMin*60;if(d<0)d+=86400;return d;})())}</div>}
-              <div className="text-xs text-slate-500 mt-1">{estado==="trabalhando"?"trabalhando agora · comprovação de jornada":estado==="pausa"?"em pausa agora":estado==="encerrado"?"até a próxima!":"bata sua entrada para começar"}</div>
+              {meusRegs.length>0 && (()=>{ const j=jornadaDoDia(meusRegs, clock.getHours()*3600+clock.getMinutes()*60+clock.getSeconds());
+                return <>
+                  <div className="text-[11px] font-semibold text-slate-500 mt-1">Trabalhado hoje</div>
+                  <div className="text-4xl font-extrabold tabular-nums text-emerald-600" aria-label="Trabalhado hoje">{fmtHMS(j.trab)}</div>
+                  <div className="flex justify-center gap-4 mt-2 text-xs text-slate-600">
+                    <span>Pausas: <b className="tabular-nums text-amber-600" aria-label="Pausas hoje">{fmtHMS(j.pausa)}</b></span>
+                    {(estado==="trabalhando"||estado==="pausa") && <span>{estado==="pausa"?"Nesta pausa":"Desde a última marcação"}: <b className="tabular-nums">{fmtHMS(j.etapa)}</b></span>}
+                  </div></>; })()}
+              <div className="text-xs text-slate-500 mt-1">{estado==="trabalhando"?"trabalhando agora · comprovação de jornada":estado==="pausa"?"em pausa agora (não conta como trabalhado)":estado==="encerrado"?"jornada encerrada · até a próxima!":"bata sua entrada para começar"}</div>
             </div>
             <div className="space-y-2">
               {acoesDisponiveis.map(a=>{ const isSaida=a==="Saída"; const isPausa=a==="Início intervalo";
@@ -3287,9 +3315,11 @@ function Relatorios() {
     pagamentosCLT, pagamentosPJ, pagamentosFreela, relFin, acesso } = useStore();
   const toast=useContext(ToastCtx);
   const _clock=useClock(60000);
-  const [f,setF]=useState("folha");
+  const [f,setF]=useState("pontodia");
   const [casa,setCasa]=useState("todas");
   const [ym,setYm]=useState(hojeStr().slice(0,7));
+  const [diaSel,setDiaSel]=useState(hojeStr());      // "Ponto por dia": data escolhida
+  const [pessoaSel,setPessoaSel]=useState("");      // ou um colaborador (todos os dias do mês)
   const [y_,m_]=ym.split("-").map(Number); const [ini,fim]=mesDe(y_,m_);
   useRegistrosPeriodo(ini,fim);
   const naData=(d)=> !!d && d>=ini && d<=fim;
@@ -3306,7 +3336,32 @@ function Relatorios() {
   const B=(v)=>({v:Math.round((Number(v)||0)*100)/100,t:"brl"}), H=(v)=>({v:Number(v)||0,t:"h"}), N=(v)=>({v:Number(v)||0,t:"n"}), S=(v)=>({v:v==null?"":String(v),t:"s"});
   const soma=(rows,i)=>rows.reduce((s,r)=>s+(Number(r[i]&&r[i].v)||0),0);
   const atestadosDe=(c)=>(atestados||[]).filter(a=>naData(a.data) && ((a.pid!=null&&String(a.pid)===String(c.id))||(c.cpf&&a.cpf&&soDigitos(a.cpf)===soDigitos(c.cpf)))).length;
+  // ---- análise do ponto: batidas reais agrupadas por pessoa e dia ----
+  const pessoasPonto=[...clts.filter(c=>c.status!=="inativo"&&c.vinculo!=="confianca").map(c=>({...c,_t:"clt"})), ...(freelasComPagamentos||[]).filter(f=>f.status!=="inativo").map(f=>({...f,_t:"free"}))]
+    .filter(p=>naCasa(p.unidade)).sort((a,b)=>String(a.nome).localeCompare(b.nome));
+  const regsDe=(p,ds)=>(registros||[]).filter(r=>(r.data===ds||r.dia===ds) && ((r.pid!=null&&String(r.pid)===String(p.id))||(p.cpf&&r.cpf&&soDigitos(r.cpf)===soDigitos(p.cpf))||r.nome===p.nome));
+  const hhmm=(s_)=> s_==null?"":(()=>{ const t=((Math.round(s_/60))%1440+1440)%1440; return String(Math.floor(t/60)).padStart(2,"0")+":"+String(t%60).padStart(2,"0"); })();
+  const linhaDia=(p,ds)=>{ const rr=regsDe(p,ds); const ehHoje=ds===hojeStr(); const agora=new Date(); const j=jornadaDoDia(rr, ehHoje?agora.getHours()*3600+agora.getMinutes()*60:null);
+    const pz=j.pausas||[]; const sit=!rr.length ? "Sem registro" : j.estado==="fim" ? "Completo" : ehHoje ? (j.estado==="pausa"?"Em pausa agora":"Trabalhando agora") : "Incompleto (sem saída)";
+    return { rr, j, cells:[S(j.ent!=null?hhmm(j.ent):"—"), S(pz[0]?hhmm(pz[0].ini):"—"), S(pz[0]&&pz[0].fim!=null?hhmm(pz[pz.length-1].fim):"—"), S(j.sai!=null?hhmm(j.sai):"—"),
+      H(Math.round(j.trab/60)), H(Math.round(j.pausa/60)), S(sit+(pz.length>1?" · "+pz.length+" pausas":"")+(rr.some(r=>r.lancadoGestor)?" · lançado pelo gestor":"")+(rr.some(r=>r.ajuste&&!r.lancadoGestor)?" · com ajuste":""))] }; };
+  const escalado=(p,ds)=>{ if(p._t!=="clt"||p.unidade==null) return false; if(p.admissao&&ds<p.admissao) return false; const a=diaEscala(escala,escalaOv,p.unidade,ds,wdDe(ds)).find(x=>String(x.pid)===String(p.id)&&x.tipo==="clt"); return !!(a&&a.turno!=="folga"); };
   const R={
+    pontodia:()=>{ const WD=["Seg","Ter","Qua","Qui","Sex","Sáb","Dom"];
+      if(pessoaSel){ const p=pessoasPonto.find(x=>String(x._t+"-"+x.id)===pessoaSel); if(!p) return {cols:["Data"],rows:[]};
+        const rows=datasEntre(ini,fim).filter(ds=>ds<=hojeStr()).map(ds=>{ const L=linhaDia(p,ds); if(!L.rr.length && !escalado(p,ds)) return null;
+          return [S(fmtDataBR(ds)),S(WD[wdDe(ds)]),...L.cells.slice(0,6),S(L.rr.length?L.cells[6].v:"Sem registro (escalado)")]; }).filter(Boolean);
+        return {cols:["Data","Dia","Entrada","Saída almoço","Retorno","Saída","Trabalhado","Pausas","Situação"], rows, tot:[6,7],
+          nota:p.nome+" · "+fmtCompetencia(ym)+" · dias com ponto e dias escalados sem ponto. Trabalhado = tempo real entre as marcações, sem as pausas."}; }
+      const rows=pessoasPonto.map(p=>{ const L=linhaDia(p,diaSel); if(!L.rr.length && !escalado(p,diaSel)) return null;
+        return [S(p.nome),S(p._t==="free"?"Freelancer":vinc(p)),...L.cells.slice(0,6),S(L.rr.length?L.cells[6].v:"Sem registro (escalado)")]; }).filter(Boolean);
+      return {cols:["Colaborador","Vínculo","Entrada","Saída almoço","Retorno","Saída","Trabalhado","Pausas","Situação"], rows, tot:[6,7],
+        nota:"Dia "+fmtDataBR(diaSel)+" ("+WD[wdDe(diaSel)]+") · quem bateu ponto e quem estava escalado sem ponto. Trabalhado = tempo real entre as marcações, sem as pausas."}; },
+    horasmes:()=>{ const dias=datasEntre(ini,fim).filter(ds=>ds<=hojeStr());
+      const rows=pessoasPonto.map(p=>{ let n=0,inc=0,trab=0,pausa=0; dias.forEach(ds=>{ const rr=regsDe(p,ds); if(!rr.length) return; const j=jornadaDoDia(rr,null); if(j.estado==="fim"){ n++; trab+=j.trab; pausa+=j.pausa; } else inc++; });
+        if(!n&&!inc) return null; return [S(p.nome),S(p._t==="free"?"Freelancer":vinc(p)),N(n),H(Math.round(trab/60)),H(n?Math.round(trab/60/n):0),H(Math.round(pausa/60)),N(inc)]; }).filter(Boolean);
+      return {cols:["Colaborador","Vínculo","Dias completos","Horas trabalhadas","Média por dia","Pausas no mês","Dias incompletos"], rows, tot:[2,3,5,6],
+        nota:"Somente dias com entrada e saída. Dias incompletos = bateu entrada e não bateu a saída (conferir em Ajustes de ponto)."}; },
     folha:()=>{ const rows=folha.map(({c,l})=>[S(c.nome),S(vinc(c)),N((l.dias||[]).length),N(l.faltasQtd),B(l.salario),B(l.extrasVal),B(l.notVal+l.dsrReflexo),B(l.reposicao),B(l.descontos),B(l.liquido),B(l.vt)]);
       return {cols:["Colaborador","Vínculo","Dias trab.","Faltas","Salário","Extras","Noturno + DSR","Complemento","Descontos","Líquido","VT (à parte)"], rows, tot:[4,5,6,7,8,9,10,2,3],
         nota:"Mesma conta da folha e de Pagamentos: salário proporcional aos dias de contrato + extras + adicional noturno + DSR + complemento do combinado − descontos (faltas, DSR, atrasos, 6% VT). O VT é pago à parte."}; },
@@ -3336,7 +3391,7 @@ function Relatorios() {
       out.sort((a,b)=>a[0].v.localeCompare(b[0].v)); out.forEach(r=>{ r[0]={v:fmtDataBR(r[0].v),t:"s"}; });
       return {cols:["Pago em","Nome","Tipo","Referente a","Forma","Observação","Valor"], rows:out, tot:[6], nota:"Tudo o que saiu do caixa com data de pagamento neste mês (extrato), de qualquer competência."}; },
   };
-  const filtros=[["folha","Folha do mês"],["dias","Dias trabalhados & faltas"],["extras","Horas extras"],["noturno","Adicional noturno"],["banco","Banco de horas"],["freelas","Freelancers"],["pj","Prestadores PJ"],["pagos","Pagamentos feitos"]];
+  const filtros=[["pontodia","Ponto por dia"],["horasmes","Horas no mês"],["folha","Folha do mês"],["dias","Dias trabalhados & faltas"],["extras","Horas extras"],["noturno","Adicional noturno"],["banco","Banco de horas"],["freelas","Freelancers"],["pj","Prestadores PJ"],["pagos","Pagamentos feitos"]];
   const rel=R[f]();
   const fmtC=(c)=> c.t==="brl"?fmtBRL(c.v) : c.t==="h"?(c.v?fmtHoras(Math.round(c.v)):"—") : c.t==="saldo"?fmtSaldo(Math.round(c.v)) : c.t==="n"?String(c.v) : c.v;
   const totRow=rel.tot&&rel.rows.length ? rel.cols.map((_,i)=> i===0?{v:"Total",t:"s"} : rel.tot.includes(i) ? {v:soma(rel.rows,i),t:(rel.rows[0][i]||{}).t} : {v:"",t:"s"}) : null;
@@ -3361,7 +3416,9 @@ function Relatorios() {
       {filtros.map(([k,l])=><button key={k} onClick={()=>setF(k)} className={cx("px-4 py-2 rounded-xl text-sm font-semibold border transition", f===k?"grad-brand text-white border-transparent shadow-glow":"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>{l}</button>)}
     </div>
     <div className="flex flex-wrap items-center gap-3 mb-1">
-      <Field label="Mês (competência)"><Input type="month" value={ym} onChange={e=>e.target.value&&setYm(e.target.value)} aria-label="Mês do relatório"/></Field>
+      {f==="pontodia" && !pessoaSel ? <Field label="Dia"><Input type="date" value={diaSel} onChange={e=>{ const v=e.target.value; if(!v) return; setDiaSel(v); setYm(v.slice(0,7)); }} aria-label="Dia do ponto"/></Field>
+        : <Field label="Mês (competência)"><Input type="month" value={ym} onChange={e=>e.target.value&&setYm(e.target.value)} aria-label="Mês do relatório"/></Field>}
+      {f==="pontodia" && <Field label="Colaborador (opcional)"><Select value={pessoaSel} onChange={e=>setPessoaSel(e.target.value)} aria-label="Colaborador do ponto"><option value="">Todos — ver um dia</option>{pessoasPonto.map(p=><option key={p._t+"-"+p.id} value={p._t+"-"+p.id}>{p.nome} · {p._t==="free"?"Freelancer":vinc(p)}</option>)}</Select></Field>}
     </div>
     <FiltroCasa casa={casa} setCasa={setCasa} unidades={unidades}/>
     {rel.nota && <div className="mb-3 text-xs text-slate-500">{rel.nota}</div>}
@@ -8142,7 +8199,7 @@ async function zipAdmissao(d,arqsSel){
   const usados={}; for(const a of arqsSel){ const du=await arqConteudo(a); let n=String(a.nome||"documento").replace(/[\\/:*?"<>|]/g,"_"); if(usados[n]){ usados[n]++; n=n.replace(/(\.[a-z0-9]+)?$/i,` (${usados[n]})$1`); } else usados[n]=1; z.file("Documentos/"+n, b64ToBytes(du)); }
   return await z.generateAsync({type:"blob"});
 }
-const baixarBlob=(blob,nome)=>{ const u=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=u; a.download=nome; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(u); a.remove(); },1500); };
+const baixarBlob=(blob,nome)=>{ nome=String(nome||"arquivo").normalize("NFD").replace(/[\u0300-\u036f]/g,""); const u=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=u; a.download=nome; document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(u); a.remove(); },1500); };
 
 const STATUS_CONTAB={ enviado:["Enviado","blue"], recebido:["Recebido pela contabilidade","amber"], concluido:["Admissão concluída","green"] };
 // Folha do período (CLT + Freela Fixo) com o mesmo cálculo do Financeiro — usada nos apontamentos da contabilidade
