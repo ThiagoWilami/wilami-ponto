@@ -685,7 +685,7 @@ function folgaPelaRegra(p,ds){ const wd=wdDe(ds); const g=grupoFolgaDe(p,"clt");
   if(Array.isArray(p.folgaDias)&&p.folgaDias.length) return p.folgaDias.map(Number).includes(wd);
   const base=p.folgaDia==null?6:Number(p.folgaDia); const esc=p.escala||"6x1";
   if(esc==="5x2"||esc==="6x2") return wd===base||wd===(base+1)%7; if(esc==="12x36") return false; return wd===base; }
-function diasTrabalhoNoPeriodo(p,ini,fim,escala,escalaOv){
+function diasTrabalhoNoPeriodo(p,ini,fim,escala,escalaOv,lista){
   const naEscala = p && p.id!=null && p.unidade!=null && Object.values((escala||{})[p.unidade]||{}).some(arr=>(arr||[]).some(a=>String(a.pid)===String(p.id)&&a.tipo==="clt"));
   // Vigência e grupo de folga vêm da própria pessoa (p), não do cadastro salvo: no formulário a data de admissão
   // ou o grupo podem ter acabado de ser digitados, e quem veio pelo convite fica "pendente" até salvar a admissão.
@@ -694,8 +694,8 @@ function diasTrabalhoNoPeriodo(p,ini,fim,escala,escalaOv){
   let n=0;
   try{ datasEntre(ini,fim).forEach(ds=>{
     if(p.admissao && ds<p.admissao) return; if(p.fimContrato && ds>p.fimContrato) return;
-    if(naEscala){ const a=diaEscala(escala,escalaOv,p.unidade,ds,wdDe(ds)).find(x=>String(x.pid)===String(p.id)&&x.tipo==="clt"); if(a && a.turno!=="folga") n++; }
-    else if(!folgaPelaRegra(p,ds)) n++; }); }
+    if(naEscala){ const a=diaEscala(escala,escalaOv,p.unidade,ds,wdDe(ds)).find(x=>String(x.pid)===String(p.id)&&x.tipo==="clt"); if(a && a.turno!=="folga") { n++; if(lista) lista.push(ds); } }
+    else if(!folgaPelaRegra(p,ds)) { n++; if(lista) lista.push(ds); } }); }
   finally{ if(naEscala){ if(vigAnt!==undefined) VIGENCIA.map[k]=vigAnt; if(grpAnt!==undefined) GRUPO_FOLGA.map[k]=grpAnt; else delete GRUPO_FOLGA.map[k]; } }
   return n; }
 function calcFolhaLinha(c, ctx){
@@ -745,27 +745,29 @@ function calcFolhaLinha(c, ctx){
   //  • Cadastro antigo com valor mensal fixo: desconta o valor diário × faltas do próprio mês.
   //  Desconto legal = menor entre 6% do salário base e o valor do VT (Lei 7.418/85).
   const vtDiaCad=Number(c.vtDia||0);
-  let vt=0, vtDia=0, vtDias=0, descVTFaltas=0, vtFaltasAnt=0, vtMesAnt="";
+  let vt=0, vtDia=0, vtDias=0, descVTFaltas=0, vtFaltasAnt=0, vtMesAnt="", vtFaltasValor=0; const vtDatas=[]; let vtFaltasAntDatas=[];
   if(vtDiaCad>0){
     vtDia=vtDiaCad;
     // VT é pago ADIANTADO no início do mês: dias de trabalho PREVISTOS pela escala semanal da pessoa (folgas fora),
     // da admissão (ou dia 01) ao fim do contrato (ou último dia) — proporcional. Não usa as edições de datas da grade
     // (trocas pontuais), que podem ter sido feitas antes de a pessoa entrar e a deixariam de fora desses dias.
     // Faltas do mês são descontadas no VT do mês SEGUINTE (descVTFaltas abaixo).
-    vtDias = faltasCtx ? diasTrabalhoNoPeriodo(c,faltasCtx.ini,faltasCtx.fim,faltasCtx.escala,{}) : 0;
+    vtDias = faltasCtx ? diasTrabalhoNoPeriodo(c,faltasCtx.ini,faltasCtx.fim,faltasCtx.escala,{},vtDatas) : 0;
     vt=Math.round(vtDia*vtDias*100)/100;
     if(faltasCtx){ const [pi,pf]=mesAnteriorDe(faltasCtx.ini); vtMesAnt=pi.slice(0,7);
       const manPrev=(dos.faltas||[]).filter(x=>x.tipo==="falta" && x.descontar && x.data>=pi && x.data<=pf).map(x=>x.data);
       const autoPrev=faltasAutoDe(c,{...faltasCtx,ini:pi,fim:pf}).filter(d=>!dossieDatas.has(d));
-      vtFaltasAnt=new Set([...manPrev,...autoPrev]).size; }
-    descVTFaltas=Math.round(vtFaltasAnt*vtDia*100)/100;
+      vtFaltasAntDatas=[...new Set([...manPrev,...autoPrev])].sort(); vtFaltasAnt=vtFaltasAntDatas.length; }
+    // faltas do mês anterior ABATEM o VT deste mês (o VT é pago adiantado) — não saem do salário
+    vtFaltasValor=Math.min(Math.round(vtFaltasAnt*vtDia*100)/100, vt);
   } else {
     vt=Number(c.vt||0);
     let diasEscalados=0;
     if(vt>0 && faltasCtx && c.unidade!=null){ datasEntre(faltasCtx.ini,faltasCtx.fim).forEach(ds=>{ const a=diaEscala(faltasCtx.escala,faltasCtx.escalaOv,c.unidade,ds,wdDe(ds)).find(x=>String(x.pid)===String(c.id)&&x.tipo==="clt"); if(a && a.turno!=="folga") diasEscalados++; }); }
     vtDia = vt>0 ? vt/(diasEscalados||22) : 0;
   }
-  const vtDesconto = vt>0 ? Math.min(salario*0.06, vt) : 0;
+  const vtLiquido = vtDiaCad>0 ? Math.round(Math.max(0,vt-vtFaltasValor)*100)/100 : vt;   // VT a pagar no mês
+  const vtDesconto = vtLiquido>0 ? Math.min(salario*0.06, vtLiquido) : 0;
   if(!(vtDiaCad>0)) descVTFaltas = vt>0 ? Math.min(Math.max(0,vt-vtDesconto), nFaltas*vtDia) : 0;
   const descontos=descFaltas+descDSR+descAtrasos+vtDesconto+descVTFaltas;
   // Salário combinado com a Diretoria: se salário + extras + adicional noturno + gorjetas do mês não alcançarem o combinado, a diferença vira "reposição".
@@ -781,7 +783,7 @@ function calcFolhaLinha(c, ctx){
     he50Val, he100Val, heNotVal, dsrReflexo, diasUteis, diasDSR, dias, cpf:c.cpf||"", cargo:c.cargo||"", admissao:c.admissao||"", unidade:c.unidade, vinculo:c.vinculo||"clt",
     atrasosDatas:atrasosD.map(x=>x.data), atrasosHoras:atrasosD.reduce((s,x)=>s+(Number(x.horas)||0),0), descAtrasos,
     faltasQtd:nFaltas, dsrQtd:nDSR, faltaDatas, descFaltas, descDSR, atrasosQtd:atrasosD.length,
-    salarioMes, diasContrato, vt, vtDesconto, vtDia, vtDias, vtPorDia:vtDiaCad>0, vtFaltasAnt, vtMesAnt, descVTFaltas, descontos, liquido, semSalario:!salario };
+    salarioMes, diasContrato, vt, vtDesconto, vtDia, vtDias, vtPorDia:vtDiaCad>0, vtFaltasAnt, vtMesAnt, descVTFaltas, vtFaltasValor, vtFaltasAntDatas, vtLiquido, vtDatas, descontos, liquido, semSalario:!salario };
 }
 const escalaInicial = () => {
   const esc={};
@@ -3526,9 +3528,30 @@ function relFinDesfazerCredito(setRelFin, ym, legado, k){ const nx=mesSeguinte(y
     const {creditoPara,creditoValor,...restoCur}=ca[k]||{}; const {credito,...restoNx}=na[k]||{};
     return {...P,[ym]:{...cur,aj:{...ca,[k]:restoCur}},[nx]:{...nxt,aj:{...na,[k]:restoNx}}}; }); }
 // valor previsto de uma conta: ajuste manual vale como valor final; senão = calculado − desconto de pagamento a mais do mês anterior
-function previstoConta(calc, a){ a=a||{}; const cred=a.credito&&Number(a.credito.valor)>0?Math.round(Number(a.credito.valor)*100)/100:0;
+// credMax: excesso que AINDA existe no mês de origem (recalculado) — o desconto nunca passa disso (null = sem conferência)
+function previstoConta(calc, a, credMax){ a=a||{}; const credGrav=a.credito&&Number(a.credito.valor)>0?Math.round(Number(a.credito.valor)*100)/100:0;
+  const cred = credMax==null ? credGrav : Math.round(Math.min(credGrav, Math.max(0,Number(credMax)||0))*100)/100;
   const editado=a.valor!=null&&a.valor!=="";
-  return { previsto:Math.round((editado?Number(a.valor):Math.max(0,Number(calc||0)-cred))*100)/100, cred, credDe:a.credito&&a.credito.de, editado, creditoPara:a.creditoPara, creditoValor:a.creditoValor }; }
+  return { previsto:Math.round((editado?Number(a.valor):Math.max(0,Number(calc||0)-cred))*100)/100, cred, credGrav, credAnulado:credGrav>cred+0.009, credDe:a.credito&&a.credito.de, editado, creditoPara:a.creditoPara, creditoValor:a.creditoValor }; }
+// Quanto foi pago A MAIS (positivo) ou falta (negativo) numa conta de um mês, recalculado agora (folha, VT, PJ) — usado
+// para conferir o desconto "pago a mais" lançado no mês seguinte (ex.: o VT do mês de origem foi recalculado depois).
+function calcExcessoFonte(k, de, env){ try{
+  const m=/^(vt|clt|fixo|conf|pj)-(.+?)(?:#(\d+))?$/.exec(String(k)); if(!m||!/^\d{4}-\d{2}$/.test(String(de||""))) return null; const pref=m[1], id=m[2], np=Number(m[3]||1);
+  const [y,mo]=de.split("-").map(Number); const [a,b]=mesDe(y,mo); const nd=(d)=>!!d&&d>=a&&d<=b; const r2=(x)=>Math.round((Number(x)||0)*100)/100;
+  const ajDe=(((env.relFin||{})[de]||{}).aj)||{}; const soma=(arr)=>r2(arr.reduce((s,p)=>s+(Number(p.valor)||0),0));
+  if(pref==="pj"){ const pj=(env.pjs||[]).find(x=>String(x.id)===id); if(!pj) return null; const pv=pjValorNoPeriodo(pj,a,b); const parc=pjParcelasNoMes(pj,de,pv.total);
+    const pagos=((env.pagamentosPJ||{})[id]||[]).filter(p=>pagoNaCompetencia(p,de,nd));
+    if(parc.length>1){ const prev=previstoConta(parc[np-1].valor,ajDe[k]).previsto; return r2(soma(pjAlocarPagos(pagos,parc)[np-1]||[])-prev); }
+    return r2(soma(pagos)-previstoConta(pv.total,ajDe[k]).previsto); }
+  const c=(env.clts||[]).find(x=>String(x.id)===id); if(!c) return null; const pag=(env.pagamentosCLT||{})[String(c.id)]||[];
+  const regs=[...(env.pontoHist||[]),...(env.registros||[])];
+  const L= pref==="conf" ? null : calcFolhaLinha(c,{ apurCLT:apurarHoras(regs).filter(x=>x.tipo==="clt"&&x.completo&&nd(x.dia)), cltExtraAjuste:env.cltExtraAjuste||{}, gorjetasCLT:env.gorjetasCLT||{}, ymRef:de,
+    getDossie:env.getDossie||(()=>({faltas:[]})), naData:nd, faltasCtx:{escala:env.escala,escalaOv:env.escalaOv,registros:regs,atestados:env.atestados,ini:a,fim:b,hoje:hojeStr(),nowMin:0,desde:env.faltaDescontoDesde}, feriados:env.feriadosExtras });
+  const kv="vt-"+c.id; const vtPrev=previstoConta(L?(L.vtLiquido!=null?L.vtLiquido:L.vt):0,ajDe[kv]).previsto; const vtExc=r2(soma(pag.filter(p=>p.tipo==="vt"&&p.comp===de))-vtPrev);
+  if(pref==="vt") return vtExc;
+  let prev=previstoConta(pref==="conf"?Number(c.salario||0):L.liquido,ajDe[k]).previsto; if(vtExc>0.009 && !(ajDe[kv]||{}).creditoPara) prev=Math.max(0,prev-vtExc);
+  return r2(soma(pag.filter(p=>p.tipo!=="vt"&&pagoNaCompetencia(p,de,nd)))-prev);
+} catch(e){ return null; } }
 const TIPOS_CONTA=[["clt","CLT"],["fixo","Freela Fixo"],["pj","PJ"],["vt","Vale-transporte"],["free","Freelancers"],["conf","Gerência & Diretoria"],["manual","Manuais"]];
 const TIPOS_MANUAL=["Vale-transporte","Adiantamento","Complemento de salário","Bônus / gratificação","Reembolso","Outro"];
 const FORMAS_PAG=["Dinheiro","Pix","Transferência","Cartão / VT eletrônico","Outro"];
@@ -3563,7 +3586,7 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
       out.push({k:t+"-"+c.id, tipo:t, pid:c.id, ref:c, det:l, nome:c.nome, desc:(c.cargo||"")+" · salário · "+(l.dias||[]).length+" dia(s) trab."+(l.diasContrato<30?" ("+l.diasContrato+"/30 de contrato)":""), dias:(l.dias||[]).length, previsto:l.liquido, venc:dataSal, pix:c.pix||"", unidade:c.unidade});
       const ajVT=(aj["vt-"+c.id]||{}).valor; const temAjVT=ajVT!=null&&ajVT!==""&&Number(ajVT)>0;
       const temPgVT=(pagamentosCLT[String(c.id)]||[]).some(p=>p.tipo==="vt"&&p.comp===ymRef);
-      if(l.vt>0||temAjVT||temPgVT) out.push({k:"vt-"+c.id, tipo:"vt", pid:c.id, ref:c, nome:c.nome, desc:l.vt>0?"VT · "+l.vtDias+" dia(s) de escala":"VT combinado do mês", dias:l.vtDias, previsto:l.vt||0, venc:(c.admissao&&c.admissao>dataVT&&c.admissao<=(fim||"9999"))?c.admissao:dataVT, pix:c.pix||"", unidade:c.unidade}); });
+      if(l.vt>0||temAjVT||temPgVT) out.push({k:"vt-"+c.id, tipo:"vt", pid:c.id, ref:c, nome:c.nome, desc:l.vt>0?"VT · "+l.vtDias+" dia(s) de escala"+(l.vtFaltasValor>0?" · − "+l.vtFaltasAnt+" falta(s) de "+fmtCompetencia(l.vtMesAnt):""):"VT combinado do mês", dias:l.vtDias, previsto:(l.vtLiquido!=null?l.vtLiquido:l.vt)||0, vtInfo:l, venc:(c.admissao&&c.admissao>dataVT&&c.admissao<=(fim||"9999"))?c.admissao:dataVT, pix:c.pix||"", unidade:c.unidade}); });
     (pjs||[]).filter(pj=>pjAtivoNoPeriodo(pj,ini,fim)).filter(naCasa).forEach(pj=>{ const meses=pjMesesNoPeriodo(pj,ini,fim);
       const pv=pjValorNoPeriodo(pj,ini,fim); const descPJ=(pj.servico||"Prestação de serviço")+((pv.det.find(d=>!d.cheio))?" · proporcional "+pv.det.filter(d=>!d.cheio).map(d=>d.dias+" dia(s)").join(", "):"");
       const parc=pjParcelasNoMes(pj,ymRef,pv.total);
@@ -3582,9 +3605,11 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
     if(l.tipo==="vt") return (pagamentosCLT[String(l.pid)]||[]).filter(p=>p.tipo==="vt" && p.comp===ymRef);
     if(l.tipo==="free") return (pagamentosFreela[String(l.pid)]||[]).filter(p=>p.comp?p.comp===ymRef:(p.semana?p.semana.slice(0,7)===ymRef:naData(p.ref||p.data||"")));
     return (pagamentosCLT[String(l.pid)]||[]).filter(p=>p.tipo!=="vt" && pagoNaCompetencia(p,ymRef,naData)); };
+  const envExc={ clts, pjs, relFin, pagamentosCLT, pagamentosPJ, registros, pontoHist, escala, escalaOv, atestados, cltExtraAjuste, gorjetasCLT, getDossie, faltaDescontoDesde, feriadosExtras };
   const linhas0=[...base, ...manuais.filter(m=>uni==="todas"||!m.unidade||Number(m.unidade)===Number(uni)).map(m=>({k:"man-"+m.id, tipo:"manual", id:m.id, nome:m.nome, desc:m.tipoLanc+(m.desc?" · "+m.desc:""), dias:null, previsto:Number(m.valor)||0, venc:m.venc||"", baixas:m.baixas||[], pix:"", unidade:m.unidade, manual:true}))]
     .map(l=>{ const a=aj[l.k]||{};
-      const pc=l.manual ? {previsto:r2(l.previsto),cred:0,editado:false} : previstoConta(l.previsto,a); const previsto=pc.previsto;
+      const excF = (!l.manual && a.credito && a.credito.de) ? calcExcessoFonte(l.k, a.credito.de, envExc) : null;
+      const pc=l.manual ? {previsto:r2(l.previsto),cred:0,editado:false} : previstoConta(l.previsto,a,excF); const previsto=pc.previsto;
       const venc=a.pagar!=null ? a.pagar : l.venc;
       const pagos=pagosDaLinha(l); const pago=r2(pagos.reduce((s,p)=>s+(Number(p.valor)||0),0)); const saldo=r2(previsto-pago);
       const ultimo=[...pagos].sort((x,y)=>String(y.data||"").localeCompare(String(x.data||"")))[0];
@@ -3594,7 +3619,7 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
       const desc = l.desc + (pc.cred>0 && !pc.editado ? " · − "+fmtBRL(pc.cred)+" pago a mais em "+fmtCompetencia(pc.credDe) : "")
         + (pc.editado && mc ? (mc.vt ? " · MANUAL: "+mc.dias+" dia(s) × "+fmtBRL(mc.vtDia)+" de VT"
           : " · MANUAL: "+mc.dias+" dia(s) × "+fmtBRL(mc.salario)+" ÷ 30"+(Number(mc.acresc)>0?" + "+fmtBRL(mc.acresc):"")+(Number(mc.desconto)>0?" − "+fmtBRL(mc.desconto):"")+(Number(mc.desc6)>0?" − "+fmtBRL(mc.desc6)+" (6% VT)":"")+(mc.obs?" ("+mc.obs+")":"")) : "");
-      return {...l, desc, manualCalc:pc.editado?mc:null, previsto, venc, pagos, pago, saldo, aMais, cred:pc.cred, credDe:pc.credDe, creditoPara:pc.creditoPara, creditoValor:pc.creditoValor, ultimo, status, inc:a.inc!=null?a.inc:true, obs:a.obs!=null?a.obs:"", editado:!!pc.editado, previstoOrig:r2(l.previsto)}; });
+      return {...l, desc, credAnulado:pc.credAnulado, credGrav:pc.credGrav, manualCalc:pc.editado?mc:null, previsto, venc, pagos, pago, saldo, aMais, cred:pc.cred, credDe:pc.credDe, creditoPara:pc.creditoPara, creditoValor:pc.creditoValor, ultimo, status, inc:a.inc!=null?a.inc:true, obs:a.obs!=null?a.obs:"", editado:!!pc.editado, previstoOrig:r2(l.previsto)}; });
   // VT pago a mais abate o SALÁRIO da mesma pessoa no mesmo mês (o Financeiro paga um valor só, já líquido).
   // Se o gestor preferiu jogar a diferença para o mês seguinte ("Descontar no próximo mês"), não abate aqui (não desconta duas vezes).
   const SAL_TIPOS=["clt","fixo","conf"];
@@ -3606,6 +3631,11 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
     const previsto=r2(Math.max(0,l.previsto-x)), saldo=r2(previsto-l.pago), aMais=l.pago>0&&saldo< -0.009?r2(-saldo):0;
     const status= aMais>0 ? "amais" : previsto>0 && saldo<=0.009 ? "pago" : (previsto<=0 && l.pago<=0) ? "pago" : l.pago>0 ? "parcial" : (l.venc && l.venc<hoje ? "vencido" : "apagar");
     return {...l, previsto, saldo, aMais, status, abateVT:x, desc:l.desc+" · − "+fmtBRL(x)+" de VT pago a mais"}; });
+  // Desconto "pago a mais" já lançado no mês seguinte, mas a conta deste mês mudou (ex.: VT recalculado): ajusta ou cancela sozinho.
+  const _fixCred=linhas.filter(l=>!l.manual && l.creditoPara).map(l=>{ const real=l.aMais>0?l.aMais:0; return Math.abs(real-(Number(l.creditoValor)||0))>0.009 ? [l.k,real] : null; }).filter(Boolean);
+  const _fixKey=JSON.stringify(_fixCred);
+  useEffect(()=>{ if(modo==="financeiro"||!_fixCred.length) return; const leg=(ini||"")+"|"+(fim||"")+"|todas";
+    _fixCred.forEach(([k,real])=>{ if(real>0.009) relFinLancarCredito(setRelFin,ymRef,leg,k,real); else relFinDesfazerCredito(setRelFin,ymRef,leg,k); }); },[_fixKey]); // eslint-disable-line
   // ---- filtros ----
   const [tiposSel,setTiposSel]=useState(()=> modo==="financeiro" ? ["clt","fixo","pj","vt"] : TIPOS_CONTA.map(t=>t[0]));
   const [stSel,setStSel]=useState("todos");   // todos | apagar | vencido | pago
@@ -3615,7 +3645,8 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
   const soma=(arr,c)=>r2(arr.reduce((s,l)=>s+(Number(l[c])||0),0));
   const base4=linhas.filter(l=>tiposSel.includes(l.tipo));
   // ---- dar baixa / desfazer ----
-  const [baixa,setBaixa]=useState(null);   // {k, data, valor, obs}
+  const [baixa,setBaixa]=useState(null);
+  const [vtAberto,setVtAberto]=useState(null);   // {k, data, valor, obs}
   const confirmarBaixa=(l)=>{ const v=r2(baixa.valor); if(!(v>0)){ toast("Informe o valor pago"); return; } if(!baixa.data){ toast("Informe a data do pagamento"); return; }
     const forma=baixa.forma||"Pix";
     const pg={ data:baixa.data, ref:ymRef+"-01", comp:ymRef, valor:v, forma, obs:baixa.obs||(l.tipo==="vt"?"Vale-transporte":"Pagamento")+" "+fmtCompetencia(ymRef)+" · "+forma, origem:"contas" };
@@ -3885,6 +3916,103 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
       <p className="text-[11px] text-slate-400 mt-2">Usa os tipos e a casa escolhidos e só as linhas marcadas em Pagamentos → Contas do mês. Competência sempre do dia 01 ao último dia do mês. Vencimentos sugeridos: salários no 5º dia útil do mês seguinte; VT no dia {Number(vtDiaPagamento)||5} (Configurações); PJ no dia do contrato no mês seguinte.</p>
     </Card>;
   // ===== Financeiro → Geral: painel de ANÁLISE (só leitura). Pagar, dar baixa e lançar fica em Pagamentos. =====
+  // ===== Pagamentos → Vale-transporte (analítico): quanto pagar de VT a cada um e POR QUÊ =====
+  if(modo==="vt"){
+    const WD=["Seg","Ter","Qua","Qui","Sex","Sáb","Dom"]; const dd=(ds)=>ds.slice(8,10)+"/"+ds.slice(5,7);
+    const vts=linhas.filter(l=>l.tipo==="vt").sort((a,b)=>String(a.nome).localeCompare(b.nome,"pt-BR"));
+    const info=(l)=>{ const v=l.vtInfo||{}; const mc=l.manualCalc||null; const r=l.ref||{};
+      const vtDia=mc&&mc.vt?Number(mc.vtDia)||0:Number(v.vtDia)||0, dias=mc&&mc.vt?Number(mc.dias)||0:Number(v.vtDias)||0;
+      return { vtDia, dias, bruto: mc&&mc.vt ? r2(vtDia*dias) : r2(v.vt||0), faltasQtd:Number(v.vtFaltasAnt)||0, faltasValor:r2(v.vtFaltasValor||0), faltasDatas:v.vtFaltasAntDatas||[], mesAnt:v.vtMesAnt||"",
+        datas:v.vtDatas||[], manual:!!(l.editado), manualVt:!!(mc&&mc.vt), previstoCalc:r2(l.previstoOrig), pix:r.pix||l.pix||"", tipoPix:r.tipoPix||"", banco:r.banco||"", vinc:r.vinculo==="fixo"?"Freela Fixo":"CLT" }; };
+    const sitTxt=(l)=> l.aMais>0 ? ("Pago a mais "+fmtBRL(l.aMais)+(l.abatidoSal?" · abatido no salário deste mês":l.creditoPara?" · desconto em "+fmtCompetencia(l.creditoPara):"")) : l.saldo>0.009 ? (l.pago>0?"Falta "+fmtBRL(l.saldo):"A pagar") : "Pago";
+    const [abr,setAbr]=[vtAberto,setVtAberto];
+    const tot={ bruto:r2(vts.reduce((s,l)=>s+info(l).bruto,0)), faltas:r2(vts.reduce((s,l)=>s+info(l).faltasValor,0)), cred:r2(vts.reduce((s,l)=>s+(l.cred||0),0)), prev:soma(vts,"previsto"), pago:soma(vts,"pago"), falta:r2(vts.reduce((s,l)=>s+Math.max(0,l.saldo),0)), amais:r2(vts.reduce((s,l)=>s+(l.aMais||0),0)) };
+    const porque=(l)=>{ const x=info(l); const partes=[];
+      if(x.manualVt) partes.push("Valor lançado à mão: "+x.dias+" dia(s) × "+fmtBRL(x.vtDia)+" = "+fmtBRL(x.bruto)+".");
+      else if(x.vtDia>0) partes.push(x.dias+" dia(s) de trabalho na escala × "+fmtBRL(x.vtDia)+" = "+fmtBRL(x.bruto)+".");
+      if(x.faltasQtd>0) partes.push("− "+x.faltasQtd+" falta(s) em "+fmtCompetencia(x.mesAnt)+" ("+x.faltasDatas.map(dd).join(", ")+") = − "+fmtBRL(x.faltasValor)+".");
+      if(l.editado && !x.manualVt) partes.push("Valor do mês ajustado à mão em Contas do mês (calculado "+fmtBRL(l.previstoOrig)+").");
+      if(l.cred>0) partes.push("− "+fmtBRL(l.cred)+" pago a mais em "+fmtCompetencia(l.credDe)+".");
+      if(l.credAnulado) partes.push("Desconto antigo de "+fmtBRL(l.credGrav)+" de "+fmtCompetencia(l.credDe)+" "+(l.cred>0?"reduzido":"anulado")+": o VT daquele mês foi recalculado e não há mais esse valor pago a mais.");
+      partes.push("VT do mês = "+fmtBRL(l.previsto)+(l.pago>0?"; já pago "+fmtBRL(l.pago):"")+" → "+sitTxt(l)+".");
+      return partes; };
+    const exportarVTExcel=async()=>{ if(!vts.length){ toast("Nenhum VT neste mês"); return; } if(!window.ExcelJS){ toast("Biblioteca Excel não carregada"); return; }
+      const wb=new ExcelJS.Workbook(); const ws=wb.addWorksheet("VT analítico"); const fmt='"R$" #,##0.00';
+      ws.addRow(["Vale-transporte analítico — "+fmtCompetencia(ymRef)+" — "+uNome]).font={bold:true,size:13}; ws.addRow([(empresaEfetiva(empresaContratante).razao||"")]); ws.addRow([]);
+      const h=ws.addRow(["Colaborador","Vínculo","VT/dia","Dias previstos","VT bruto","Faltas mês ant. (qtd)","(−) Faltas","(−) Pago a mais mês ant.","Ajuste manual","VT do mês","Já pago","Falta pagar","Pago a mais","Situação","Vencimento","Pix","Por quê"]); h.font={bold:true};
+      vts.forEach(l=>{ const x=info(l); const r=ws.addRow([l.nome,x.vinc,x.vtDia,x.dias,x.bruto,x.faltasQtd,x.faltasValor,l.cred||0,l.editado?"sim":"",l.previsto,l.pago,Math.max(0,l.saldo),l.aMais||0,sitTxt(l),l.venc?fmtDataBR(l.venc):"",x.pix,porque(l).join(" ")]); [3,5,7,8,10,11,12,13].forEach(i=>r.getCell(i).numFmt=fmt); });
+      const t=ws.addRow(["TOTAL","","","",tot.bruto,"",tot.faltas,tot.cred,"",tot.prev,tot.pago,tot.falta,tot.amais]); t.font={bold:true}; [5,7,8,10,11,12,13].forEach(i=>t.getCell(i).numFmt=fmt);
+      ws.columns.forEach((c,i)=>{ c.width=i===0?30:i===16?90:14; });
+      const wd=wb.addWorksheet("Dias contados"); wd.addRow(["Colaborador","Data","Dia","Tipo"]).font={bold:true};
+      vts.forEach(l=>{ const x=info(l); x.datas.forEach(ds=>wd.addRow([l.nome,fmtDataBR(ds),WD[wdDe(ds)],"dia de trabalho na escala (VT)"])); x.faltasDatas.forEach(ds=>wd.addRow([l.nome,fmtDataBR(ds),WD[wdDe(ds)],"falta do mês anterior (desconta)"])); });
+      wd.columns.forEach((c,i)=>{ c.width=i===0?30:22; });
+      const wp=wb.addWorksheet("Pagamentos de VT"); wp.addRow(["Colaborador","Pago em","Valor","Forma","Observação"]).font={bold:true};
+      vts.forEach(l=>(l.pagos||[]).forEach(p=>{ const r=wp.addRow([l.nome,fmtDataBR(p.data),Number(p.valor)||0,p.forma||"",p.obs||""]); r.getCell(3).numFmt=fmt; }));
+      wp.columns.forEach((c,i)=>{ c.width=i===0?30:i===4?50:16; });
+      const buf=await wb.xlsx.writeBuffer(); baixarBlob(new Blob([buf],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}),"VT analitico "+ymRef+" - "+uNome+".xlsx"); toast("Excel do VT gerado"); };
+    const exportarVTPdf=async()=>{ if(!vts.length){ toast("Nenhum VT neste mês"); return; }
+      try{ const L=await carregarPdfLib(); const doc=await L.PDFDocument.create(); const f=await doc.embedFont(L.StandardFonts.Helvetica), b=await doc.embedFont(L.StandardFonts.HelveticaBold);
+        const limpo=(t)=>String(t??"").replace(/[—–−]/g,"-").replace(/→/g,"=>").replace(/[^\x20-\x7E -ÿ]/g,""); const C={esc:L.rgb(0.09,0.27,0.13),claro:L.rgb(0.94,0.97,0.93),cinza:L.rgb(0.42,0.42,0.42),txt:L.rgb(0.12,0.12,0.12),verm:L.rgb(0.72,0.1,0.1),branco:L.rgb(1,1,1),roxo:L.rgb(0.4,0.2,0.6)};
+        const W=842,H=595,M=28; let pg,y; const txt=(t,x,yy,o={})=>pg.drawText(limpo(t),{x,y:yy,size:o.size||8,font:o.bold?b:f,color:o.cor||C.txt}); const dir=(t,xr,yy,o={})=>{ const fn=o.bold?b:f; txt(t,xr-fn.widthOfTextAtSize(limpo(t),o.size||8),yy,o); };
+        const quebra=(t,w,sz)=>{ const out=[]; let cur=""; limpo(t).split(" ").forEach(p=>{ const tt=cur?cur+" "+p:p; if(f.widthOfTextAtSize(tt,sz)>w){ out.push(cur); cur=p; } else cur=tt; }); if(cur) out.push(cur); return out; };
+        const X=[M+4,M+170,M+220,M+262,M+322,M+382,M+452,M+522,M+590,M+650]; const cab=["Colaborador","VT/dia","Dias","VT bruto","(−) Faltas","(−) Pago a mais","VT do mês","Já pago","Falta / a mais","Situação"];
+        const nova=()=>{ pg=doc.addPage([W,H]); pg.drawRectangle({x:0,y:H-50,width:W,height:50,color:C.esc}); txt("VALE-TRANSPORTE · ANALÍTICO",M,H-26,{bold:true,size:14,cor:C.branco}); txt((empresaEfetiva(empresaContratante).razao||"")+" · "+uNome,M,H-41,{size:8,cor:C.branco}); dir("Competência "+fmtCompetencia(ymRef),W-M,H-26,{bold:true,size:11,cor:C.branco}); dir("VT pago adiantado · faltas descontadas no mês seguinte",W-M,H-41,{size:8,cor:C.branco});
+          y=H-68; pg.drawRectangle({x:M,y:y-4,width:W-2*M,height:14,color:C.claro}); cab.forEach((t,i)=>i>=1&&i<=8?dir(t,X[i]+(i===1?40:50),y,{bold:true,size:7,cor:C.cinza}):txt(t,X[i],y,{bold:true,size:7,cor:C.cinza})); y-=16; };
+        nova();
+        vts.forEach(l=>{ const x=info(l); const why=porque(l); const linhasWhy=why.flatMap(w=>quebra(w,W-2*M-20,7)); const h=14+linhasWhy.length*9+6; if(y-h<40) nova();
+          txt(l.nome.slice(0,30),X[0],y,{bold:true,size:8.5}); dir(fmtBRL(x.vtDia),X[1]+40,y); dir(String(x.dias),X[2]+50,y); dir(fmtBRL(x.bruto),X[3]+50,y); dir(x.faltasValor?"-"+fmtBRL(x.faltasValor):"-",X[4]+50,y,{cor:x.faltasValor?C.verm:C.txt}); dir(l.cred?"-"+fmtBRL(l.cred):"-",X[5]+50,y,{cor:l.cred?C.roxo:C.txt});
+          dir(fmtBRL(l.previsto),X[6]+50,y,{bold:true}); dir(l.pago?fmtBRL(l.pago):"-",X[7]+50,y); dir(l.aMais>0?"+"+fmtBRL(l.aMais):fmtBRL(Math.max(0,l.saldo)),X[8]+50,y,{bold:true,cor:l.aMais>0?C.roxo:l.saldo>0.009?C.verm:C.txt}); txt(sitTxt(l).slice(0,32),X[9],y,{size:7});
+          y-=11; linhasWhy.forEach(w=>{ txt(w,X[0]+10,y,{size:7,cor:C.cinza}); y-=9; });
+          if(x.datas.length){ const dl=quebra("Dias contados: "+x.datas.map(dd).join(", "),W-2*M-20,6.5); dl.forEach(w=>{ if(y<36) nova(); txt(w,X[0]+10,y,{size:6.5,cor:C.cinza}); y-=8; }); }
+          pg.drawLine({start:{x:M,y:y+3},end:{x:W-M,y:y+3},thickness:0.4,color:C.claro}); y-=6; });
+        y-=8; if(y<60) nova(); pg.drawRectangle({x:M,y:y-8,width:W-2*M,height:22,color:C.esc});
+        txt("TOTAL",X[0]+4,y-1,{bold:true,size:9,cor:C.branco}); dir(fmtBRL(tot.bruto),X[3]+50,y-1,{bold:true,cor:C.branco}); dir("-"+fmtBRL(tot.faltas),X[4]+50,y-1,{bold:true,cor:C.branco}); dir("-"+fmtBRL(tot.cred),X[5]+50,y-1,{bold:true,cor:C.branco}); dir(fmtBRL(tot.prev),X[6]+50,y-1,{bold:true,cor:C.branco}); dir(fmtBRL(tot.pago),X[7]+50,y-1,{bold:true,cor:C.branco}); dir(fmtBRL(tot.falta),X[8]+50,y-1,{bold:true,size:10,cor:C.branco});
+        doc.getPages().forEach((p,i,a)=>p.drawText(limpo("Gerado em "+new Date().toLocaleString("pt-BR")+" · página "+(i+1)+" de "+a.length),{x:M,y:16,size:6.5,font:f,color:C.cinza}));
+        baixarBlob(new Blob([await doc.save()],{type:"application/pdf"}),"VT analitico "+ymRef+" - "+uNome+".pdf"); toast("PDF do VT gerado");
+      }catch(e){ console.error(e); toast("Não foi possível gerar o PDF: "+e.message); } };
+    const th="px-3 py-2 font-semibold", td="px-3 py-2 tabular-nums whitespace-nowrap";
+    return <>
+      <div className="mb-3 p-3 rounded-xl bg-amber-50 text-amber-900 text-xs">
+        <b>Como o VT é calculado:</b> pago <b>adiantado</b> no início do mês = valor do dia × dias de trabalho previstos na escala da pessoa (folgas fora, proporcional à admissão).
+        As <b>faltas</b> de um mês são descontadas no VT do <b>mês seguinte</b>. VT pago a mais abate o salário do mesmo mês (ou vira desconto no mês seguinte, se você escolheu assim).
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+        <StatCard icon={I.wallet} label="VT do mês" value={fmtBRL(tot.prev)} tone="brand"/>
+        <StatCard icon={I.check} label="Já pago" value={fmtBRL(tot.pago)} tone="green"/>
+        <StatCard icon={I.calendar} label="Falta pagar" value={fmtBRL(tot.falta)} tone={tot.falta>0?"amber":"slate"}/>
+        <StatCard icon={I.pix} label="Pago a mais" value={fmtBRL(tot.amais)} tone={tot.amais>0?"amber":"slate"}/>
+      </div>
+      <Card className="overflow-hidden mb-3"><div className="overflow-x-auto"><table className="w-full text-sm min-w-[1080px]">
+        <thead><tr className="text-left text-xs text-slate-400 border-b border-slate-100">{["","Colaborador","VT/dia","Dias","VT bruto","(−) Faltas mês ant.","(−) Pago a mais ant.","VT do mês","Já pago","Situação","Vencimento",""].map((h,i)=><th key={i} className={th}>{h}</th>)}</tr></thead>
+        <tbody className="divide-y divide-slate-50">{vts.map(l=>{ const x=info(l); const ab=abr===l.k; return [
+          <tr key={l.k} className="hover:bg-slate-50/60">
+            <td className="px-2 py-2"><button onClick={()=>setAbr(ab?null:l.k)} className="text-slate-400 hover:text-slate-700" aria-label={"Detalhe VT "+l.nome}><Icon d={ab?I.x:I.plus} className="w-3.5 h-3.5"/></button></td>
+            <td className="px-3 py-2"><div className="font-semibold text-slate-800">{l.nome}</div><div className="text-[11px] text-slate-400">{x.vinc}{x.manualVt?" · lançado à mão":""}</div></td>
+            <td className={td}>{x.vtDia?fmtBRL(x.vtDia):"—"}</td><td className={td}>{x.dias||"—"}</td><td className={td}>{fmtBRL(x.bruto)}</td>
+            <td className={cx(td,x.faltasValor?"text-rose-600":"text-slate-300")}>{x.faltasValor?"−"+fmtBRL(x.faltasValor)+" ("+x.faltasQtd+")":"—"}</td>
+            <td className={cx(td,l.cred?"text-violet-700":"text-slate-300")}>{l.cred?"−"+fmtBRL(l.cred):"—"}{l.credAnulado&&<div className="text-[10px] text-amber-700">antigo {fmtBRL(l.credGrav)} {l.cred>0?"reduzido":"anulado"}</div>}</td>
+            <td className={cx(td,"font-bold text-slate-900")} aria-label={"VT do mês "+l.nome}>{fmtBRL(l.previsto)}</td>
+            <td className={cx(td,"text-emerald-600")}>{l.pago?fmtBRL(l.pago):"—"}</td>
+            <td className="px-3 py-2 text-xs" aria-label={"Situação VT "+l.nome}><Badge tone={l.aMais>0?"violet":l.saldo>0.009?(l.pago>0?"amber":"blue"):"green"}>{sitTxt(l)}</Badge></td>
+            <td className="px-3 py-2 text-xs">{l.venc?fmtDataBR(l.venc):"—"}</td>
+            <td className="px-3 py-2 text-right">{l.saldo>0.009 && <Btn size="sm" icon={I.check} onClick={()=>setBaixa({k:l.k,data:hoje,valor:l.saldo,obs:"",forma:"Dinheiro"})}>Dar baixa</Btn>}</td>
+          </tr>,
+          ab && <tr key={l.k+"-pq"} className="bg-slate-50/70"><td/><td colSpan={11} className="px-3 py-3 text-xs text-slate-700" aria-label={"Por que VT "+l.nome}>
+            <div className="font-bold text-slate-800 mb-1">Por que este valor</div>
+            <ul className="list-disc pl-5 space-y-0.5">{porque(l).map((w,i)=><li key={i}>{w}</li>)}</ul>
+            {x.datas.length>0 && <div className="mt-2"><b>Dias contados ({x.datas.length}):</b> {x.datas.map(ds=>dd(ds)+" "+WD[wdDe(ds)]).join(" · ")}</div>}
+            {(l.pagos||[]).length>0 && <div className="mt-1"><b>Pagamentos:</b> {l.pagos.map(p=>fmtBRL(Number(p.valor)||0)+" em "+fmtDataBR(p.data)+(p.forma?" ("+p.forma+")":"")).join(" · ")}</div>}
+            <div className="mt-1"><b>Pix:</b> {x.pix||"sem Pix no cadastro"}{x.banco?" · "+x.banco:""}</div>
+          </td></tr>,
+          baixa && baixa.k===l.k ? linhaTr(l)[1] : null ]; })}
+          {vts.length===0 && <tr><td colSpan={12} className="px-4 py-8 text-center text-slate-400">Ninguém com VT neste mês. O VT aparece para quem tem “VT por dia” no cadastro ou valor lançado à mão.</td></tr>}
+        </tbody>
+        {vts.length>0 && <tfoot><tr className="border-t-2 border-slate-100 bg-slate-50/60 font-bold"><td/><td className="px-3 py-2">Total</td><td/><td/><td className={td}>{fmtBRL(tot.bruto)}</td><td className={cx(td,"text-rose-600")}>{tot.faltas?"−"+fmtBRL(tot.faltas):"—"}</td><td className={cx(td,"text-violet-700")}>{tot.cred?"−"+fmtBRL(tot.cred):"—"}</td><td className={td}>{fmtBRL(tot.prev)}</td><td className={cx(td,"text-emerald-600")}>{fmtBRL(tot.pago)}</td><td className={cx(td,"text-amber-700")}>falta {fmtBRL(tot.falta)}</td><td/><td/></tr></tfoot>}
+      </table></div></Card>
+      <Card className="p-4 flex flex-wrap items-center gap-2"><div className="font-bold text-slate-800 mr-2">Relatório analítico do VT</div><div className="flex-1"/>
+        <Btn icon={I.download} onClick={exportarVTExcel}>Excel (com dias contados)</Btn><Btn variant="soft" icon={I.download} onClick={exportarVTPdf}>PDF analítico</Btn></Card>
+    </>;
+  }
   if(modo==="financeiro"){
     const sel=base4; const aPagar=(arr)=>r2(arr.reduce((s,l)=>s+Math.max(0,l.saldo),0)); const prevT=soma(sel,"previsto")||0;
     const aMaisArr=sel.filter(l=>l.aMais>0); const credArr=sel.filter(l=>l.cred>0);
@@ -4052,11 +4180,12 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
   const ajMes=(((relFin||{})[ymRef]||(relFin||{})[chaveLeg]||{}).aj)||{};
   const setVTPrevisto=(id,v)=>setRelFin(prev=>{ const c=(prev||{})[ymRef]||(prev||{})[chaveLeg]||{}; const a=c.aj||{}; const k="vt-"+id;
     return {...(prev||{}),[ymRef]:{...c,aj:{...a,[k]:{...(a[k]||{}),valor:v}}}}; });
-  const vtDe=(id,det)=>{ const a=ajMes["vt-"+id]||{}; const auto=Math.round(Number((det&&det.vt)||0)*100)/100;
-    const pc=previstoConta(auto,a); const previsto=pc.previsto, editado=pc.editado;
+  const envExcPS={ clts, pjs, relFin, pagamentosCLT, pagamentosPJ, registros, pontoHist, escala, escalaOv, atestados, cltExtraAjuste, gorjetasCLT, getDossie, faltaDescontoDesde, feriadosExtras };
+  const vtDe=(id,det)=>{ const a=ajMes["vt-"+id]||{}; const auto=Math.round(Number((det&&(det.vtLiquido!=null?det.vtLiquido:det.vt))||0)*100)/100;
+    const pc=previstoConta(auto,a,(a.credito&&a.credito.de)?calcExcessoFonte("vt-"+id,a.credito.de,envExcPS):null); const previsto=pc.previsto, editado=pc.editado;
     const pagos=(pagamentosCLT[String(id)]||[]).filter(p=>p.tipo==="vt" && p.comp===ymRef);
     const pago=Math.round(pagos.reduce((s,p)=>s+Number(p.valor||0),0)*100)/100;
-    return { auto, previsto, editado, pagos, pago, falta:Math.round((previsto-pago)*100)/100, dias:det&&det.vtDias, dia:det&&det.vtDia, cred:pc.cred, credDe:pc.credDe, creditoPara:pc.creditoPara, creditoValor:pc.creditoValor }; };
+    return { auto, previsto, editado, pagos, pago, falta:Math.round((previsto-pago)*100)/100, dias:det&&det.vtDias, dia:det&&det.vtDia, faltasValor:(det&&det.vtFaltasValor)||0, faltasQtd:(det&&det.vtFaltasAnt)||0, cred:pc.cred, credDe:pc.credDe, creditoPara:pc.creditoPara, creditoValor:pc.creditoValor }; };
   const prefixoConta = ehPJ?"pj-":modo==="confianca"?"conf-":modo==="fixo"?"fixo-":"clt-";
   const descontarProx=(k,valor,nome)=>{ const nx=relFinLancarCredito(setRelFin,ymRef,chaveLeg,k,valor); toast("Desconto de "+fmtBRL(valor)+" lançado em "+fmtCompetencia(nx)+(nome?" ("+nome+")":"")); };
   const cancelarDesc=(k,valor,para)=>{ if(!confirm("Cancelar o desconto de "+fmtBRL(valor)+" em "+fmtCompetencia(para)+"?")) return; relFinDesfazerCredito(setRelFin,ymRef,chaveLeg,k); toast("Desconto cancelado"); };
@@ -4084,7 +4213,7 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
     else { det=calcFolhaLinha(c,folhaCtx); total=det.liquido; }
     const oculto = modo==="confianca" && c.sigiloso && !podeSigilo;
     // mesmo valor da linha de Contas do mês: ajuste manual ou calculado − desconto de pagamento a mais do mês anterior
-    const k=prefixoConta+c.id; const totalCalc=Math.round(Number(total||0)*100)/100; const pc=previstoConta(totalCalc,ajMes[k]); total=pc.previsto;
+    const k=prefixoConta+c.id; const totalCalc=Math.round(Number(total||0)*100)/100; const ak=ajMes[k]||{}; const pc=previstoConta(totalCalc,ak,(ak.credito&&ak.credito.de)?calcExcessoFonte(k,ak.credito.de,envExcPS):null); total=pc.previsto;
     const pagos=pagosDe(c.id); const pago=Math.round(pagos.reduce((s,p)=>s+Number(p.valor||0),0)*100)/100;
     const vt = comVT ? vtDe(c.id,det) : null;
     // VT pago a mais abate o salário do mês (igual a Contas do mês), salvo se a diferença foi jogada para o mês seguinte
@@ -4197,7 +4326,7 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
                 {comVT && l.vt && <>
                 <div className="text-[11px] font-bold text-sky-600 uppercase mt-3 mb-1.5">Vale-transporte · {fmtCompetencia(ymRef)}</div>
                 <div className="bg-white rounded-xl border border-sky-100 p-3 space-y-2">
-                  <label className="block text-[11px] text-slate-500">VT do mês (R$){l.vt.auto>0?<span className="text-slate-400"> · folha: {l.vt.dias} dia(s) × {fmtBRL(l.vt.dia)} = {fmtBRL(l.vt.auto)}</span>:<span className="text-slate-400"> · sem VT/dia no cadastro — digite o valor combinado</span>}
+                  <label className="block text-[11px] text-slate-500">VT do mês (R$){l.vt.auto>0?<span className="text-slate-400"> · folha: {l.vt.dias} dia(s) × {fmtBRL(l.vt.dia)}{l.vt.faltasValor>0?" − "+l.vt.faltasQtd+" falta(s) do mês anterior ("+fmtBRL(l.vt.faltasValor)+")":""} = {fmtBRL(l.vt.auto)}</span>:<span className="text-slate-400"> · sem VT/dia no cadastro — digite o valor combinado</span>}
                     <input type="number" step="0.01" min="0" value={l.vt.editado?(ajMes["vt-"+l.id]||{}).valor:(l.vt.auto||"")} placeholder="0,00" onChange={e=>setVTPrevisto(l.id,e.target.value)} className="w-full mt-0.5 px-2 py-1.5 rounded-lg border border-slate-200 text-sm" aria-label={"VT do mês de "+l.nome}/></label>
                   {l.vt.editado && l.vt.auto>0 && <button onClick={()=>setVTPrevisto(l.id,"")} className="text-[11px] text-sky-600 hover:underline">voltar ao valor da folha ({fmtBRL(l.vt.auto)})</button>}
                   <div className="flex items-center justify-between text-sm"><span className="text-slate-500">Já pago de VT</span><span className="font-bold text-emerald-600 tabular-nums">{fmtBRL(l.vt.pago)}</span></div>
@@ -4297,14 +4426,14 @@ function Pagamentos() {
     </PageHeader>
 
     <div className="flex flex-wrap gap-2 mb-3">
-      {[["contas","Contas do mês"],["freela","Freelancers (semanal)"],["clt","CLT"],["fixo","Freela Fixo"],["confianca","Gerência & Diretoria"],["pj","Prestadores PJ"]].map(([k,l])=>
-        <button key={k} onClick={()=>{setAbaP(k);setAberto(null); if(k==="contas"){ const [y,m]=(ini||hojeStr()).slice(0,7).split("-").map(Number); const [a,b]=mesDe(y,m); setIni(a); setFim(b); } }} className={cx("px-4 py-2 rounded-xl text-sm font-semibold border transition", abaP===k?"grad-brand text-white border-transparent shadow-glow":"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>{l}</button>)}
+      {[["contas","Contas do mês"],["vt","Vale-transporte"],["freela","Freelancers (semanal)"],["clt","CLT"],["fixo","Freela Fixo"],["confianca","Gerência & Diretoria"],["pj","Prestadores PJ"]].map(([k,l])=>
+        <button key={k} onClick={()=>{setAbaP(k);setAberto(null); if(k==="contas"||k==="vt"){ const [y,m]=(ini||hojeStr()).slice(0,7).split("-").map(Number); const [a,b]=mesDe(y,m); setIni(a); setFim(b); } }} className={cx("px-4 py-2 rounded-xl text-sm font-semibold border transition", abaP===k?"grad-brand text-white border-transparent shadow-glow":"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>{l}</button>)}
     </div>
 
     <Card className="p-4 mb-4">
       <div className="flex flex-wrap items-end gap-3">
         <div className="flex items-center gap-2 text-slate-400"><Icon d={I.filter} className="w-4 h-4"/><span className="text-xs font-bold uppercase">Filtros</span></div>
-        {abaP==="contas" ? <Field label="Competência (dia 01 ao último dia do mês)"><Input type="month" value={(ini||hojeStr()).slice(0,7)} onChange={e=>{ const v=e.target.value; if(!v) return; const [y,m]=v.split("-").map(Number); const [a,b]=mesDe(y,m); setIni(a); setFim(b); }} aria-label="Competência"/></Field> : <>
+        {(abaP==="contas"||abaP==="vt") ? <Field label="Competência (dia 01 ao último dia do mês)"><Input type="month" value={(ini||hojeStr()).slice(0,7)} onChange={e=>{ const v=e.target.value; if(!v) return; const [y,m]=v.split("-").map(Number); const [a,b]=mesDe(y,m); setIni(a); setFim(b); }} aria-label="Competência"/></Field> : <>
         <Field label="De"><Input type="date" value={ini} onChange={e=>setIni(e.target.value)}/></Field>
         <Field label="Até"><Input type="date" value={fim} onChange={e=>setFim(e.target.value)}/></Field></>}
         <Field label="Casa (unidade)"><Select value={uni} onChange={e=>setUni(e.target.value)}>
@@ -4313,7 +4442,7 @@ function Pagamentos() {
       </div>
     </Card>
 
-    {abaP==="contas" ? <RelatorioFinanceiro ini={ini} fim={fim} uni={uni} modo="pagamentos"/> : abaP!=="freela" ? <PagamentoSalariados modo={abaP} ini={ini} fim={fim} uni={uni}/> : <>
+    {abaP==="contas" ? <RelatorioFinanceiro ini={ini} fim={fim} uni={uni} modo="pagamentos"/> : abaP==="vt" ? <RelatorioFinanceiro ini={ini} fim={fim} uni={uni} modo="vt"/> : abaP!=="freela" ? <PagamentoSalariados modo={abaP} ini={ini} fim={fim} uni={uni}/> : <>
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
       <StatCard icon={I.wallet} label="Total a pagar (mês)" value={fmtBRL(totalGeral)} tone="free"/>
       <StatCard icon={I.check} label="Já pago" value={fmtBRL(totalPago)} tone="green"/>
