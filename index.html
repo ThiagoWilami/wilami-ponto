@@ -599,6 +599,10 @@ const GRUPOS_FOLGA={
   salmao: { cor:"#FA8072", nome:"Salmão", desc:"6x2 · folgas 05 e 06/nov", escala:"6x2", ancora:"2026-11-05" },
   azul:   { cor:"#2563EB", nome:"Azul", desc:"6x2 · folgas 07 e 08/nov", escala:"6x2", ancora:"2026-11-07" },
   cinco:  { cor:"#7C3AED", nome:"Roxa", desc:"5x2 · você escolhe as 2 folgas", escala:"5x2", escolheDias:true },
+  // 5x2 alternada (ciclo de 14 dias, semana de domingo a sábado): uma semana folga seg+ter, na outra dom+seg.
+  // ancora = domingo de uma semana "seg+ter"; offs = dias de folga dentro do ciclo (1,2 = seg/ter · 7,8 = dom/seg da semana seguinte)
+  alt1:   { cor:"#0D9488", nome:"Turquesa", desc:"5x2 alternada · semana de 15/11 folga seg+ter, a de 22/11 dom+seg", escala:"5x2", folgaDia:0, ancora:"2026-11-15", ciclo:14, offs:[1,2,7,8] },
+  alt2:   { cor:"#DB2777", nome:"Rosa", desc:"5x2 alternada · semana de 15/11 folga dom+seg, a de 22/11 seg+ter", escala:"5x2", folgaDia:0, ancora:"2026-11-08", ciclo:14, offs:[1,2,7,8] },
 };
 const NOMES_DIAS=["Segunda","Terça","Quarta","Quinta","Sexta","Sábado","Domingo"];
 // referência de folga para gerar o padrão semanal: 2 dias escolhidos (5x2) ou o dia-base
@@ -609,7 +613,7 @@ const _diaNum=(ds)=>{ const [y,m,d]=String(ds).split("-").map(Number); return Ma
 const grupoFolgaDe=(p,tipo)=>{ if(!p) return null; if(p.grupoFolga&&GRUPOS_FOLGA[p.grupoFolga]) return p.grupoFolga;
   if((tipo==="clt"||tipo==="pj") && (p.escala||"6x1")==="6x1" && (p.folgaDia==null||Number(p.folgaDia)===6)) return "preto"; return null; };
 // a pessoa (do grupo 6x2) está de folga nesta data?
-const folgaRodizioNaData=(g,ds)=>{ const G=GRUPOS_FOLGA[g]; if(!G||!G.ancora) return null; const r=(((_diaNum(ds)-_diaNum(G.ancora))%8)+8)%8; return r<2; };
+const folgaRodizioNaData=(g,ds)=>{ const G=GRUPOS_FOLGA[g]; if(!G||!G.ancora) return null; const n=G.ciclo||8; const r=(((_diaNum(ds)-_diaNum(G.ancora))%n)+n)%n; return (G.offs||[0,1]).includes(r); };
 const VIGENCIA={ map:{} };
 const chaveVig=(tipo,pid)=> (tipo||"clt")+"-"+String(pid);
 const vigenciaDe=(p,tipo)=> tipo==="pj"
