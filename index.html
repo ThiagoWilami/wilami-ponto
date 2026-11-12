@@ -1428,17 +1428,22 @@ function StoreProvider({children}) {
     const muda=(a)=> a.turno==="folga" ? {...a,h,turnoBase:turno} : {...a,turno,h};
     setEscala(prev=>{ let m=false; const n={}; Object.keys(prev||{}).forEach(uid=>{ n[uid]={}; Object.keys(prev[uid]||{}).forEach(d=>{ n[uid][d]=(prev[uid][d]||[]).map(a=>{ if(!eu(a)) return a; m=true; return muda(a); }); }); }); return m?n:prev; });
     const hj=hojeStr();
-    setEscalaOv(prev=>{ let m=false; const n={...(prev||{})}; Object.keys(n).forEach(uid=>{ const u={...(n[uid]||{})}; Object.keys(u).forEach(ds=>{ if(ds<hj) return; const arr=u[ds]||[]; if(!arr.some(a=>eu(a)&&!a.manualFolga)) return; u[ds]=arr.map(a=>{ if(!eu(a)||a.manualFolga) return a; m=true; return muda(a); }); }); n[uid]=u; }); return m?n:prev; });
+    setEscalaOv(prev=>{ let m=false; const n={...(prev||{})}; Object.keys(n).forEach(uid=>{ const u={...(n[uid]||{})}; Object.keys(u).forEach(ds=>{ if(ds<hj) return; const arr=u[ds]||[]; if(!arr.some(a=>eu(a)&&!a.manualFolga&&!a.manualH)) return; u[ds]=arr.map(a=>{ if(!eu(a)||a.manualFolga||a.manualH) return a; m=true; return muda(a); }); }); n[uid]=u; }); return m?n:prev; });
   };
+  // Ao trocar o grupo de folga (cor), a nova regra passa a valer nas datas de hoje em diante:
+  // marcações manuais de folga/turno dessa pessoa nessas datas deixam de travar o rodízio (o horário manual é mantido).
+  const liberarRodizioFuturo=(pid,tipo)=>{ const hj=hojeStr(); const eu=(a)=>String(a.pid)===String(pid) && (tipo==="pj" ? a.tipo==="pj" : a.tipo===tipo);
+    setEscalaOv(prev=>{ let m=false; const n={...(prev||{})}; Object.keys(n).forEach(uid=>{ const u={...(n[uid]||{})}; Object.keys(u).forEach(ds=>{ if(ds<hj) return; const arr=u[ds]||[]; if(!arr.some(a=>eu(a)&&a.manualFolga)) return;
+      u[ds]=arr.map(a=>{ if(!eu(a)||!a.manualFolga) return a; m=true; const o={...a}; delete o.manualFolga; if(o.h) o.manualH=true; return o; }); }); n[uid]=u; }); return m?n:prev; }); };
   const horarioMudou=(ant,c)=> !!(c.horaEntrada && c.horaSaida) && (!ant || ant.horaEntrada!==c.horaEntrada || ant.horaSaida!==c.horaSaida);
   const salvarClt=(c)=>{
     if(ehAuto(c.id)){ const ant=cadAuto.find(x=>x.id===c.id); cadOps.update(c._docId||docIdDe(c.id), semDocsInline(c)); subirDocsInline("clt",c);
       const regen=ant && ((ant.grupoFolga||"")!==(c.grupoFolga||"") || String(ant.folgaDias||"")!==String(c.folgaDias||"")) && c.unidade!=null && c.admissao;
-      if(regen){ const tu=c.horaEntrada?turnoDaHora(c.horaEntrada):(GRUPO_FOLGA.turno[chaveVig("clt",c.id)]||null); gerarEscalaFixa(c.id, c.escala||"6x1", c.unidade, false, folgaRefDe(c), "clt", tu); }
+      if(regen){ const tu=c.horaEntrada?turnoDaHora(c.horaEntrada):(GRUPO_FOLGA.turno[chaveVig("clt",c.id)]||null); gerarEscalaFixa(c.id, c.escala||"6x1", c.unidade, false, folgaRefDe(c), "clt", tu); if((ant.grupoFolga||"")!==(c.grupoFolga||"")) liberarRodizioFuturo(c.id,"clt"); }
       if(c.horaEntrada && c.horaSaida && (regen || horarioMudou(ant,c))) aplicarHorarioEscala(c.id,"clt",c.horaEntrada,c.horaSaida); return; }
     if(c.id){ const ant=cltsBase.find(x=>x.id===c.id); setClts(prev=>prev.map(x=>x.id===c.id?{...x,...semDocsInline(c)}:x)); subirDocsInline("clt",c);
       const regen=ant && ((ant.grupoFolga||"")!==(c.grupoFolga||"") || String(ant.folgaDias||"")!==String(c.folgaDias||"")) && c.vinculo!=="confianca" && c.unidade!=null;
-      if(regen){ const tu=c.horaEntrada?turnoDaHora(c.horaEntrada):(GRUPO_FOLGA.turno[chaveVig("clt",c.id)]||null); gerarEscalaFixa(c.id, c.escala||"6x1", c.unidade, false, folgaRefDe(c), "clt", tu); }
+      if(regen){ const tu=c.horaEntrada?turnoDaHora(c.horaEntrada):(GRUPO_FOLGA.turno[chaveVig("clt",c.id)]||null); gerarEscalaFixa(c.id, c.escala||"6x1", c.unidade, false, folgaRefDe(c), "clt", tu); if((ant.grupoFolga||"")!==(c.grupoFolga||"")) liberarRodizioFuturo(c.id,"clt"); }
       if(c.vinculo!=="confianca" && c.horaEntrada && c.horaSaida && (regen || horarioMudou(ant,c))) aplicarHorarioEscala(c.id,"clt",c.horaEntrada,c.horaSaida); }
     else { const base={...c,extras:"0h00",atrasos:"0h00",docs:c.docs||{},status:"ativo"};   // "banco" é o NOME do banco (não o banco de horas)
       let novoId;
@@ -1992,7 +1997,7 @@ function EscalaVisual() {
   const setMarca=(dia,id,marca)=>setDiaData(dia, arr=>arr.map(a=>a.id===id?{...a,marca}:a));
   const setTurnoTo=(dia,id,turno)=>setDiaData(dia, arr=>arr.map(a=>{ if(a.id!==id) return a; const o={...a,turno,marca:turno==="folga"?null:(a.marca||null),manualFolga:true}; if(a.turno!==turno) delete o.h; return o; }));   // escolha manual vale mais que o rodízio da cor
   const turnoPelaHora=(hi)=>{ const hh=Number(String(hi).slice(0,2)); return hh>=5&&hh<12?"manha":hh>=12&&hh<17?"tarde":"noite"; };
-  const setHorario=(dia,id,h,turno)=>setDiaData(dia, arr=>arr.map(a=>a.id===id?{...a,h,manualFolga:true,...(turno?{turno,marca:a.turno==="folga"?null:(a.marca||null)}:{})}:a));
+  const setHorario=(dia,id,h,turno)=>setDiaData(dia, arr=>arr.map(a=>a.id===id?{...a,h,manualH:true,...(turno?{turno,marca:a.turno==="folga"?null:(a.marca||null)}:{})}:a));
   const [editH,setEditH]=useState(null); // {di,id,hi,hf,porHora}
   // muda a entrada mantendo a duração da jornada (ex.: 08:00–16:20 → 11:00–19:20)
   const entradaNova=(eh,hi)=>{ const m=(t)=>{ const [a,b]=String(t||"0:0").split(":").map(Number); return a*60+(b||0); }; let dur=m(eh.hf)-m(eh.hi); if(dur<=0) dur+=1440; if(!(dur>0&&dur<1440)) dur=8*60+20;
@@ -6216,6 +6221,10 @@ function pjValorNoPeriodo(pj, ini, fim){ const v=Number(pj.valor||0); if(!v) ret
 const pjAtivoNoPeriodo=(pj,ini,fim)=> pjMesesNoPeriodo(pj,ini,fim).length>0;
 const pjAtivoHoje=(pj)=> pj.status!=="encerrado" && !(pj.fim && pj.fim<hojeStr());
 
+// Próximas folgas de um grupo de rodízio, com a data real (ex.: "5x2 alternada · folgas dom 15/11, seg 16/11 · seg 23/11, ter 24/11")
+const proximasFolgasTxt=(g)=>{ const G=GRUPOS_FOLGA[g]; if(!G) return ""; const NOM=["seg","ter","qua","qui","sex","sáb","dom"]; const d0=new Date(hojeStr()+"T12:00:00"); const ds=[];
+  for(let i=0;i<21&&ds.length<4;i++){ const x=ymd(addDias(d0,i)); if(folgaRodizioNaData(g,x)) ds.push(NOM[wdDe(x)]+" "+x.slice(8)+"/"+x.slice(5,7)); }
+  return "5x2 alternada · folgas "+ds.slice(0,2).join(", ")+(ds.length>2?" · depois "+ds.slice(2).join(", "):""); };
 // Cor da escala (grupo de folga) — usado no cadastro CLT e no do prestador PJ
 function SeletorGrupoFolga({f,setF}){
   return <>
@@ -6224,7 +6233,7 @@ function SeletorGrupoFolga({f,setF}){
             {Object.entries(GRUPOS_FOLGA).map(([k,g])=>{ const on=f.grupoFolga===k; return <button type="button" key={k} aria-pressed={on} onClick={()=>setF(p=>({...p, grupoFolga:k, escala:g.escala, folgaDia:g.folgaDia!=null?g.folgaDia:(p.folgaDia==null?6:p.folgaDia), folgaDias:g.escolheDias?(p.folgaDias||[]):null}))}
               className={cx("flex items-center gap-2 p-2 rounded-xl border text-left transition", on?"border-brand-500 ring-2 ring-brand-200 bg-brand-50/40":"border-slate-200 hover:border-slate-300")}>
               <span className="w-7 h-7 rounded-lg shrink-0 border border-black/10" style={{background:g.cor}}/>
-              <span className="min-w-0"><span className="block text-sm font-semibold text-slate-800">{g.nome}</span><span className="block text-[11px] text-slate-500 leading-tight">{g.desc}</span></span></button>; })}
+              <span className="min-w-0"><span className="block text-sm font-semibold text-slate-800">{g.nome}</span><span className="block text-[11px] text-slate-500 leading-tight">{g.ciclo?proximasFolgasTxt(k):g.desc}</span></span></button>; })}
             <button type="button" aria-pressed={!f.grupoFolga} onClick={()=>setF(p=>({...p, grupoFolga:"", folgaDias:null}))} className={cx("flex items-center gap-2 p-2 rounded-xl border text-left", !f.grupoFolga?"border-brand-500 ring-2 ring-brand-200":"border-slate-200 hover:border-slate-300")}>
               <span className="w-7 h-7 rounded-lg shrink-0 border border-dashed border-slate-300 grid place-items-center text-slate-400 text-xs">—</span>
               <span className="min-w-0"><span className="block text-sm font-semibold text-slate-800">Outra escala</span><span className="block text-[11px] text-slate-500 leading-tight">escolher escala e dia</span></span></button>
