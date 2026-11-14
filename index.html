@@ -702,6 +702,43 @@ function diasTrabalhoNoPeriodo(p,ini,fim,escala,escalaOv,lista){
     else if(!folgaPelaRegra(p,ds)) { n++; if(lista) lista.push(ds); } }); }
   finally{ if(naEscala){ if(vigAnt!==undefined) VIGENCIA.map[k]=vigAnt; if(grpAnt!==undefined) GRUPO_FOLGA.map[k]=grpAnt; else delete GRUPO_FOLGA.map[k]; } }
   return n; }
+// ---- Rescisão (CLT / Confiança) ----
+// Verbas pela modalidade:
+//  • Sem justa causa: saldo de salário + aviso prévio indenizado (30 dias + 3 por ano completo, até 90) + 13º proporcional
+//    + férias vencidas e proporcionais + 1/3 (o aviso indenizado projeta o contrato para os avos). Multa de 40% do FGTS vai em guia.
+//  • Pedido de demissão: saldo + 13º proporcional + férias vencidas e proporcionais + 1/3; aviso não cumprido pode ser descontado (30 dias).
+//  • Justa causa: saldo + férias vencidas + 1/3 (sem 13º e férias proporcionais).
+// Avos: mês com 15 dias ou mais de trabalho conta 1/12. Valores brutos (INSS/IRRF ficam com a contabilidade).
+const AVISO_DEMISSAO={ indenizado:"Aviso prévio indenizado", trabalhado:"Aviso prévio trabalhado", dispensado:"Aviso dispensado (sem desconto)", descontar:"Aviso não cumprido (descontar)" };
+const _addMeses=(ds,n)=>{ const [y,m,d]=ds.split("-").map(Number); const t=new Date(y,m-1+n,1); const ult=new Date(t.getFullYear(),t.getMonth()+1,0).getDate(); return ymd(new Date(t.getFullYear(),t.getMonth(),Math.min(d,ult))); };
+function avos13(adm, fimDs){ const y=fimDs.slice(0,4); let n=0; for(let m=1;m<=12;m++){ const m0=y+"-"+String(m).padStart(2,"0")+"-01"; if(m0>fimDs) break;
+    const m1=ymd(new Date(Number(y),m,0)); const a=adm&&adm>m0?adm:m0, b=fimDs<m1?fimDs:m1; if(a<=b && datasEntre(a,b).length>=15) n++; } return Math.min(12,n); }
+function avosFerias(adm, fimDs){ if(!adm||adm>fimDs) return {anos:0,avos:0};
+  let anos=0; while(_addMeses(adm,12*(anos+1))<=ymd(addDias(new Date(fimDs+"T12:00:00"),1))) anos++;
+  const ini=_addMeses(adm,12*anos); let avos=0; for(let i=0;i<12;i++){ const a=_addMeses(ini,i); if(a>fimDs) break; const b0=ymd(addDias(new Date(_addMeses(ini,i+1)+"T12:00:00"),-1)); const b=b0<fimDs?b0:fimDs;
+    const dd=datasEntre(a,b).length; const cheio=b===b0; if(cheio||dd>=15) avos++; } return {anos, avos:Math.min(12,avos)}; }
+function calcRescisao(c, salarioMes){
+  const d=c&&c.demissao; if(!d||!d.data||c.vinculo==="fixo"||!(salarioMes>0)) return null;
+  const tipo=d.tipo||"semjusta"; const adm=c.admissao||d.data;
+  const aviso=d.aviso || (tipo==="semjusta"?"indenizado":tipo==="pedido"?"dispensado":"");
+  const anosServ=avosFerias(adm,d.data).anos;
+  const diasAviso=(tipo==="semjusta"&&aviso==="indenizado") ? Math.min(90,30+3*anosServ) : 0;
+  const fimProj=diasAviso? ymd(addDias(new Date(d.data+"T12:00:00"),diasAviso)) : d.data;
+  const r2=(v)=>Math.round(v*100)/100; const itens=[];
+  if(diasAviso) itens.push({k:"aviso", rot:"Aviso prévio indenizado", ref:diasAviso+" dias", valor:r2(salarioMes/30*diasAviso)});
+  if(tipo!=="justa"){ const a13=avos13(adm,fimProj); if(a13>0) itens.push({k:"13", rot:"13º salário proporcional", ref:a13+"/12", valor:r2(salarioMes/12*a13)}); }
+  const vencidas=Math.max(0,Math.floor(Number(d.feriasVencidas)||0));
+  if(vencidas>0){ const v=r2(salarioMes*vencidas); itens.push({k:"fv", rot:"Férias vencidas", ref:vencidas+" período(s)", valor:v}); itens.push({k:"fv3", rot:"1/3 sobre férias vencidas", ref:"", valor:r2(v/3)}); }
+  if(tipo!=="justa"){ const af=avosFerias(adm,fimProj).avos; if(af>0){ const v=r2(salarioMes/12*af); itens.push({k:"fp", rot:"Férias proporcionais", ref:af+"/12", valor:v}); itens.push({k:"fp3", rot:"1/3 sobre férias proporcionais", ref:"", valor:r2(v/3)}); } }
+  const descontos=[]; if(tipo==="pedido"&&aviso==="descontar") descontos.push({k:"avisodesc", rot:"Aviso prévio não cumprido", ref:"30 dias", valor:r2(salarioMes)});
+  const prov=r2(itens.reduce((s,x)=>s+x.valor,0)), desc=r2(descontos.reduce((s,x)=>s+x.valor,0));
+  const prazo=ymd(addDias(new Date(d.data+"T12:00:00"),10));   // art. 477 §6º: até 10 dias do término
+  return { tipo, aviso, diasAviso, fimProj, itens, descontos, prov, desc, total:r2(prov-desc), prazo, multaFGTS:tipo==="semjusta", data:d.data }; }
+// Cargo de confiança (sem ponto): salário proporcional aos dias de contrato no mês + rescisão no mês da demissão
+function previstoConf(c, ini, fim){ const sm=Number(c.salario||0); let dc=30, sv=sm;
+  if(sm && ini && fim){ const di=(c.admissao&&c.admissao>ini)?c.admissao:ini, df=(c.fimContrato&&c.fimContrato<fim)?c.fimContrato:fim; if(di>df){ dc=0; sv=0; } else if(di!==ini||df!==fim){ dc=Math.min(30,datasEntre(di,df).length); sv=Math.round(sm*dc/30*100)/100; } }
+  const rc=(c.demissao&&c.demissao.data&&(!ini||c.demissao.data>=ini)&&(!fim||c.demissao.data<=fim))?calcRescisao(c,sm):null;
+  return { dias:dc, salario:sv, rescisao:rc, total:Math.round((sv+(rc?rc.total:0))*100)/100 }; }
 function calcFolhaLinha(c, ctx){
   const {apurCLT, cltExtraAjuste, ymRef, getDossie, naData, faltasCtx}=ctx; const gorjetasCLT=ctx.gorjetasCLT||{};
   const meus=apurCLT.filter(x=>x.nome===c.nome);
@@ -781,8 +818,12 @@ function calcFolhaLinha(c, ctx){
   const combinado=(combinadoMes>0 && diasContrato<30) ? Math.round(combinadoMes*diasContrato/30*100)/100 : combinadoMes;
   const recebido=salario+extrasVal+notVal+dsrReflexo+gorjeta;
   const reposicao=combinado>0 ? Math.max(0, Math.round((combinado-recebido)*100)/100) : 0;
-  const liquido=salario+extrasVal+notVal+dsrReflexo+reposicao-descontos;
-  return { id:c.id, nome:c.nome, foto:c.foto, pix:c.pix, escala:c.escala, salario, vHora, gorjeta, combinado, combinadoMes, recebido, reposicao,
+  // rescisão: só no mês do último dia de trabalho
+  const rescisao = (c.demissao && c.demissao.data && (!fc.ini||c.demissao.data>=fc.ini) && (!fc.fim||c.demissao.data<=fc.fim)) ? calcRescisao(c, salarioMes) : null;
+  let liquido=salario+extrasVal+notVal+dsrReflexo+reposicao-descontos+(rescisao?rescisao.total:0);
+  if(rescisao && liquido<0){ // desconto do aviso não cumprido limitado ao que há a receber (não gera saldo negativo)
+    const corte=Math.min(-liquido, rescisao.desc); if(corte>0){ rescisao.descontos=rescisao.descontos.map(x=>x.k==="avisodesc"?{...x,valor:Math.round((x.valor-corte)*100)/100,ref:x.ref+" (limitado ao saldo)"}:x); rescisao.desc=Math.round((rescisao.desc-corte)*100)/100; rescisao.total=Math.round((rescisao.prov-rescisao.desc)*100)/100; liquido+=corte; } }
+  return { id:c.id, rescisao, nome:c.nome, foto:c.foto, pix:c.pix, escala:c.escala, salario, vHora, gorjeta, combinado, combinadoMes, recebido, reposicao,
     extrasMin, extras100Min, extrasHoras:extrasMin+extras100Min, extrasVal, extrasEditado, notMin, notRelMin, notVal, extSemanal, extNot50Min, extNot100Min,
     he50Val, he100Val, heNotVal, dsrReflexo, diasUteis, diasDSR, dias, cpf:c.cpf||"", cargo:c.cargo||"", admissao:c.admissao||"", unidade:c.unidade, vinculo:c.vinculo||"clt",
     atrasosDatas:atrasosD.map(x=>x.data), atrasosHoras:atrasosD.reduce((s,x)=>s+(Number(x.horas)||0),0), descAtrasos,
@@ -3140,7 +3181,8 @@ function ColaboradoresCLT() {
     if(c.admissao && d.data<c.admissao){ toast("A data da demissão não pode ser antes da admissão ("+fmtDataBR(c.admissao)+")"); return; }
     if(precisaTipo && !d.tipo){ toast("Escolha o tipo: pedido de demissão, sem justa causa ou justa causa"); return; }
     if(!String(d.motivo||"").trim()){ toast("Explique o motivo da demissão"); return; }
-    const reg={ data:d.data, motivo:String(d.motivo).trim(), registradoEm:Date.now() }; if(precisaTipo) reg.tipo=d.tipo;
+    const reg={ data:d.data, motivo:String(d.motivo).trim(), registradoEm:Date.now() }; if(precisaTipo){ reg.tipo=d.tipo;
+      if(d.tipo!=="justa") reg.aviso=d.aviso||(d.tipo==="semjusta"?"indenizado":"dispensado"); reg.feriasVencidas=Math.max(0,Math.floor(Number(d.feriasVencidas)||0)); }
     salvarClt({...c, fimContrato:d.data, demissao:reg, fimAntesDemissao:c.fimContrato||""});
     setDemitir(null); setPasta(null); toast(c.nome.split(" ")[0]+" demitido(a) — último dia "+fmtDataBR(d.data)+". Os dias até essa data continuam na folha do mês."); };
   const desfazerDemissao=(c)=>{ if(!confirm("Desfazer a demissão de "+c.nome+"? A pessoa volta a ficar ativa (escala, ponto e folha).")) return;
@@ -3210,6 +3252,17 @@ function ColaboradoresCLT() {
           {!fixo && <Field label="Tipo de demissão"><div className="grid sm:grid-cols-3 gap-2">
             {Object.entries(TIPOS_DEMISSAO).map(([k,l])=><button key={k} type="button" onClick={()=>setDemitir({...demitir,tipo:k})} className={cx("px-3 py-2.5 rounded-xl text-sm font-semibold border transition", demitir.tipo===k?(k==="justa"?"bg-rose-600 text-white border-transparent":"grad-brand text-white border-transparent"):"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>{l}</button>)}
           </div></Field>}
+          {!fixo && (demitir.tipo==="semjusta"||demitir.tipo==="pedido") && <Field label="Aviso prévio"><Select aria-label="Aviso prévio" value={demitir.aviso||(demitir.tipo==="semjusta"?"indenizado":"dispensado")} onChange={e=>setDemitir({...demitir,aviso:e.target.value})}>
+            {(demitir.tipo==="semjusta"?["indenizado","trabalhado"]:["dispensado","trabalhado","descontar"]).map(k=><option key={k} value={k}>{AVISO_DEMISSAO[k]}</option>)}</Select></Field>}
+          {!fixo && demitir.tipo && (()=>{ const anos=c.admissao&&demitir.data?avosFerias(c.admissao,demitir.data).anos:0; return <Field label="Férias vencidas ainda não tiradas (períodos)"><Input type="number" min="0" max="3" aria-label="Férias vencidas" value={demitir.feriasVencidas||0} onChange={e=>setDemitir({...demitir,feriasVencidas:Math.max(0,Math.floor(Number(e.target.value)||0))})}/>
+            <div className="text-[11px] text-slate-400 mt-1">{anos>0?anos+" ano(s) completo(s) de casa. Informe quantos períodos de férias ele ainda não tirou.":"Menos de 1 ano de casa: normalmente 0."}</div></Field>; })()}
+          {!fixo && demitir.tipo && Number(c.salario)>0 && demitir.data && (()=>{ const r=calcRescisao({...c,demissao:{data:demitir.data,tipo:demitir.tipo,aviso:demitir.aviso,feriasVencidas:demitir.feriasVencidas}},Number(c.salario)); if(!r) return null;
+            return <div className="p-3 rounded-xl bg-slate-50 border border-slate-100 text-xs" aria-label="Prévia da rescisão"><div className="font-bold text-slate-700 mb-1">Prévia da rescisão (além do saldo de salário do mês)</div>
+              {r.itens.map(x=><div key={x.k} className="flex justify-between gap-2"><span className="text-slate-500">{x.rot}{x.ref?" ("+x.ref+")":""}</span><span className="tabular-nums">{fmtBRL(x.valor)}</span></div>)}
+              {r.descontos.map(x=><div key={x.k} className="flex justify-between gap-2 text-rose-600"><span>{x.rot}</span><span className="tabular-nums">-{fmtBRL(x.valor)}</span></div>)}
+              {!r.itens.length&&!r.descontos.length && <div className="text-slate-500">Só o saldo de salário.</div>}
+              <div className="flex justify-between font-bold border-t border-slate-200 mt-1 pt-1"><span>Verbas rescisórias</span><span className="tabular-nums">{fmtBRL(r.total)}</span></div>
+              <div className="text-slate-400 mt-1">Pagar até {fmtDataBR(r.prazo)} (10 dias).{r.multaFGTS?" Multa de 40% do FGTS: recolher em guia (GRRF), fora deste valor.":""}</div></div>; })()}
           <Field label="Motivo"><textarea value={demitir.motivo} onChange={e=>setDemitir({...demitir,motivo:e.target.value})} rows={3} aria-label="Motivo da demissão" placeholder={fixo?"Ex.: encerramos a parceria, mudança de escala…":"Explique o que aconteceu"} className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-brand-400 text-sm"/></Field>
         </div>
         <div className="flex gap-2 mt-5"><Btn variant="ghost" className="flex-1" onClick={()=>setDemitir(null)}>Voltar</Btn>
@@ -3263,7 +3316,7 @@ function ColaboradoresCLT() {
             {[["Cargo",pasta.cargo],["Escala",ESCALAS[pasta.escala]],["Unidade",unidadeNome(pasta.unidade,unidades)],["Admissão",pasta.admissao?fmtDataBR(pasta.admissao):"—"],["Salário mensal",pasta.salario?("R$ "+Number(pasta.salario).toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2})):"—"],["CPF",pasta.cpf||"—"],["Telefone",pasta.tel||"—"],["Chave Pix",pasta.pix||"—"]].map(([l,v])=>
               <div key={l} className="p-4 rounded-xl bg-slate-50"><div className="text-xs text-slate-400 font-semibold uppercase">{l}</div><div className="font-semibold text-slate-800 mt-1">{v}</div></div>)}
             {pasta.demissao && <div className="sm:col-span-2 p-4 rounded-xl bg-rose-50 border border-rose-100 text-sm"><div className="text-xs text-rose-500 font-semibold uppercase">Demissão</div>
-              <div className="font-semibold text-slate-800 mt-1">Último dia {fmtDataBR(pasta.demissao.data)}{pasta.demissao.tipo&&TIPOS_DEMISSAO[pasta.demissao.tipo]?" · "+TIPOS_DEMISSAO[pasta.demissao.tipo]:""}</div>
+              <div className="font-semibold text-slate-800 mt-1">Último dia {fmtDataBR(pasta.demissao.data)}{pasta.demissao.tipo&&TIPOS_DEMISSAO[pasta.demissao.tipo]?" · "+TIPOS_DEMISSAO[pasta.demissao.tipo]:""}{pasta.demissao.aviso&&AVISO_DEMISSAO[pasta.demissao.aviso]?" · "+AVISO_DEMISSAO[pasta.demissao.aviso]:""}{Number(pasta.demissao.feriasVencidas)>0?" · "+pasta.demissao.feriasVencidas+" período(s) de férias vencidas":""}</div>
               <div className="text-slate-600 mt-1 whitespace-pre-wrap">Motivo: {pasta.demissao.motivo}</div></div>}
             {pasta.admissaoCancelada && <div className="sm:col-span-2 p-4 rounded-xl bg-slate-100 text-sm"><div className="text-xs text-slate-500 font-semibold uppercase">Admissão cancelada{pasta.admissaoCancelada.em?" em "+fmtDataBR(ymd(pasta.admissaoCancelada.em)):""}</div>
               <div className="text-slate-700 mt-1 whitespace-pre-wrap">Motivo: {pasta.admissaoCancelada.motivo}</div></div>}
@@ -3634,7 +3687,7 @@ function calcExcessoFonte(k, de, env){ try{
     getDossie:env.getDossie||(()=>({faltas:[]})), naData:nd, faltasCtx:{escala:env.escala,escalaOv:env.escalaOv,registros:regs,atestados:env.atestados,ini:a,fim:b,hoje:hojeStr(),nowMin:0,desde:env.faltaDescontoDesde}, feriados:env.feriadosExtras });
   const kv="vt-"+c.id; const vtPrev=previstoConta(L?(L.vtLiquido!=null?L.vtLiquido:L.vt):0,ajDe[kv]).previsto; const vtExc=r2(soma(pag.filter(p=>p.tipo==="vt"&&p.comp===de))-vtPrev);
   if(pref==="vt") return vtExc;
-  let prev=previstoConta(pref==="conf"?Number(c.salario||0):L.liquido,ajDe[k]).previsto; if(vtExc>0.009 && !(ajDe[kv]||{}).creditoPara) prev=Math.max(0,prev-vtExc);
+  let prev=previstoConta(pref==="conf"?previstoConf(c,a,b).total:L.liquido,ajDe[k]).previsto; if(vtExc>0.009 && !(ajDe[kv]||{}).creditoPara) prev=Math.max(0,prev-vtExc);
   return r2(soma(pag.filter(p=>p.tipo!=="vt"&&pagoNaCompetencia(p,de,nd)))-prev);
 } catch(e){ return null; } }
 const TIPOS_CONTA=[["clt","CLT"],["fixo","Freela Fixo"],["pj","PJ"],["vt","Vale-transporte"],["free","Freelancers"],["conf","Gerência & Diretoria"],["manual","Manuais"]];
@@ -3665,10 +3718,15 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
   const dataVT=ymRef+"-"+String(Math.min(Number(vtDiaPagamento)||5,28)).padStart(2,"0");
   // ---- linhas automáticas ----
   const base=useMemo(()=>{ const out=[];
-    clts.filter(c=>c.status!=="inativo").filter(naCasa).forEach(c=>{
-      if(c.vinculo==="confianca"){ if(c.sigiloso && !podeSigilo) return; out.push({k:"conf-"+c.id, tipo:"conf", pid:c.id, ref:c, nome:c.nome, desc:c.cargo||"Gerência", dias:null, previsto:Number(c.salario||0), venc:dataSal, pix:c.pix||"", unidade:c.unidade}); return; }
+    const temPagNoMes=(c)=>(pagamentosCLT[String(c.id)]||[]).some(p=>p.comp===ymRef);
+    clts.filter(c=>c.status!=="inativo").filter(naCasa)
+      .filter(c=> temPagNoMes(c) || !((ini && c.fimContrato && c.fimContrato<ini) || (fim && c.admissao && c.admissao>fim)))   // demitido antes / admitido depois do mês: fora
+      .forEach(c=>{
+      if(c.vinculo==="confianca"){ if(c.sigiloso && !podeSigilo) return;
+        const pc=previstoConf(c,ini,fim); const dc=pc.dias, rc=pc.rescisao;
+        out.push({k:"conf-"+c.id, tipo:"conf", pid:c.id, ref:c, rescisao:rc, nome:c.nome, desc:(c.cargo||"Gerência")+(dc<30?" · "+dc+"/30 dias":"")+(rc?" · rescisão":""), dias:null, previsto:pc.total, venc:rc?rc.prazo:dataSal, pix:c.pix||"", unidade:c.unidade}); return; }
       const l=calcFolhaLinha(c,folhaCtx); const t=c.vinculo==="fixo"?"fixo":"clt";
-      out.push({k:t+"-"+c.id, tipo:t, pid:c.id, ref:c, det:l, nome:c.nome, desc:(c.cargo||"")+" · salário · "+(l.dias||[]).length+" dia(s) trab."+(l.diasContrato<30?" ("+l.diasContrato+"/30 de contrato)":""), dias:(l.dias||[]).length, previsto:l.liquido, venc:dataSal, pix:c.pix||"", unidade:c.unidade});
+      out.push({k:t+"-"+c.id, tipo:t, pid:c.id, ref:c, det:l, rescisao:l.rescisao, nome:c.nome, desc:(c.cargo||"")+(l.rescisao?" · saldo de salário + rescisão":" · salário")+" · "+(l.dias||[]).length+" dia(s) trab."+(l.diasContrato<30?" ("+l.diasContrato+"/30 de contrato)":""), dias:(l.dias||[]).length, previsto:l.liquido, venc:l.rescisao?l.rescisao.prazo:dataSal, pix:c.pix||"", unidade:c.unidade});
       const ajVT=(aj["vt-"+c.id]||{}).valor; const temAjVT=ajVT!=null&&ajVT!==""&&Number(ajVT)>0;
       const temPgVT=(pagamentosCLT[String(c.id)]||[]).some(p=>p.tipo==="vt"&&p.comp===ymRef);
       if(l.vt>0||temAjVT||temPgVT) out.push({k:"vt-"+c.id, tipo:"vt", pid:c.id, ref:c, nome:c.nome, desc:l.vt>0?"VT · "+l.vtDias+" dia(s) de escala"+(l.vtFaltasValor>0?" · − "+l.vtFaltasAnt+" falta(s) de "+fmtCompetencia(l.vtMesAnt):""):"VT combinado do mês", dias:l.vtDias, previsto:(l.vtLiquido!=null?l.vtLiquido:l.vt)||0, vtInfo:l, venc:(c.admissao&&c.admissao>dataVT&&c.admissao<=(fim||"9999"))?c.admissao:dataVT, pix:c.pix||"", unidade:c.unidade}); });
@@ -3899,7 +3957,9 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
             if(d.descFaltas>0) desc.push(["Faltas",d.faltasQtd+" dia(s)",d.descFaltas]); if(d.descDSR>0) desc.push(["DSR perdido",d.dsrQtd+" sem.",d.descDSR]);
             if(d.descAtrasos>0) desc.push(["Atrasos",fmtHoras(Math.round((d.atrasosHoras||0)*60)),d.descAtrasos]);
             if(d.vtDesconto>0) desc.push(["Vale-transporte 6%","",d.vtDesconto]); if(d.descVTFaltas>0) desc.push(["VT dias de falta (mês ant.)",String(d.vtFaltasAnt||""),d.descVTFaltas]); }
-          else prov.push(["Salário mensal","mês",l.previstoOrig]);
+          else prov.push([l.rescisao?"Saldo de salário":"Salário mensal",l.rescisao?"até "+fmtDataBR(l.rescisao.data):"mês",l.rescisao?Math.round((Number(l.previstoOrig||0)-l.rescisao.total)*100)/100:l.previstoOrig]);
+          const rc=(d&&!mc&&d.rescisao)||(!d&&!mc&&l.rescisao)||null;
+          if(rc){ rc.itens.forEach(x=>prov.push([x.rot,x.ref||"",x.valor])); rc.descontos.forEach(x=>desc.push([x.rot,x.ref||"",x.valor])); }
           if(l.cred>0 && !l.editado) desc.push(["Pago a mais em "+fmtCompetencia(l.credDe),"",l.cred]);
           if(l.abateVT>0) desc.push(["VT pago a mais (abatido)","",l.abateVT]);
           const tProv=r2(prov.reduce((s,x)=>s+(Number(x[2])||0),0)), tDesc=r2(desc.reduce((s,x)=>s+(Number(x[2])||0),0));
@@ -4285,7 +4345,9 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
     ? clts.filter(c=>c.vinculo==="confianca")
     : modo==="fixo"
     ? clts.filter(c=>c.vinculo==="fixo" && c.status!=="inativo")
-    : clts.filter(c=>c.vinculo!=="fixo" && c.vinculo!=="confianca")).filter(naCasa);
+    : clts.filter(c=>c.vinculo!=="fixo" && c.vinculo!=="confianca")).filter(naCasa)
+    // fora do contrato no mês (demitido antes / admitido depois) e sem pagamento nesse mês: não entra
+    .filter(c=> ehPJ || (pagMap[String(c.id)]||[]).some(p=>p.tipo!=="vt"&&pagoNaCompetencia(p,ymRef,naData)) || !((ini && c.fimContrato && c.fimContrato<ini) || (fim && c.admissao && c.admissao>fim)));
   const pagosDe=(id)=> (pagMap[String(id)]||[]).filter(p=>p.tipo!=="vt" && pagoNaCompetencia(p,ymRef,naData));
   const linhas=lista.map(c=>{
     let total, det=null;
@@ -4294,7 +4356,7 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
       const parcSt=parc.map((p,i)=>{ const pg=Math.round((aloc[i]||[]).reduce((s2,x)=>s2+(Number(x.valor)||0),0)*100)/100; return {...p, pago:pg, falta:Math.max(0,Math.round((p.valor-pg)*100)/100)}; });
       const prox=parcSt.find(p=>p.falta>0.009);
       det={ meses, valorMensal:Number(c.valor||0), venc:(prox||parcSt[parcSt.length-1]).venc, forma:c.formaPagamento||"Pix", cnpj:c.cnpj, parcelas:parcSt.length>1?parcSt:null }; }
-    else if(modo==="confianca"){ total=Number(c.salario||0); }
+    else if(modo==="confianca"){ const pcf=previstoConf(c,ini,fim); total=pcf.total; det={confianca:true, salario:pcf.salario, diasContrato:pcf.dias, salarioMes:Number(c.salario||0), rescisao:pcf.rescisao}; }
     else { det=calcFolhaLinha(c,folhaCtx); total=det.liquido; }
     const oculto = modo==="confianca" && c.sigiloso && !podeSigilo;
     // mesmo valor da linha de Contas do mês: ajuste manual ou calculado − desconto de pagamento a mais do mês anterior
@@ -4374,8 +4436,20 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
                     {d.descVTFaltas>0 && L(`VT de ${d.vtFaltasAnt||d.faltasQtd} falta(s)${d.vtPorDia?" de "+fmtCompetencia(d.vtMesAnt):""}`,"-"+fmtBRL(d.descVTFaltas),"text-rose-600")}
                     {descFaltasDSR>0 && L(`Faltas (${d.faltasQtd}${d.dsrQtd?` + ${d.dsrQtd} DSR`:""})`,"-"+fmtBRL(descFaltasDSR),"text-rose-600")}
                     {d.descAtrasos>0 && L("Atrasos","-"+fmtBRL(d.descAtrasos),"text-rose-600")}
+                    {d.rescisao && <div className="mt-2 pt-2 border-t border-dashed border-rose-200" aria-label={"Rescisão de "+l.nome}>
+                      <div className="text-[11px] font-bold text-rose-600 uppercase mb-1">Rescisão · {TIPOS_DEMISSAO[d.rescisao.tipo]||""}{d.rescisao.aviso&&AVISO_DEMISSAO[d.rescisao.aviso]?" · "+AVISO_DEMISSAO[d.rescisao.aviso]:""} · último dia {fmtDataBR(d.rescisao.data)}</div>
+                      {d.rescisao.itens.map(x=><React.Fragment key={x.k}>{L(x.rot+(x.ref?" ("+x.ref+")":""),"+"+fmtBRL(x.valor),"text-emerald-600")}</React.Fragment>)}
+                      {d.rescisao.descontos.map(x=><React.Fragment key={x.k}>{L(x.rot+(x.ref?" ("+x.ref+")":""),"-"+fmtBRL(x.valor),"text-rose-600")}</React.Fragment>)}
+                      <div className="text-[11px] text-slate-400">Saldo de salário = salário base acima ({d.diasContrato}/30 dias). Pagar até {fmtDataBR(d.rescisao.prazo)}.{d.rescisao.multaFGTS?" Multa de 40% do FGTS em guia (GRRF), fora deste valor.":""} Valores brutos — INSS/IRRF com a contabilidade.</div>
+                    </div>}
                   </>; })()}
-                  {modo==="confianca" && <div className="flex justify-between"><span className="text-slate-500">Salário mensal</span><span className="tabular-nums">{fmtBRL(l.total)}</span></div>}
+                  {modo==="confianca" && (()=>{ const d=l.det||{}; const rc=d.rescisao; return <>
+                    <div className="flex justify-between"><span className="text-slate-500">{d.diasContrato!=null&&d.diasContrato<30?`Salário (${fmtBRL(d.salarioMes)} ÷ 30 × ${d.diasContrato} dias)`:"Salário mensal"}</span><span className="tabular-nums">{fmtBRL(d.salario!=null?d.salario:l.total)}</span></div>
+                    {rc && <div className="mt-2 pt-2 border-t border-dashed border-rose-200" aria-label={"Rescisão de "+l.nome}>
+                      <div className="text-[11px] font-bold text-rose-600 uppercase mb-1">Rescisão · {TIPOS_DEMISSAO[rc.tipo]||""}{rc.aviso&&AVISO_DEMISSAO[rc.aviso]?" · "+AVISO_DEMISSAO[rc.aviso]:""} · último dia {fmtDataBR(rc.data)}</div>
+                      {rc.itens.map(x=><div key={x.k} className="flex justify-between"><span className="text-slate-500">{x.rot}{x.ref?" ("+x.ref+")":""}</span><span className="tabular-nums text-emerald-600">+{fmtBRL(x.valor)}</span></div>)}
+                      {rc.descontos.map(x=><div key={x.k} className="flex justify-between"><span className="text-slate-500">{x.rot}</span><span className="tabular-nums text-rose-600">-{fmtBRL(x.valor)}</span></div>)}
+                      <div className="text-[11px] text-slate-400">Pagar até {fmtDataBR(rc.prazo)}.{rc.multaFGTS?" Multa de 40% do FGTS em guia (GRRF), fora deste valor.":""}</div></div>}</>; })()}
                   {ehPJ && l.det && <>
                     <div className="flex justify-between"><span className="text-slate-500">Valor mensal × {l.det.meses.length} mês(es){l.total!==Number((l.det&&l.det.valorMensal)||0)*l.det.meses.length?" (proporcional à vigência)":""}</span><span className="tabular-nums">{fmtBRL(l.total)}</span></div>
                     {l.det.parcelas ? l.det.parcelas.map(p=><div key={p.n} className="flex justify-between" aria-label={"Parcela "+p.n+" de "+l.nome}><span className="text-slate-500">Parcela {p.n}/{p.N} ({p.pct}%) · vence {fmtDataBR(p.venc)}</span><span className={cx("tabular-nums",p.falta<=0.009?"text-emerald-600":"")}>{fmtBRL(p.valor)}{p.falta<=0.009?" · paga":p.pago>0?" · falta "+fmtBRL(p.falta):""}</span></div>)
