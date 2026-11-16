@@ -2657,22 +2657,32 @@ function PontoKiosk({ mode, onClose }) {
   // ---- Solicitação de AJUSTE de ponto pelo colaborador ----
   const acoesAjuste = mode==="free" ? [["Entrada","Check-in"],["Saída","Checkout"]]
     : [["Entrada","Entrada"],["Início intervalo","Saída para almoço"],["Fim intervalo","Retorno do almoço"],["Saída","Saída final"]];
-  const [aj,setAj]=useState({cpf:"",data:hojeStr(),acao:"Entrada",hora:"08:00",motivo:""});
-  const [ajStatus,setAjStatus]=useState(""); // "" | cpf | naoencontrado | semmotivo | enviando | ok | erro
+  // Vários dias e várias marcações numa só tela: CPF uma vez, cada dia com os horários que precisam de correção
+  // (em branco = não mexe). Cada marcação vira uma solicitação (o gestor aprova uma a uma ou tudo de uma vez).
+  const diaAjVazio=(data)=>({data, h:{}, motivo:""});
+  const [aj,setAj]=useState({cpf:"", dias:[diaAjVazio(hojeStr())]});
+  const [ajStatus,setAjStatus]=useState(""); // "" | cpf | naoencontrado | semhora | semmotivo | enviando | ok | erro
+  const [ajEnviados,setAjEnviados]=useState(0);
+  const setDiaAj=(i,fn)=>{ setAj(p=>({...p, dias:p.dias.map((d,j)=>j===i?fn(d):d)})); setAjStatus(""); };
+  const addDiaAj=()=>setAj(p=>{ const ult=p.dias[p.dias.length-1]; const prox=ult&&ult.data?ymd(addDias(new Date(ult.data+"T12:00:00"),1)):hojeStr();
+    return {...p, dias:[...p.dias, {...diaAjVazio(prox>hojeStr()?hojeStr():prox), motivo:(ult&&ult.motivo)||""}]}; });
+  const copiarHorariosAj=(i)=>setAj(p=>{ const ant=p.dias[i-1]; if(!ant) return p; return {...p, dias:p.dias.map((d,j)=>j===i?{...d,h:{...ant.h}}:d)}; });
   const enviarAjusteColab=async()=>{
     const d=(aj.cpf||"").replace(/\D/g,"");
-    let pessoa=listaModo.find(x=>(x.cpf||"").replace(/\D/g,"")===d);
     if(d.length<11){ setAjStatus("cpf"); return; }
+    let pessoa=listaModo.find(x=>(x.cpf||"").replace(/\D/g,"")===d);
     if(!pessoa && window.__WPDB){ setAjStatus("enviando"); pessoa=(await acharNoIndice(d)).p; }
     if(!pessoa){ setAjStatus("naoencontrado"); return; }
-    if(!(aj.motivo||"").trim()){ setAjStatus("semmotivo"); return; }
-    const [hh,mm]=(aj.hora||"08:00").split(":").map(Number); const min=(hh||0)*60+(mm||0);
+    const itens=[]; aj.dias.forEach(dia=>acoesAjuste.forEach(([acao,rot])=>{ const hora=(dia.h||{})[acao]; if(dia.data && hora) itens.push({dia,acao,rot,hora}); }));
+    if(!itens.length){ setAjStatus("semhora"); return; }
+    if(aj.dias.some(dia=>Object.values(dia.h||{}).some(Boolean) && !(dia.motivo||"").trim())){ setAjStatus("semmotivo"); return; }
     const uni=(unidades.find(u=>u.id===pessoa.unidade)||unidades[0]||{}).nome||"";
-    const rot=(acoesAjuste.find(a=>a[0]===aj.acao)||[])[1]||aj.acao;
+    const lote=Date.now().toString(36)+Math.random().toString(36).slice(2,6);
     setAjStatus("enviando");
-    Promise.resolve(enviarAjuste({ pid:String(pessoa.id), cpf:d, nome:pessoa.nome, tipo:mode, unidade:uni,
-      acao:aj.acao, acaoLabel:rot, data:aj.data, hora:aj.hora, min, motivo:aj.motivo.trim(), status:"pendente", ts:new Date().getTime() }))
-      .then(()=>setAjStatus("ok")).catch(()=>setAjStatus("erro"));
+    Promise.all(itens.map((it,k)=>{ const [hh,mm]=it.hora.split(":").map(Number);
+      return enviarAjuste({ pid:String(pessoa.id), cpf:d, nome:pessoa.nome, tipo:mode, unidade:uni, lote,
+        acao:it.acao, acaoLabel:it.rot, data:it.dia.data, hora:it.hora, min:(hh||0)*60+(mm||0), motivo:it.dia.motivo.trim(), status:"pendente", ts:new Date().getTime()+k }); }))
+      .then(()=>{ setAjEnviados(itens.length); setAjStatus("ok"); }).catch(()=>setAjStatus("erro"));
   };
   const videoRef=useRef(null); const streamRef=useRef(null);
   const clock=useClock();
@@ -2737,9 +2747,9 @@ function PontoKiosk({ mode, onClose }) {
       .catch(()=>{ setCadEnviando(false); setCadErro("Não foi possível salvar seu cadastro no servidor. Verifique sua internet e tente novamente."); });
   };
 
-  return <div className="fixed inset-0 z-50 grad-ink grad-hero flex items-center justify-center p-4">
-    <button onClick={onClose} className="absolute top-4 right-4 w-10 h-10 rounded-xl bg-white/10 text-white grid place-items-center hover:bg-white/20"><Icon d={I.x}/></button>
-    <div className="w-full max-w-md">
+  return <div className="fixed inset-0 z-50 grad-ink grad-hero flex p-4 overflow-y-auto">
+    <button onClick={onClose} className="fixed top-4 right-4 z-10 w-10 h-10 rounded-xl bg-white/10 text-white grid place-items-center hover:bg-white/20"><Icon d={I.x}/></button>
+    <div className="w-full max-w-md m-auto">
       <div className="flex justify-center mb-4"><Logo light/></div>
       <div className="text-center mb-3">
         <Badge tone={mode==="clt"?"brand":"free"}>{mode==="clt"?"Link CLT":"Link Freelancer"} · cadastro e registro</Badge>
@@ -2838,29 +2848,40 @@ function PontoKiosk({ mode, onClose }) {
         : fluxo==="ajuste" ? (ajStatus==="ok" ? <div className="fade-in text-center py-10">
             <div className="w-20 h-20 mx-auto rounded-full bg-emerald-500 grid place-items-center text-white mb-4 shadow-glow"><Icon d={I.check} className="w-10 h-10" stroke={3}/></div>
             <h3 className="text-2xl font-extrabold text-slate-900">Solicitação enviada!</h3>
-            <p className="text-slate-500 mt-1">Seu pedido de ajuste foi enviado ao gestor. Você será avisado quando for aprovado.</p>
+            <p className="text-slate-500 mt-1">{ajEnviados>1?ajEnviados+" correções foram enviadas":"Seu pedido de ajuste foi enviado"} ao gestor. Você será avisado quando for aprovado.</p>
             <Btn variant="ghost" className="w-full mt-4" onClick={onClose}>Fechar</Btn>
           </div>
           : <div className="fade-in">
             <div className="text-center mb-4">
               <div className="w-14 h-14 mx-auto rounded-2xl bg-amber-500 grid place-items-center text-white mb-2"><Icon d={I.edit} className="w-7 h-7"/></div>
               <h3 className="text-lg font-bold text-slate-900">Solicitar ajuste de ponto</h3>
-              <p className="text-sm text-slate-500">Identifique-se e informe a marcação que precisa ser corrigida. O gestor aprova.</p>
+              <p className="text-sm text-slate-500">Digite o CPF uma vez e preencha só os horários que precisam de correção — pode colocar vários dias. O gestor aprova.</p>
             </div>
-            <Field label="Seu CPF"><Input value={aj.cpf} inputMode="numeric" placeholder="000.000.000-00" onChange={e=>{setAj({...aj,cpf:e.target.value}); setAjStatus("");}}/></Field>
-            <div className="grid grid-cols-2 gap-2 mt-2">
-              <Field label="Data"><Input type="date" value={aj.data} onChange={e=>setAj({...aj,data:e.target.value})}/></Field>
-              <Field label="Horário correto"><Input type="time" value={aj.hora} onChange={e=>setAj({...aj,hora:e.target.value})}/></Field>
+            <Field label="Seu CPF"><Input value={aj.cpf} inputMode="numeric" placeholder="000.000.000-00" aria-label="CPF do ajuste" onChange={e=>{setAj({...aj,cpf:e.target.value}); setAjStatus("");}}/></Field>
+            <div className="space-y-3 mt-3">
+              {aj.dias.map((dia,i)=><div key={i} className="p-3 rounded-2xl border border-slate-200 bg-slate-50/60" aria-label={"Dia de ajuste "+(i+1)}>
+                <div className="flex items-end gap-2">
+                  <div className="flex-1"><Field label={"Dia "+(i+1)}><Input type="date" max={hojeStr()} value={dia.data} aria-label={"Data do ajuste "+(i+1)} onChange={e=>setDiaAj(i,d=>({...d,data:e.target.value}))}/></Field></div>
+                  {aj.dias.length>1 && <button type="button" onClick={()=>setAj(p=>({...p,dias:p.dias.filter((_,j)=>j!==i)}))} className="mb-1 w-9 h-9 rounded-lg hover:bg-rose-50 grid place-items-center text-slate-400 hover:text-rose-500" title="Remover este dia"><Icon d={I.trash} className="w-4 h-4"/></button>}
+                </div>
+                <div className={cx("grid gap-2 mt-2", acoesAjuste.length>2?"grid-cols-2":"grid-cols-2")}>
+                  {acoesAjuste.map(([acao,rot])=><label key={acao} className="block"><span className="text-[11px] font-semibold text-slate-500">{rot}</span>
+                    <input type="time" value={(dia.h||{})[acao]||""} aria-label={rot+" dia "+(i+1)} onChange={e=>setDiaAj(i,d=>({...d,h:{...d.h,[acao]:e.target.value}}))}
+                      className={cx("mt-0.5 w-full px-3 py-2 rounded-xl border outline-none focus:ring-2 focus:ring-brand-400 text-sm", (dia.h||{})[acao]?"border-amber-300 bg-amber-50":"border-slate-200 bg-white")}/></label>)}
+                </div>
+                {i>0 && <button type="button" onClick={()=>copiarHorariosAj(i)} className="mt-1.5 text-[11px] font-semibold text-brand-700 hover:underline">Copiar horários do dia anterior</button>}
+                <div className="mt-2"><Input value={dia.motivo} aria-label={"Motivo dia "+(i+1)} onChange={e=>setDiaAj(i,d=>({...d,motivo:e.target.value}))} placeholder="Motivo (ex.: esqueci de bater a saída)"/></div>
+              </div>)}
+              <button type="button" onClick={addDiaAj} className="w-full py-2.5 rounded-xl border-2 border-dashed border-slate-300 text-sm font-semibold text-slate-600 hover:border-brand-400 hover:text-brand-700 flex items-center justify-center gap-1.5"><Icon d={I.plus} className="w-4 h-4"/>Adicionar outro dia</button>
             </div>
-            <Field label="Qual marcação?"><Select value={aj.acao} onChange={e=>setAj({...aj,acao:e.target.value})}>{acoesAjuste.map(([v,l])=><option key={v} value={v}>{l}</option>)}</Select></Field>
-            <Field label="Motivo"><Input value={aj.motivo} onChange={e=>setAj({...aj,motivo:e.target.value})} placeholder="Ex.: esqueci de bater a saída"/></Field>
+            {ajStatus==="semhora" && <div className="mt-3 p-3 rounded-xl bg-rose-50 text-rose-700 text-sm">Preencha pelo menos um horário a corrigir.</div>}
             {ajStatus==="cpf" && <div className="mt-3 p-3 rounded-xl bg-rose-50 text-rose-700 text-sm">Digite os 11 números do CPF.</div>}
             {ajStatus==="naoencontrado" && <div className="mt-3 p-3 rounded-xl bg-rose-50 text-rose-700 text-sm">CPF não encontrado. Faça o cadastro (1º acesso) primeiro.</div>}
-            {ajStatus==="semmotivo" && <div className="mt-3 p-3 rounded-xl bg-rose-50 text-rose-700 text-sm">Descreva o motivo do ajuste.</div>}
+            {ajStatus==="semmotivo" && <div className="mt-3 p-3 rounded-xl bg-rose-50 text-rose-700 text-sm">Escreva o motivo em cada dia com horário preenchido.</div>}
             {ajStatus==="erro" && <div className="mt-3 p-3 rounded-xl bg-rose-50 text-rose-700 text-sm">Não foi possível enviar agora. Tente novamente.</div>}
             <div className="flex gap-2 mt-4">
               <Btn variant="ghost" onClick={()=>setFluxo("escolha")}>Voltar</Btn>
-              <Btn className="flex-1" icon={ajStatus==="enviando"?null:I.check} disabled={ajStatus==="enviando"} onClick={enviarAjusteColab}>{ajStatus==="enviando"?"Enviando…":"Enviar solicitação"}</Btn>
+              <Btn className="flex-1" icon={ajStatus==="enviando"?null:I.check} disabled={ajStatus==="enviando"} onClick={enviarAjusteColab}>{ajStatus==="enviando"?"Enviando…":(()=>{ const n=aj.dias.reduce((s2,d)=>s2+Object.values(d.h||{}).filter(Boolean).length,0); return n>1?"Enviar "+n+" correções":"Enviar solicitação"; })()}</Btn>
             </div>
           </div>)
         : fluxo==="atestado" ? (atStatus==="ok" ? <div className="fade-in text-center py-10">
@@ -9568,13 +9589,19 @@ function AjustesPonto(){
   const [editHora,setEditHora]=useState({}); // {docId: "HH:MM"}
   const pend=(ajustes||[]).filter(a=>a.status==="pendente"||!a.status);
   const lista=(ajustes||[]).filter(a=> aba==="pendente" ? (a.status==="pendente"||!a.status) : a.status!=="pendente");
-  const aprovar=(a, horaOverride)=>{
+  const aprovar=(a, horaOverride, silencioso)=>{
     const hora = horaOverride || a.hora || "08:00";
     const [hh,mm]=hora.split(":").map(Number); const min=(hh||0)*60+(mm||0);
     addRegistro({ nome:a.nome, pid:a.pid, cpf:a.cpf, tipo:a.tipo, acao:a.acao, unidade:a.unidade, hora:hora+":00", min, data:a.data, dia:a.data, geo:true, selfie:false, foto:null, ajuste:true });
     resolverAjuste(a._docId||a.id, {status:"aprovado", horaFinal:hora, resolvidoTs:new Date().getTime()});
-    toast("Ajuste aprovado e lançado no ponto");
+    if(!silencioso) toast("Ajuste aprovado e lançado no ponto");
   };
+  const ORD_AC={"Entrada":0,"Início intervalo":1,"Fim intervalo":2,"Saída":3};
+  const aprovarVarios=(arr,quem)=>{ if(!arr.length) return; if(!confirm("Aprovar "+arr.length+" ajuste(s)"+(quem?" de "+quem:"")+" e lançar no ponto?")) return;
+    arr.forEach(a=>aprovar(a,null,true)); toast(arr.length+" ajuste(s) aprovado(s) e lançado(s) no ponto"); };
+  // pendentes agrupados por colaborador (e por dia), na ordem do dia: entrada → almoço → retorno → saída
+  const gruposPend=useMemo(()=>{ const g={}; pend.forEach(a=>{ const k=String(a.pid||a.nome); (g[k]=g[k]||{nome:a.nome,itens:[]}).itens.push(a); });
+    return Object.values(g).map(x=>({...x, itens:x.itens.sort((p,q)=>String(p.data).localeCompare(String(q.data))||((ORD_AC[p.acao]??9)-(ORD_AC[q.acao]??9)))})).sort((p,q)=>String(p.nome).localeCompare(String(q.nome))); },[ajustes]); // eslint-disable-line
   const recusar=(a)=>{ resolverAjuste(a._docId||a.id, {status:"recusado", resolvidoTs:new Date().getTime()}); toast("Solicitação recusada"); };
   return <div className="fade-in">
     <PageHeader title="Ajustes de ponto" sub="Solicitações de correção enviadas pelos colaboradores · aprovar, ajustar o horário ou recusar"/>
@@ -9582,7 +9609,34 @@ function AjustesPonto(){
       {[["pendente","Pendentes ("+pend.length+")"],["resolvidos","Resolvidos"],["lancar","Lançar dias sem ponto"]].map(([k,l])=>
         <button key={k} onClick={()=>setAba(k)} className={cx("px-5 py-2 rounded-lg text-sm font-semibold transition", aba===k?"grad-brand text-white shadow-glow":"text-slate-500 hover:text-slate-700")}>{l}</button>)}
     </div>
-    {aba==="lancar" ? <LancarDiasSemPonto/> : <div className="space-y-3">
+    {aba==="pendente" && pend.length>1 && <div className="mb-3 flex flex-wrap items-center gap-2 p-3 rounded-2xl bg-emerald-50 border border-emerald-100">
+      <span className="text-sm text-emerald-800 flex-1 min-w-[200px]"><b>{pend.length}</b> ajuste(s) pendente(s) de <b>{gruposPend.length}</b> colaborador(es). Aprove por pessoa ou tudo de uma vez.</span>
+      <Btn size="sm" icon={I.check} onClick={()=>aprovarVarios(pend)}>Aprovar todos ({pend.length})</Btn></div>}
+    {aba==="lancar" ? <LancarDiasSemPonto/> : aba==="pendente" ? <div className="space-y-4">
+      {pend.length===0 && <Card className="p-8 text-center text-slate-400 text-sm">Nenhuma solicitação pendente. 👍</Card>}
+      {gruposPend.map(g=><Card key={g.nome+g.itens[0]._docId} className="p-4" aria-label={"Ajustes de "+g.nome}>
+        <div className="flex items-center gap-3 flex-wrap mb-2">
+          <Avatar name={g.nome} tone={g.itens[0].tipo==="clt"?"brand":"free"}/>
+          <div className="flex-1 min-w-[160px]"><div className="font-bold text-slate-900 flex items-center gap-2">{g.nome} <Badge tone={g.itens[0].tipo==="clt"?"brand":"free"}>{g.itens[0].tipo==="clt"?"CLT":"Freela"}</Badge></div>
+            <div className="text-xs text-slate-500">{g.itens.length} marcação(ões) em {new Set(g.itens.map(a=>a.data)).size} dia(s)</div></div>
+          {g.itens.length>1 && <Btn size="sm" icon={I.check} onClick={()=>aprovarVarios(g.itens,g.nome)}>Aprovar tudo de {String(g.nome).split(" ")[0]} ({g.itens.length})</Btn>}
+        </div>
+        <div className="divide-y divide-slate-100">
+          {g.itens.map(a=>{ const editing=editHora[a._docId]!==undefined;
+            return <div key={a._docId} className="py-2 flex items-center gap-3 flex-wrap">
+              <div className="flex-1 min-w-[180px] text-sm"><span className="text-slate-500">{fmtDataBR(a.data)}</span> · <b>{a.acaoLabel||a.acao}</b> · <b className="tabular-nums">{a.hora}</b>{a.unidade?<span className="text-slate-400"> · {a.unidade}</span>:""}
+                <div className="text-xs text-slate-500">Motivo: {a.motivo||"—"}</div></div>
+              {editing
+                ? <div className="flex items-center gap-1"><input type="time" value={editHora[a._docId]} onChange={e=>setEditHora(h=>({...h,[a._docId]:e.target.value}))} className="px-2 py-1.5 rounded-lg border border-slate-300 text-sm"/><Btn size="sm" icon={I.check} onClick={()=>{aprovar(a, editHora[a._docId]); setEditHora(h=>{const n={...h};delete n[a._docId];return n;});}}>Salvar</Btn></div>
+                : <div className="flex gap-1.5 flex-wrap">
+                    <Btn size="sm" variant="primary" icon={I.check} onClick={()=>aprovar(a)}>Aprovar</Btn>
+                    <Btn size="sm" variant="ghost" icon={I.edit} onClick={()=>setEditHora(h=>({...h,[a._docId]:a.hora}))}>Ajustar hora</Btn>
+                    <Btn size="sm" variant="ghost" className="text-rose-500" icon={I.x} onClick={()=>recusar(a)}>Recusar</Btn>
+                  </div>}
+            </div>; })}
+        </div>
+      </Card>)}
+    </div> : <div className="space-y-3">
       {lista.length===0 && <Card className="p-8 text-center text-slate-400 text-sm">{aba==="pendente"?"Nenhuma solicitação pendente. 👍":"Nenhum ajuste resolvido ainda."}</Card>}
       {lista.map(a=>{ const editing=editHora[a._docId]!==undefined; const pendente=a.status==="pendente"||!a.status;
         return <Card key={a._docId} className="p-4">
