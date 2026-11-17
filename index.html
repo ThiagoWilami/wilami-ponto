@@ -717,23 +717,37 @@ function avosFerias(adm, fimDs){ if(!adm||adm>fimDs) return {anos:0,avos:0};
   let anos=0; while(_addMeses(adm,12*(anos+1))<=ymd(addDias(new Date(fimDs+"T12:00:00"),1))) anos++;
   const ini=_addMeses(adm,12*anos); let avos=0; for(let i=0;i<12;i++){ const a=_addMeses(ini,i); if(a>fimDs) break; const b0=ymd(addDias(new Date(_addMeses(ini,i+1)+"T12:00:00"),-1)); const b=b0<fimDs?b0:fimDs;
     const dd=datasEntre(a,b).length; const cheio=b===b0; if(cheio||dd>=15) avos++; } return {anos, avos:Math.min(12,avos)}; }
+// Contrato por prazo determinado (experiência ou 180 dias) ainda em curso na data do desligamento → data do fim combinado.
+// null = já terminou / foi efetivado / sem experiência (vale a regra do prazo indeterminado). Desligar NA data do fim = término normal.
+function fimPrazoDeterminado(c, data){
+  if(!c||!c.admissao||!data||c.vinculo==="fixo") return null; const ex=EXPERIENCIA[c.experiencia||"45+45"]; if(!ex||!ex.p.length) return null;
+  const dec=c.experienciaDecisao||{}; if(dec.final==="efetivado") return null;
+  const fim=(n)=>somaDiasStr(c.admissao,n-1); const ult=fim(ex.p[ex.p.length-1]); if(data>=ult) return null;
+  if(ex.p.length>1 && dec.p1!=="prorrogado"){ const f1=fim(ex.p[0]); if(data===f1) return null; if(data<f1) return f1; }
+  return ult; }
 function calcRescisao(c, salarioMes){
   const d=c&&c.demissao; if(!d||!d.data||c.vinculo==="fixo"||!(salarioMes>0)) return null;
   const tipo=d.tipo||"semjusta"; const adm=c.admissao||d.data;
-  const aviso=d.aviso || (tipo==="semjusta"?"indenizado":tipo==="pedido"?"dispensado":"");
+  // arts. 479/480: rompimento antecipado de contrato por prazo determinado → metade da remuneração dos dias que faltavam (substitui o aviso prévio)
+  const fimDet=(tipo==="semjusta"||tipo==="pedido") ? fimPrazoDeterminado(c,d.data) : null;
+  const diasRest=fimDet ? (_diaNum(fimDet)-_diaNum(d.data)) : 0;
+  const aviso=fimDet ? "" : (d.aviso || (tipo==="semjusta"?"indenizado":tipo==="pedido"?"dispensado":""));
   const anosServ=avosFerias(adm,d.data).anos;
-  const diasAviso=(tipo==="semjusta"&&aviso==="indenizado") ? Math.min(90,30+3*anosServ) : 0;
+  const diasAviso=(!fimDet&&tipo==="semjusta"&&aviso==="indenizado") ? Math.min(90,30+3*anosServ) : 0;
   const fimProj=diasAviso? ymd(addDias(new Date(d.data+"T12:00:00"),diasAviso)) : d.data;
   const r2=(v)=>Math.round(v*100)/100; const itens=[];
   if(diasAviso) itens.push({k:"aviso", rot:"Aviso prévio indenizado", ref:diasAviso+" dias", valor:r2(salarioMes/30*diasAviso)});
+  const ind479=fimDet ? r2(salarioMes/30*diasRest/2) : 0;
+  if(fimDet && tipo==="semjusta" && ind479>0) itens.push({k:"art479", rot:"Indenização art. 479 CLT (metade dos dias restantes)", ref:diasRest+" dias ÷ 2 · contrato até "+fmtDataBR(fimDet), valor:ind479});
   if(tipo!=="justa"){ const a13=avos13(adm,fimProj); if(a13>0) itens.push({k:"13", rot:"13º salário proporcional", ref:a13+"/12", valor:r2(salarioMes/12*a13)}); }
   const vencidas=Math.max(0,Math.floor(Number(d.feriasVencidas)||0));
   if(vencidas>0){ const v=r2(salarioMes*vencidas); itens.push({k:"fv", rot:"Férias vencidas", ref:vencidas+" período(s)", valor:v}); itens.push({k:"fv3", rot:"1/3 sobre férias vencidas", ref:"", valor:r2(v/3)}); }
   if(tipo!=="justa"){ const af=avosFerias(adm,fimProj).avos; if(af>0){ const v=r2(salarioMes/12*af); itens.push({k:"fp", rot:"Férias proporcionais", ref:af+"/12", valor:v}); itens.push({k:"fp3", rot:"1/3 sobre férias proporcionais", ref:"", valor:r2(v/3)}); } }
   const descontos=[]; if(tipo==="pedido"&&aviso==="descontar") descontos.push({k:"avisodesc", rot:"Aviso prévio não cumprido", ref:"30 dias", valor:r2(salarioMes)});
+  if(fimDet && tipo==="pedido" && ind479>0) descontos.push({k:"art480", rot:"Indenização art. 480 CLT (saída antes do fim do contrato)", ref:diasRest+" dias ÷ 2 · contrato até "+fmtDataBR(fimDet), valor:ind479});
   const prov=r2(itens.reduce((s,x)=>s+x.valor,0)), desc=r2(descontos.reduce((s,x)=>s+x.valor,0));
   const prazo=ymd(addDias(new Date(d.data+"T12:00:00"),10));   // art. 477 §6º: até 10 dias do término
-  return { tipo, aviso, diasAviso, fimProj, itens, descontos, prov, desc, total:r2(prov-desc), prazo, multaFGTS:tipo==="semjusta", data:d.data }; }
+  return { tipo, aviso, diasAviso, fimProj, fimDet, diasRest, itens, descontos, prov, desc, total:r2(prov-desc), prazo, multaFGTS:tipo==="semjusta", data:d.data }; }
 // Cargo de confiança (sem ponto): salário proporcional aos dias de contrato no mês + rescisão no mês da demissão
 function previstoConf(c, ini, fim){ const sm=Number(c.salario||0); let dc=30, sv=sm;
   if(sm && ini && fim){ const di=(c.admissao&&c.admissao>ini)?c.admissao:ini, df=(c.fimContrato&&c.fimContrato<fim)?c.fimContrato:fim; if(di>df){ dc=0; sv=0; } else if(di!==ini||df!==fim){ dc=Math.min(30,datasEntre(di,df).length); sv=Math.round(sm*dc/30*100)/100; } }
@@ -822,7 +836,7 @@ function calcFolhaLinha(c, ctx){
   const rescisao = (c.demissao && c.demissao.data && (!fc.ini||c.demissao.data>=fc.ini) && (!fc.fim||c.demissao.data<=fc.fim)) ? calcRescisao(c, salarioMes) : null;
   let liquido=salario+extrasVal+notVal+dsrReflexo+reposicao-descontos+(rescisao?rescisao.total:0);
   if(rescisao && liquido<0){ // desconto do aviso não cumprido limitado ao que há a receber (não gera saldo negativo)
-    const corte=Math.min(-liquido, rescisao.desc); if(corte>0){ rescisao.descontos=rescisao.descontos.map(x=>x.k==="avisodesc"?{...x,valor:Math.round((x.valor-corte)*100)/100,ref:x.ref+" (limitado ao saldo)"}:x); rescisao.desc=Math.round((rescisao.desc-corte)*100)/100; rescisao.total=Math.round((rescisao.prov-rescisao.desc)*100)/100; liquido+=corte; } }
+    const corte=Math.min(-liquido, rescisao.desc); if(corte>0){ let resta=corte; rescisao.descontos=rescisao.descontos.map(x=>{ if((x.k!=="avisodesc"&&x.k!=="art480")||resta<=0) return x; const c2=Math.min(resta,x.valor); resta-=c2; return {...x,valor:Math.round((x.valor-c2)*100)/100,ref:x.ref+" (limitado ao saldo)"}; }); rescisao.desc=Math.round((rescisao.desc-corte)*100)/100; rescisao.total=Math.round((rescisao.prov-rescisao.desc)*100)/100; liquido+=corte; } }
   return { id:c.id, rescisao, nome:c.nome, foto:c.foto, pix:c.pix, escala:c.escala, salario, vHora, gorjeta, combinado, combinadoMes, recebido, reposicao,
     extrasMin, extras100Min, extrasHoras:extrasMin+extras100Min, extrasVal, extrasEditado, notMin, notRelMin, notVal, extSemanal, extNot50Min, extNot100Min,
     he50Val, he100Val, heNotVal, dsrReflexo, diasUteis, diasDSR, dias, cpf:c.cpf||"", cargo:c.cargo||"", admissao:c.admissao||"", unidade:c.unidade, vinculo:c.vinculo||"clt",
@@ -3354,7 +3368,8 @@ function ColaboradoresCLT() {
           {!fixo && <Field label="Tipo de demissão"><div className="grid sm:grid-cols-2 gap-2">
             {Object.entries(TIPOS_DEMISSAO).map(([k,l])=><button key={k} type="button" onClick={()=>setDemitir({...demitir,tipo:k})} className={cx("px-3 py-2.5 rounded-xl text-sm font-semibold border transition", demitir.tipo===k?(k==="justa"?"bg-rose-600 text-white border-transparent":"grad-brand text-white border-transparent"):"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>{l}</button>)}
           </div></Field>}
-          {!fixo && (demitir.tipo==="semjusta"||demitir.tipo==="pedido") && <Field label="Aviso prévio"><Select aria-label="Aviso prévio" value={demitir.aviso||(demitir.tipo==="semjusta"?"indenizado":"dispensado")} onChange={e=>setDemitir({...demitir,aviso:e.target.value})}>
+          {!fixo && (demitir.tipo==="semjusta"||demitir.tipo==="pedido") && demitir.data && fimPrazoDeterminado(c,demitir.data) && <div className="p-3 rounded-xl bg-amber-50 border border-amber-100 text-xs text-amber-800" aria-label="Aviso prazo determinado">Contrato por prazo determinado em curso (até <b>{fmtDataBR(fimPrazoDeterminado(c,demitir.data))}</b>). {demitir.tipo==="semjusta"?"Empresa encerrando antes do fim: paga a indenização do art. 479 (metade dos dias que faltam), no lugar do aviso prévio.":"Saída do empregado antes do fim: pode descontar a indenização do art. 480 (metade dos dias que faltam), limitada ao que ele tem a receber."}</div>}
+          {!fixo && (demitir.tipo==="semjusta"||demitir.tipo==="pedido") && !(demitir.data && fimPrazoDeterminado(c,demitir.data)) && <Field label="Aviso prévio"><Select aria-label="Aviso prévio" value={demitir.aviso||(demitir.tipo==="semjusta"?"indenizado":"dispensado")} onChange={e=>setDemitir({...demitir,aviso:e.target.value})}>
             {(demitir.tipo==="semjusta"?["indenizado","trabalhado"]:["dispensado","trabalhado","descontar"]).map(k=><option key={k} value={k}>{AVISO_DEMISSAO[k]}</option>)}</Select></Field>}
           {!fixo && demitir.tipo && (()=>{ const anos=c.admissao&&demitir.data?avosFerias(c.admissao,demitir.data).anos:0; return <Field label="Férias vencidas ainda não tiradas (períodos)"><Input type="number" min="0" max="3" aria-label="Férias vencidas" value={demitir.feriasVencidas||0} onChange={e=>setDemitir({...demitir,feriasVencidas:Math.max(0,Math.floor(Number(e.target.value)||0))})}/>
             <div className="text-[11px] text-slate-400 mt-1">{anos>0?anos+" ano(s) completo(s) de casa. Informe quantos períodos de férias ele ainda não tirou.":"Menos de 1 ano de casa: normalmente 0."}</div></Field>; })()}
