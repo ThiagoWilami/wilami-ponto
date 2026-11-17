@@ -3882,7 +3882,11 @@ function calcExcessoFonte(k, de, env){ try{
 } catch(e){ return null; } }
 const TIPOS_CONTA=[["clt","CLT"],["fixo","Freela Fixo"],["pj","PJ"],["vt","Vale-transporte"],["free","Freelancers"],["conf","Gerência & Diretoria"],["manual","Manuais"]];
 const TIPOS_MANUAL=["Vale-transporte","Adiantamento","Complemento de salário","Bônus / gratificação","Reembolso","Outro"];
-const FORMAS_PAG=["Dinheiro","Pix","Transferência","Cartão / VT eletrônico","Outro"];
+const FORMAS_PAG=["Dinheiro","Pix","Transferência","Cartão / VT eletrônico","Cartão Caju","Outro"];
+// Baixa em parcelas (ex.: VT em 2x no cartão Caju): lembra a última escolha por tipo de conta neste navegador
+const prefBaixa=(tipo)=>{ try{ return JSON.parse(localStorage.getItem("wp_pref_baixa_"+tipo)||"null")||{}; }catch(e){ return {}; } };
+const salvarPrefBaixa=(tipo,o)=>{ try{ localStorage.setItem("wp_pref_baixa_"+tipo, JSON.stringify(o)); }catch(e){} };
+const dividirParcelas=(total,n)=>{ const t=Math.round((Number(total)||0)*100); const base=Math.floor(t/n); return Array.from({length:n},(_,i)=>((i===n-1?t-base*(n-1):base)/100)); };
 function RelatorioFinanceiro({ ini, fim, uni, modo }){
   const { clts, pjs, freelasComPagamentos, unidades, registros, pontoHist, getDossie, cltExtraAjuste, gorjetasCLT, escala, escalaOv, atestados, acesso,
     pagamentosCLT, addPagamentoCLT, removePagamentoCLT, pagamentosPJ, addPagamentoPJ, removePagamentoPJ, pagamentosFreela, addPagamentoFreela, removePagamentoFreela,
@@ -3980,15 +3984,25 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
   // ---- dar baixa / desfazer ----
   const [baixa,setBaixa]=useState(null);
   const [vtAberto,setVtAberto]=useState(null);   // {k, data, valor, obs}
-  const confirmarBaixa=(l)=>{ const v=r2(baixa.valor); if(!(v>0)){ toast("Informe o valor pago"); return; } if(!baixa.data){ toast("Informe a data do pagamento"); return; }
-    const forma=baixa.forma||"Pix";
-    const pg={ data:baixa.data, ref:ymRef+"-01", comp:ymRef, valor:v, forma, obs:baixa.obs||(l.tipo==="vt"?"Vale-transporte":"Pagamento")+" "+fmtCompetencia(ymRef)+" · "+forma, origem:"contas" };
-    if(l.tipo==="manual") salvar(c=>({...c,manuais:c.manuais.map(m=>m.id===l.id?{...m,baixas:[...(m.baixas||[]),{...pg,id:Math.random().toString(36).slice(2)}]}:m)}));
-    else if(l.tipo==="pj") addPagamentoPJ(l.pid,l.parcelaN>1?{...pg,parcela:l.parcela,obs:baixa.obs||("Parcela "+l.parcela+"/"+l.parcelaN+" · "+fmtCompetencia(ymRef)+" · "+forma)}:pg);
-    else if(l.tipo==="free") addPagamentoFreela(l.pid,pg);
-    else addPagamentoCLT(l.pid,{...pg, tipo:l.tipo==="vt"?"vt":"salario"});
-    const falta=r2(l.saldo-v);
-    toast("Baixa registrada: "+l.nome+" · "+fmtBRL(v)+" ("+forma+") em "+fmtDataBR(baixa.data)+(falta>0.009?" · falta "+fmtBRL(falta):" · quitado")); setBaixa(null); };
+  const abrirBaixa=(l)=>{ const pr=prefBaixa(l.tipo); const n=Math.min(4,Math.max(1,Number(pr.n)||1)); const forma=pr.forma||(l.tipo==="vt"?"Dinheiro":"Pix");
+    const vals=dividirParcelas(l.saldo,n); const gap=Number(pr.gap)||15;
+    setBaixa({k:l.k, data:hoje, valor:l.saldo, obs:"", forma, n, parcelas:vals.map((v,i)=>({valor:v, data:ymd(addDias(new Date(hoje+"T12:00:00"),i*gap))}))}); };
+  const setNParc=(l,n)=>setBaixa(b=>{ const vals=dividirParcelas(l.saldo,n); const d0=(b.parcelas&&b.parcelas[0]&&b.parcelas[0].data)||b.data||hoje;
+    return {...b, n, parcelas:vals.map((v,i)=>({valor:v, data:(b.parcelas&&b.parcelas[i]&&i>0&&b.parcelas[i].data)||ymd(addDias(new Date(d0+"T12:00:00"),i*15))}))}; });
+  const confirmarBaixa=(l)=>{ const forma=baixa.forma||"Pix"; const n=baixa.n||1;
+    const lista = n>1 ? (baixa.parcelas||[]).map((p,i)=>({data:p.data, valor:r2(p.valor), parc:i+1})).filter(p=>p.valor>0) : [{data:baixa.data, valor:r2(baixa.valor), parc:0}];
+    if(!lista.length || lista.some(p=>!(p.valor>0))){ toast("Informe o valor pago"+(n>1?" em cada parcela":"")); return; }
+    if(lista.some(p=>!p.data)){ toast("Informe a data"+(n>1?" de cada parcela":" do pagamento")); return; }
+    const tot=r2(lista.reduce((s2,p)=>s2+p.valor,0));
+    lista.forEach(p=>{ const rot=(l.tipo==="vt"?"Vale-transporte":"Pagamento")+" "+fmtCompetencia(ymRef)+(p.parc?" · parcela "+p.parc+"/"+lista.length:"")+" · "+forma;
+      const pg={ data:p.data, ref:ymRef+"-01", comp:ymRef, valor:p.valor, forma, obs:baixa.obs?(baixa.obs+(p.parc?" · parcela "+p.parc+"/"+lista.length:"")):rot, origem:"contas", ...(p.parc?{parcelaBaixa:p.parc, parcelasBaixa:lista.length}:{}) };
+      if(l.tipo==="manual") salvar(c=>({...c,manuais:c.manuais.map(m=>m.id===l.id?{...m,baixas:[...(m.baixas||[]),{...pg,id:Math.random().toString(36).slice(2)}]}:m)}));
+      else if(l.tipo==="pj") addPagamentoPJ(l.pid,l.parcelaN>1?{...pg,parcela:l.parcela,obs:baixa.obs||("Parcela "+l.parcela+"/"+l.parcelaN+" · "+fmtCompetencia(ymRef)+" · "+forma)}:pg);
+      else if(l.tipo==="free") addPagamentoFreela(l.pid,pg);
+      else addPagamentoCLT(l.pid,{...pg, tipo:l.tipo==="vt"?"vt":"salario"}); });
+    salvarPrefBaixa(l.tipo,{n, forma, gap:n>1&&lista[1]?Math.max(1,_diaNum(lista[1].data)-_diaNum(lista[0].data)):15});
+    const falta=r2(l.saldo-tot);
+    toast("Baixa registrada: "+l.nome+" · "+fmtBRL(tot)+(lista.length>1?" em "+lista.length+"x ("+lista.map(p=>fmtBRL(p.valor)+" em "+fmtDataBR(p.data)).join(" + ")+")":" em "+fmtDataBR(lista[0].data))+" · "+forma+(falta>0.009?" · falta "+fmtBRL(falta):" · quitado")); setBaixa(null); };
   const desfazer=(l)=>{ const p=l.ultimo; if(!p) return; if(!confirm("Desfazer o pagamento de "+fmtBRL(Number(p.valor)||0)+" ("+fmtDataBR(p.data)+") de "+l.nome+"?")) return;
     if(l.tipo==="manual") salvar(c=>({...c,manuais:c.manuais.map(m=>m.id===l.id?{...m,baixas:(m.baixas||[]).filter(b=>b.id!==p.id)}:m)}));
     else if(l.tipo==="pj") removePagamentoPJ(l.pid,p.id);
@@ -4211,7 +4225,7 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
       <td className="px-2 py-2"><input type="date" className={inp} value={l.venc||""} onChange={e=>setAj(l.k,"pagar",e.target.value)} aria-label={"Vencimento "+l.k}/></td>
       <td className="px-2 py-2"><Badge tone={tonSt[l.status]}>{stTxt(l)}</Badge>{l.status==="parcial"&&<div className="text-[11px] font-semibold text-amber-700 mt-0.5">falta {fmtBRL(l.saldo)}</div>}{l.status==="amais"&&<div className="text-[11px] font-semibold text-violet-700 mt-0.5">{l.abatidoSal?"abatido no salário deste mês":l.creditoPara?"desconto de "+fmtBRL(l.creditoValor||l.aMais)+" lançado em "+fmtCompetencia(l.creditoPara):"descontar no próximo mês"}</div>}{l.pagos.length>0&&<div className="text-[10px] text-slate-400 mt-0.5 leading-tight">{l.pagos.map(p=>fmtBRL(Number(p.valor)||0)+" "+fmtDataBR(p.data)+(p.forma?" "+p.forma.toLowerCase():"")).join(" · ")}</div>}</td>
       <td className="px-2 py-2 text-right whitespace-nowrap">
-        {l.saldo>0.009 && <Btn size="sm" icon={I.check} onClick={()=>setBaixa({k:l.k,data:hoje,valor:l.saldo,obs:"",forma:l.tipo==="vt"?"Dinheiro":"Pix"})}>Dar baixa</Btn>}
+        {l.saldo>0.009 && <Btn size="sm" icon={I.check} onClick={()=>abrirBaixa(l)}>Dar baixa</Btn>}
         {l.status==="amais" && !l.manual && !l.creditoPara && !l.abatidoSal && modo!=="financeiro" && <Btn size="sm" variant="soft" onClick={()=>descontarProx(l)}>Descontar no próximo mês</Btn>}
         {l.status==="amais" && !l.manual && l.creditoPara && modo!=="financeiro" && <button onClick={()=>desfazerDesc(l)} className="ml-2 text-xs text-violet-600 hover:underline">Cancelar desconto</button>}
         {l.ultimo && <button onClick={()=>desfazer(l)} className="ml-2 text-xs text-slate-500 hover:text-rose-600 hover:underline">Desfazer</button>}
@@ -4221,11 +4235,18 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
     </tr>,
     baixa && baixa.k===l.k ? <tr key={l.k+"-b"} className="bg-emerald-50/50"><td/><td colSpan={6} className="px-2 py-2">
       <div className="flex flex-wrap items-end gap-2">
-        <span className="text-sm font-semibold text-slate-700">Dar baixa — {l.nome}</span>
-        <Field label="Pago em"><Input type="date" value={baixa.data} onChange={e=>setBaixa({...baixa,data:e.target.value})} aria-label="Data do pagamento"/></Field>
-        <Field label="Valor pago (R$)"><Input type="number" step="0.01" value={baixa.valor} onChange={e=>setBaixa({...baixa,valor:e.target.value})} className="w-32" aria-label="Valor pago"/></Field>
+        <span className="text-sm font-semibold text-slate-700 w-full">Dar baixa — {l.nome} <span className="font-normal text-slate-500">· a pagar {fmtBRL(l.saldo)}</span></span>
+        <Field label="Pagamento em"><div className="flex gap-1">{[1,2,3,4].map(n=><button key={n} type="button" aria-pressed={(baixa.n||1)===n} aria-label={"Pagar em "+n+"x"} onClick={()=>setNParc(l,n)} className={cx("px-3 py-2 rounded-lg text-sm font-semibold border", (baixa.n||1)===n?"grad-brand text-white border-transparent":"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>{n}x</button>)}</div></Field>
+        {(baixa.n||1)===1 ? <>
+          <Field label="Pago em"><Input type="date" value={baixa.data} onChange={e=>setBaixa({...baixa,data:e.target.value})} aria-label="Data do pagamento"/></Field>
+          <Field label="Valor pago (R$)"><Input type="number" step="0.01" value={baixa.valor} onChange={e=>setBaixa({...baixa,valor:e.target.value})} className="w-32" aria-label="Valor pago"/></Field>
+        </> : <div className="w-full flex flex-wrap gap-2">{(baixa.parcelas||[]).map((p,i)=><div key={i} className="flex items-end gap-1.5 p-2 rounded-xl bg-white border border-emerald-100" aria-label={"Parcela "+(i+1)}>
+            <span className="text-xs font-bold text-emerald-700 pb-2.5">{i+1}ª</span>
+            <Field label="Data"><Input type="date" value={p.data} aria-label={"Data parcela "+(i+1)} onChange={e=>setBaixa(b=>({...b,parcelas:b.parcelas.map((x,j)=>j===i?{...x,data:e.target.value}:x)}))}/></Field>
+            <Field label="Valor (R$)"><Input type="number" step="0.01" value={p.valor} className="w-28" aria-label={"Valor parcela "+(i+1)} onChange={e=>setBaixa(b=>({...b,parcelas:b.parcelas.map((x,j)=>j===i?{...x,valor:e.target.value}:x)}))}/></Field></div>)}</div>}
         <Field label="Forma"><Select value={baixa.forma||"Pix"} onChange={e=>setBaixa({...baixa,forma:e.target.value})} aria-label="Forma de pagamento">{FORMAS_PAG.map(f=><option key={f}>{f}</option>)}</Select></Field>
-        {r2(l.saldo-r2(baixa.valor))>0.009 && <span className="text-xs text-amber-700 pb-2">vai faltar <b>{fmtBRL(r2(l.saldo-r2(baixa.valor)))}</b></span>}
+        {(()=>{ const tot=(baixa.n||1)>1?r2((baixa.parcelas||[]).reduce((s2,p)=>s2+(Number(p.valor)||0),0)):r2(baixa.valor); const f=r2(l.saldo-tot);
+          return <span className="text-xs pb-2">{(baixa.n||1)>1 && <span className="text-slate-600">total <b>{fmtBRL(tot)}</b> · </span>}{f>0.009?<span className="text-amber-700">vai faltar <b>{fmtBRL(f)}</b></span>:f< -0.009?<span className="text-violet-700">pago a mais <b>{fmtBRL(-f)}</b></span>:<span className="text-emerald-700">quita o valor</span>}</span>; })()}
         <div className="flex-1 min-w-[160px]"><Field label="Observação"><Input value={baixa.obs} onChange={e=>setBaixa({...baixa,obs:e.target.value})} placeholder="Ex.: Pix, transferência"/></Field></div>
         <Btn icon={I.check} onClick={()=>confirmarBaixa(l)}>Confirmar baixa</Btn><Btn variant="ghost" onClick={()=>setBaixa(null)}>Cancelar</Btn>
       </div></td></tr> : null];
@@ -4330,7 +4351,7 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
             <td className={cx(td,"text-emerald-600")}>{l.pago?fmtBRL(l.pago):"—"}</td>
             <td className="px-3 py-2 text-xs" aria-label={"Situação VT "+l.nome}><Badge tone={l.aMais>0?"violet":l.saldo>0.009?(l.pago>0?"amber":"blue"):"green"}>{sitTxt(l)}</Badge></td>
             <td className="px-3 py-2 text-xs">{l.venc?fmtDataBR(l.venc):"—"}</td>
-            <td className="px-3 py-2 text-right">{l.saldo>0.009 && <Btn size="sm" icon={I.check} onClick={()=>setBaixa({k:l.k,data:hoje,valor:l.saldo,obs:"",forma:"Dinheiro"})}>Dar baixa</Btn>}</td>
+            <td className="px-3 py-2 text-right">{l.saldo>0.009 && <Btn size="sm" icon={I.check} onClick={()=>abrirBaixa(l)}>Dar baixa</Btn>}</td>
           </tr>,
           ab && <tr key={l.k+"-pq"} className="bg-slate-50/70"><td/><td colSpan={11} className="px-3 py-3 text-xs text-slate-700" aria-label={"Por que VT "+l.nome}>
             <div className="font-bold text-slate-800 mb-1">Por que este valor</div>
