@@ -1883,7 +1883,8 @@ function LoginScreen({ onLogin }) {
 
 /* ============================ DASHBOARD ============================ */
 // ===== Alertas de RH: exame periódico (6 meses), pagamento da rescisão (10 dias) e fim do contrato de experiência =====
-const EXPERIENCIA={ "45+45":{l:"45 + 45 dias",p:[45,90]}, "30+60":{l:"30 + 60 dias",p:[30,90]}, "60+30":{l:"60 + 30 dias",p:[60,90]}, "90":{l:"90 dias direto",p:[90]}, "sem":{l:"Sem experiência",p:[]} };
+const EXPERIENCIA={ "45+45":{l:"45 + 45 dias",p:[45,90]}, "30+60":{l:"30 + 60 dias",p:[30,90]}, "60+30":{l:"60 + 30 dias",p:[60,90]}, "90":{l:"90 dias direto",p:[90]},
+  "180":{l:"Prazo determinado — 180 dias",p:[180],aviso:15,determinado:true}, "sem":{l:"Sem experiência",p:[]} };
 const MESES_PERIODICO=6;
 const somaDiasStr=(ds,n)=>ymd(addDias(new Date(ds+"T12:00:00"),n));
 const diasAte=(ds)=>Math.round((_diaNum(ds)-_diaNum(hojeStr())));
@@ -1909,8 +1910,9 @@ function alertasRHDe(clts, pagamentosCLT){
       if(ex.p.length>1 && !dec.p1){ const f1=fimP(ex.p[0]); const d1=diasAte(f1);
         if(d1<=10 && d1>=0) out.push({k:"exp1-"+c.id, tipo:"experiencia", fase:"p1", c, nome, data:f1, dias:d1, titulo:"1º período de experiência de "+nome, detalhe:"Termina "+fmtDataBR(f1)+" ("+ex.l+") · decidir: prorrogar até "+fmtDataBR(fimP(ult))+", efetivar ou não seguir"}); }
       const f2=fimP(ult); const d2=diasAte(f2);
-      if(d2<=10 && d2>=-15 && (ex.p.length===1 || dec.p1 || diasAte(fimP(ex.p[0]))<0)) out.push({k:"exp2-"+c.id, tipo:"experiencia", fase:"final", c, nome, data:f2, dias:d2,
-        titulo:"Fim da experiência de "+nome, detalhe:(d2<0?"Terminou "+fmtDataBR(f2)+" — sem decisão, o contrato passa a ser por prazo indeterminado":"Termina "+fmtDataBR(f2))+" · efetivar ou não seguir"}); }
+      if(d2<=(ex.aviso||10) && d2>=-15 && (ex.p.length===1 || dec.p1 || diasAte(fimP(ex.p[0]))<0)) out.push({k:"exp2-"+c.id, tipo:"experiencia", fase:"final", determinado:!!ex.determinado, c, nome, data:f2, dias:d2,
+        titulo:(ex.determinado?"Fim do contrato de 180 dias de ":"Fim da experiência de ")+nome,
+        detalhe:(d2<0?"Terminou "+fmtDataBR(f2)+" — sem decisão, segue registrado por prazo indeterminado":"Início "+fmtDataBR(c.admissao)+" · termina "+fmtDataBR(f2))+(ex.determinado?" · decidir: continuar registrado ou encerrar no término":" · efetivar ou não seguir")}); }
   });
   return out.sort((a,b)=>a.data.localeCompare(b.data)); }
 const ROT_ALERTA={ exame:["Exame periódico","blue"], rescisao:["Rescisão","red"], experiencia:["Experiência","amber"] };
@@ -1921,7 +1923,7 @@ function ListaAlertasRH({alertas, onIr, compacto}){
     salvarClt({...a.c, ultimoExame:iso, examesHist:[...((a.c.examesHist)||[]), {data:iso, tipo:"periodico", em:Date.now()}]}); toast("Exame de "+a.nome.split(" ")[0]+" registrado — próximo em "+fmtDataBR(_addMeses(iso,MESES_PERIODICO))); };
   const pagaResc=(a)=>{ salvarClt({...a.c, demissao:{...a.c.demissao, pagoEm:hojeStr()}}); toast("Rescisão de "+a.nome.split(" ")[0]+" marcada como paga"); };
   const decidir=(a,campo,val,msg)=>{ salvarClt({...a.c, experienciaDecisao:{...(a.c.experienciaDecisao||{}), [campo]:val, em:Date.now()}}); toast(msg); };
-  const naoSeguir=(a)=>{ window.__wpAbrirDemissao=a.c.id; onIr&&onIr("clt"); };
+  const naoSeguir=(a)=>{ window.__wpAbrirDemissao={id:a.c.id, data:a.data>hojeStr()?a.data:hojeStr(), tipo:"termino"}; onIr&&onIr("clt"); };
   if(!alertas.length) return <div className="p-4 text-sm text-slate-400 text-center">Nenhum alerta de RH agora. 👍</div>;
   return <div className="divide-y divide-slate-100">{alertas.map(a=>{ const [rot,tone]=ROT_ALERTA[a.tipo];
     return <div key={a.k} className="py-2.5 px-1" aria-label={"Alerta "+a.k}>
@@ -1933,8 +1935,8 @@ function ListaAlertasRH({alertas, onIr, compacto}){
         {a.tipo==="rescisao" && <><Btn size="sm" variant="soft" icon={I.wallet} onClick={()=>onIr&&onIr("pagamentos")}>Ir para Pagamentos</Btn><Btn size="sm" variant="ghost" icon={I.check} onClick={()=>pagaResc(a)}>Já paguei</Btn></>}
         {a.tipo==="experiencia" && <>
           {a.fase==="p1" && <Btn size="sm" variant="soft" onClick={()=>decidir(a,"p1","prorrogado","Experiência de "+a.nome.split(" ")[0]+" prorrogada")}>Prorrogar</Btn>}
-          <Btn size="sm" variant="soft" icon={I.check} onClick={()=>decidir(a,"final","efetivado",a.nome.split(" ")[0]+" efetivado(a) — contrato por prazo indeterminado")}>Efetivar</Btn>
-          <Btn size="sm" variant="ghost" className="text-rose-600" icon={I.logout} onClick={()=>naoSeguir(a)}>Não seguir (demitir)</Btn></>}
+          <Btn size="sm" variant="soft" icon={I.check} onClick={()=>decidir(a,"final","efetivado",a.nome.split(" ")[0]+" efetivado(a) — contrato por prazo indeterminado")}>{a.determinado?"Continuar registrado":"Efetivar"}</Btn>
+          <Btn size="sm" variant="ghost" className="text-rose-600" icon={I.logout} onClick={()=>naoSeguir(a)}>{a.determinado?"Encerrar no término":"Não seguir (demitir)"}</Btn></>}
       </div></div>; })}</div>; }
 function SinoAlertas({ajustesPend, irPara}){
   const { clts, pagamentosCLT } = useStore(); const [aberto,setAberto]=useState(false);
@@ -2021,7 +2023,7 @@ function nomePJEscala(p){ const limpa=(t)=>nomeBonito(String(t||"").replace(/^[\
 const fundoFolga=(cores)=>{ cores=[...new Set(cores)]; if(!cores.length) return null; if(cores.length===1) return cores[0]; const st=cores.map((c,i)=>`${c} ${Math.round(i*100/cores.length)}% ${Math.round((i+1)*100/cores.length)}%`).join(","); return `linear-gradient(135deg,${st})`; };
 const GRUPOS_TURNO=[["manha","Manhã","☀️"],["tarde","Tarde","🌤️"],["noite","Noite","🌙"]];
 // Desligamento (CLT / Freela Fixo / Confiança): demissão com data, tipo e motivo · admissão cancelada
-const TIPOS_DEMISSAO={ pedido:"Pedido de demissão", semjusta:"Sem justa causa (dispensa)", justa:"Justa causa" };
+const TIPOS_DEMISSAO={ pedido:"Pedido de demissão", semjusta:"Sem justa causa (dispensa)", justa:"Justa causa", termino:"Término do contrato (experiência / prazo determinado)" };
 const desligadoDe=(c)=> !!(c && (c.admissaoCancelada || (c.demissao && c.fimContrato && c.fimContrato<hojeStr())));
 const rotuloDeslig=(c)=> c.admissaoCancelada ? "Admissão cancelada"
   : c.demissao ? ("Demitido em "+fmtDataBR(c.demissao.data)+(c.demissao.tipo&&TIPOS_DEMISSAO[c.demissao.tipo]?" · "+TIPOS_DEMISSAO[c.demissao.tipo]:"")) : "";
@@ -3172,7 +3174,7 @@ function ColabForm({ tipo, inicial, onSalvar, onClose, vinculo }) {
         <Field label="Admissão / início na escala"><Input type="date" value={f.admissao} onChange={e=>set("admissao",e.target.value)}/></Field>
         <Field label="Válido até (fim do contrato, opcional)"><Input type="date" value={f.fimContrato||""} onChange={e=>set("fimContrato",e.target.value)}/></Field>
         {!ehFixo && <Field label="Contrato de experiência"><Select aria-label="Contrato de experiência" value={f.experiencia||"45+45"} onChange={e=>set("experiencia",e.target.value)}>{Object.entries(EXPERIENCIA).map(([k,v])=><option key={k} value={k}>{v.l}</option>)}</Select>
-          {f.admissao && (EXPERIENCIA[f.experiencia||"45+45"]||{p:[]}).p.length>0 && <span className="block text-[11px] text-slate-500 mt-1 normal-case font-normal tracking-normal">Termina {(EXPERIENCIA[f.experiencia||"45+45"].p).map(n=>fmtDataBR(somaDiasStr(f.admissao,n-1))).join(" e ")} · alerta 10 dias antes</span>}</Field>}
+          {f.admissao && (EXPERIENCIA[f.experiencia||"45+45"]||{p:[]}).p.length>0 && <span className="block text-[11px] text-slate-500 mt-1 normal-case font-normal tracking-normal">Termina {(EXPERIENCIA[f.experiencia||"45+45"].p).map(n=>fmtDataBR(somaDiasStr(f.admissao,n-1))).join(" e ")} · alerta {EXPERIENCIA[f.experiencia||"45+45"].aviso||10} dias antes</span>}</Field>}
         {!ehFixo && <Field label="Último exame médico (ASO)"><Input type="date" aria-label="Último exame médico" value={f.ultimoExame||""} onChange={e=>set("ultimoExame",e.target.value)}/>
           <span className="block text-[11px] text-slate-500 mt-1 normal-case font-normal tracking-normal">{(f.ultimoExame||f.admissao)?"Periódico vence "+fmtDataBR(_addMeses(f.ultimoExame||f.admissao,MESES_PERIODICO))+(f.ultimoExame?"":" (sem exame: conta da admissão)"):"Em branco = conta da admissão"}</span></Field>}
         {f.origem==="convite" && !f.admissao && <div className="sm:col-span-2 p-3 rounded-xl bg-amber-50 text-amber-800 text-sm flex items-start gap-2"><Icon d={I.calendar} className="w-4 h-4 mt-0.5 shrink-0"/><span>Cadastro recebido pelo convite. <b>Defina a data de admissão</b>: a pessoa só entra na escala (e só consegue bater ponto) a partir dessa data.</span></div>}
@@ -3267,7 +3269,7 @@ function ColaboradoresCLT() {
   const [demitir,setDemitir]=useState(null);     // {c, data, tipo, motivo}
   const [cancAdm,setCancAdm]=useState(null);     // {c, motivo}
   const [verDeslig,setVerDeslig]=useState(false);
-  useEffect(()=>{ const id=window.__wpAbrirDemissao; if(id==null) return; window.__wpAbrirDemissao=null; const c=clts.find(x=>String(x.id)===String(id)); if(c) setDemitir({c,data:hojeStr(),tipo:"",motivo:""}); },[]); // eslint-disable-line
+  useEffect(()=>{ const r=window.__wpAbrirDemissao; if(r==null) return; window.__wpAbrirDemissao=null; const o=typeof r==="object"?r:{id:r}; const c=clts.find(x=>String(x.id)===String(o.id)); if(c) setDemitir({c,data:o.data||hojeStr(),tipo:c.vinculo==="fixo"?"":(o.tipo||""),motivo:o.tipo==="termino"?"Término do contrato — não vamos seguir":""}); },[]); // eslint-disable-line
   const ehFixo=(c)=>c.vinculo==="fixo";
   const ehConf=(c)=>c.vinculo==="confianca";
   const casaOk=(c)=> casa==="todas" || c.unidade===casa || (ehConf(c)&&(c.unidade==="todas"||c.unidade==null));
@@ -3282,7 +3284,7 @@ function ColaboradoresCLT() {
     if(precisaTipo && !d.tipo){ toast("Escolha o tipo: pedido de demissão, sem justa causa ou justa causa"); return; }
     if(!String(d.motivo||"").trim()){ toast("Explique o motivo da demissão"); return; }
     const reg={ data:d.data, motivo:String(d.motivo).trim(), registradoEm:Date.now() }; if(precisaTipo){ reg.tipo=d.tipo;
-      if(d.tipo!=="justa") reg.aviso=d.aviso||(d.tipo==="semjusta"?"indenizado":"dispensado"); reg.feriasVencidas=Math.max(0,Math.floor(Number(d.feriasVencidas)||0)); }
+      if(d.tipo==="semjusta"||d.tipo==="pedido") reg.aviso=d.aviso||(d.tipo==="semjusta"?"indenizado":"dispensado"); reg.feriasVencidas=Math.max(0,Math.floor(Number(d.feriasVencidas)||0)); }
     salvarClt({...c, fimContrato:d.data, demissao:reg, fimAntesDemissao:c.fimContrato||""});
     setDemitir(null); setPasta(null); toast(c.nome.split(" ")[0]+" demitido(a) — último dia "+fmtDataBR(d.data)+". Os dias até essa data continuam na folha do mês."); };
   const desfazerDemissao=(c)=>{ if(!confirm("Desfazer a demissão de "+c.nome+"? A pessoa volta a ficar ativa (escala, ponto e folha).")) return;
@@ -3349,7 +3351,7 @@ function ColaboradoresCLT() {
         <p className="text-xs text-slate-500 mb-4">{fixo?"Freela Fixo":ehConf(c)?"Cargo de confiança":"CLT"} · {c.cargo||"—"}{c.admissao?" · admissão "+fmtDataBR(c.admissao):""}. Os dias até o último dia continuam na folha e nos pagamentos do mês; depois disso a pessoa sai da escala e do ponto. O cadastro fica guardado em <b>Desligados</b>.</p>
         <div className="space-y-3">
           <Field label="Último dia de trabalho"><Input type="date" value={demitir.data} onChange={e=>setDemitir({...demitir,data:e.target.value})} aria-label="Último dia de trabalho"/></Field>
-          {!fixo && <Field label="Tipo de demissão"><div className="grid sm:grid-cols-3 gap-2">
+          {!fixo && <Field label="Tipo de demissão"><div className="grid sm:grid-cols-2 gap-2">
             {Object.entries(TIPOS_DEMISSAO).map(([k,l])=><button key={k} type="button" onClick={()=>setDemitir({...demitir,tipo:k})} className={cx("px-3 py-2.5 rounded-xl text-sm font-semibold border transition", demitir.tipo===k?(k==="justa"?"bg-rose-600 text-white border-transparent":"grad-brand text-white border-transparent"):"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>{l}</button>)}
           </div></Field>}
           {!fixo && (demitir.tipo==="semjusta"||demitir.tipo==="pedido") && <Field label="Aviso prévio"><Select aria-label="Aviso prévio" value={demitir.aviso||(demitir.tipo==="semjusta"?"indenizado":"dispensado")} onChange={e=>setDemitir({...demitir,aviso:e.target.value})}>
