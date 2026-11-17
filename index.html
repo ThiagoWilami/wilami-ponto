@@ -1882,6 +1882,79 @@ function LoginScreen({ onLogin }) {
 }
 
 /* ============================ DASHBOARD ============================ */
+// ===== Alertas de RH: exame periódico (6 meses), pagamento da rescisão (10 dias) e fim do contrato de experiência =====
+const EXPERIENCIA={ "45+45":{l:"45 + 45 dias",p:[45,90]}, "30+60":{l:"30 + 60 dias",p:[30,90]}, "60+30":{l:"60 + 30 dias",p:[60,90]}, "90":{l:"90 dias direto",p:[90]}, "sem":{l:"Sem experiência",p:[]} };
+const MESES_PERIODICO=6;
+const somaDiasStr=(ds,n)=>ymd(addDias(new Date(ds+"T12:00:00"),n));
+const diasAte=(ds)=>Math.round((_diaNum(ds)-_diaNum(hojeStr())));
+function alertasRHDe(clts, pagamentosCLT){
+  const hoje=hojeStr(); const out=[];
+  (clts||[]).forEach(c=>{ if(!c||c.admissaoCancelada||c.status==="inativo") return; const nome=c.nome||"";
+    const saiu=!!(c.fimContrato && c.fimContrato<hoje);
+    // 1) rescisão: pagar até 10 dias após o último dia (some quando marcada como paga ou há pagamento de salário depois do desligamento)
+    if(c.demissao && c.demissao.data && !c.demissao.pagoEm && c.vinculo!=="fixo"){
+      const prazo=somaDiasStr(c.demissao.data,10);
+      const pagou=((pagamentosCLT||{})[String(c.id)]||[]).some(p=>p.tipo!=="vt" && p.data && p.data>=c.demissao.data);
+      if(!pagou && diasAte(prazo)>=-30) out.push({k:"resc-"+c.id, tipo:"rescisao", c, nome, data:prazo, dias:diasAte(prazo),
+        titulo:"Pagar rescisão de "+nome, detalhe:"Último dia "+fmtDataBR(c.demissao.data)+(TIPOS_DEMISSAO[c.demissao.tipo]?" · "+TIPOS_DEMISSAO[c.demissao.tipo]:"")+" · prazo "+fmtDataBR(prazo)}); }
+    if(saiu || c.demissao || c.vinculo==="fixo" || !c.admissao) return;
+    // 2) exame periódico: 6 meses após o último exame (sem registro, conta da admissão = ASO admissional)
+    const base=c.ultimoExame||c.admissao; const venc=_addMeses(base,MESES_PERIODICO);
+    if(diasAte(venc)<=30) out.push({k:"exame-"+c.id, tipo:"exame", c, nome, data:venc, dias:diasAte(venc),
+      titulo:"Exame periódico de "+nome, detalhe:(c.ultimoExame?"Último exame "+fmtDataBR(c.ultimoExame):"Sem exame registrado — conta da admissão "+fmtDataBR(c.admissao))+" · vence "+fmtDataBR(venc)});
+    // 3) contrato de experiência: avisa 10 dias antes do fim de cada período
+    const ex=EXPERIENCIA[c.experiencia||"45+45"]||EXPERIENCIA["45+45"]; const dec=c.experienciaDecisao||{};
+    if(!dec.final && ex.p.length){ const fimP=(n)=>somaDiasStr(c.admissao,n-1);
+      const ult=ex.p[ex.p.length-1];
+      if(ex.p.length>1 && !dec.p1){ const f1=fimP(ex.p[0]); const d1=diasAte(f1);
+        if(d1<=10 && d1>=0) out.push({k:"exp1-"+c.id, tipo:"experiencia", fase:"p1", c, nome, data:f1, dias:d1, titulo:"1º período de experiência de "+nome, detalhe:"Termina "+fmtDataBR(f1)+" ("+ex.l+") · decidir: prorrogar até "+fmtDataBR(fimP(ult))+", efetivar ou não seguir"}); }
+      const f2=fimP(ult); const d2=diasAte(f2);
+      if(d2<=10 && d2>=-15 && (ex.p.length===1 || dec.p1 || diasAte(fimP(ex.p[0]))<0)) out.push({k:"exp2-"+c.id, tipo:"experiencia", fase:"final", c, nome, data:f2, dias:d2,
+        titulo:"Fim da experiência de "+nome, detalhe:(d2<0?"Terminou "+fmtDataBR(f2)+" — sem decisão, o contrato passa a ser por prazo indeterminado":"Termina "+fmtDataBR(f2))+" · efetivar ou não seguir"}); }
+  });
+  return out.sort((a,b)=>a.data.localeCompare(b.data)); }
+const ROT_ALERTA={ exame:["Exame periódico","blue"], rescisao:["Rescisão","red"], experiencia:["Experiência","amber"] };
+function ListaAlertasRH({alertas, onIr, compacto}){
+  const { salvarClt } = useStore(); const toast=useContext(ToastCtx);
+  const quando=(a)=> a.dias<0 ? "vencido há "+(-a.dias)+" dia(s)" : a.dias===0 ? "vence hoje" : "em "+a.dias+" dia(s)";
+  const regExame=(a)=>{ const v=window.prompt("Data do exame feito (dd/mm/aaaa):", fmtDataBR(hojeStr())); if(!v) return; const iso=isoDeBR(v); if(!iso){ alert("Data inválida. Use dd/mm/aaaa."); return; }
+    salvarClt({...a.c, ultimoExame:iso, examesHist:[...((a.c.examesHist)||[]), {data:iso, tipo:"periodico", em:Date.now()}]}); toast("Exame de "+a.nome.split(" ")[0]+" registrado — próximo em "+fmtDataBR(_addMeses(iso,MESES_PERIODICO))); };
+  const pagaResc=(a)=>{ salvarClt({...a.c, demissao:{...a.c.demissao, pagoEm:hojeStr()}}); toast("Rescisão de "+a.nome.split(" ")[0]+" marcada como paga"); };
+  const decidir=(a,campo,val,msg)=>{ salvarClt({...a.c, experienciaDecisao:{...(a.c.experienciaDecisao||{}), [campo]:val, em:Date.now()}}); toast(msg); };
+  const naoSeguir=(a)=>{ window.__wpAbrirDemissao=a.c.id; onIr&&onIr("clt"); };
+  if(!alertas.length) return <div className="p-4 text-sm text-slate-400 text-center">Nenhum alerta de RH agora. 👍</div>;
+  return <div className="divide-y divide-slate-100">{alertas.map(a=>{ const [rot,tone]=ROT_ALERTA[a.tipo];
+    return <div key={a.k} className="py-2.5 px-1" aria-label={"Alerta "+a.k}>
+      <div className="flex items-start gap-2"><Badge tone={tone}>{rot}</Badge><div className="flex-1 min-w-0">
+        <div className="text-sm font-semibold text-slate-800">{a.titulo} <span className={cx("text-xs font-semibold", a.dias<0?"text-rose-600":a.dias<=3?"text-amber-600":"text-slate-400")}>· {quando(a)}</span></div>
+        {!compacto && <div className="text-xs text-slate-500">{a.detalhe}</div>}</div></div>
+      <div className="flex flex-wrap gap-1.5 mt-1.5 pl-1">
+        {a.tipo==="exame" && <Btn size="sm" variant="soft" icon={I.check} onClick={()=>regExame(a)}>Registrar exame feito</Btn>}
+        {a.tipo==="rescisao" && <><Btn size="sm" variant="soft" icon={I.wallet} onClick={()=>onIr&&onIr("pagamentos")}>Ir para Pagamentos</Btn><Btn size="sm" variant="ghost" icon={I.check} onClick={()=>pagaResc(a)}>Já paguei</Btn></>}
+        {a.tipo==="experiencia" && <>
+          {a.fase==="p1" && <Btn size="sm" variant="soft" onClick={()=>decidir(a,"p1","prorrogado","Experiência de "+a.nome.split(" ")[0]+" prorrogada")}>Prorrogar</Btn>}
+          <Btn size="sm" variant="soft" icon={I.check} onClick={()=>decidir(a,"final","efetivado",a.nome.split(" ")[0]+" efetivado(a) — contrato por prazo indeterminado")}>Efetivar</Btn>
+          <Btn size="sm" variant="ghost" className="text-rose-600" icon={I.logout} onClick={()=>naoSeguir(a)}>Não seguir (demitir)</Btn></>}
+      </div></div>; })}</div>; }
+function SinoAlertas({ajustesPend, irPara}){
+  const { clts, pagamentosCLT } = useStore(); const [aberto,setAberto]=useState(false);
+  const alertas=useMemo(()=>alertasRHDe(clts,pagamentosCLT),[clts,pagamentosCLT]);
+  const total=ajustesPend+alertas.length;
+  const ir=(v)=>{ setAberto(false); irPara(v); };
+  return <div className="relative">
+    <button onClick={()=>setAberto(o=>!o)} aria-label="Notificações" title={total?total+" notificação(ões)":"Sem pendências"} className="relative w-9 h-9 rounded-xl bg-white border border-slate-200 grid place-items-center text-slate-500 hover:bg-slate-50"><Icon d={I.bell} className="w-4 h-4"/>{total>0 && <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold grid place-items-center">{total}</span>}</button>
+    {aberto && <><div className="fixed inset-0 z-30" onClick={()=>setAberto(false)}/>
+      <div className="absolute right-0 mt-2 z-40 w-[min(92vw,420px)] max-h-[75vh] overflow-auto bg-white rounded-2xl shadow-2xl border border-slate-200 p-3" role="dialog" aria-label="Painel de notificações">
+        <div className="font-bold text-slate-900 mb-1">Notificações</div>
+        <button onClick={()=>ir("ajustes")} className="w-full flex items-center gap-2 p-2 rounded-xl hover:bg-slate-50 text-left"><Icon d={I.edit} className="w-4 h-4 text-amber-600"/><span className="flex-1 text-sm text-slate-700">{ajustesPend?<><b>{ajustesPend}</b> ajuste(s) de ponto aguardando aprovação</>:"Nenhum ajuste de ponto pendente"}</span><Icon d={I.arrow} className="w-3.5 h-3.5 text-slate-400"/></button>
+        <div className="text-[11px] font-bold text-slate-400 uppercase mt-2 px-1">Alertas de RH ({alertas.length})</div>
+        <ListaAlertasRH alertas={alertas} onIr={ir}/>
+      </div></>}
+  </div>; }
+function CardAlertasRH({go}){ const { clts, pagamentosCLT } = useStore(); const alertas=useMemo(()=>alertasRHDe(clts,pagamentosCLT),[clts,pagamentosCLT]);
+  return <Card className="p-4 mb-4" aria-label="Alertas de RH"><div className="flex items-center gap-2 mb-1"><Icon d={I.bell} className="w-4 h-4 text-rose-500"/><h3 className="font-bold text-slate-900">Alertas de RH</h3>
+    <span className="text-xs text-slate-400">exame periódico (6 meses) · rescisão (10 dias) · fim da experiência</span></div>
+    <ListaAlertasRH alertas={alertas} onIr={go}/></Card>; }
 function Dashboard({go}) {
   const { clts, freelas, registros, unidades } = useStore();
   const semana=[{l:"S",v:38},{l:"T",v:42},{l:"Q",v:40},{l:"Q",v:45,hl:true},{l:"S",v:52,hl:true},{l:"S",v:60,hl:true},{l:"D",v:28}];
@@ -1893,6 +1966,7 @@ function Dashboard({go}) {
       <Btn variant="ghost" icon={I.download}>Exportar</Btn>
       <Btn icon={I.broadcast} onClick={()=>go("ponto")}>Ponto ao vivo</Btn>
     </PageHeader>
+    <CardAlertasRH go={go}/>
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
       <StatCard icon={I.user} label="Colaboradores CLT" value={cltAtivos} tone="brand" onClick={()=>go("clt")}/>
       <StatCard icon={I.coffee} label="Freelancers" value={freelas.length} tone="free" onClick={()=>go("freelas")}/>
@@ -3097,6 +3171,10 @@ function ColabForm({ tipo, inicial, onSalvar, onClose, vinculo }) {
         </Field></div>
         <Field label="Admissão / início na escala"><Input type="date" value={f.admissao} onChange={e=>set("admissao",e.target.value)}/></Field>
         <Field label="Válido até (fim do contrato, opcional)"><Input type="date" value={f.fimContrato||""} onChange={e=>set("fimContrato",e.target.value)}/></Field>
+        {!ehFixo && <Field label="Contrato de experiência"><Select aria-label="Contrato de experiência" value={f.experiencia||"45+45"} onChange={e=>set("experiencia",e.target.value)}>{Object.entries(EXPERIENCIA).map(([k,v])=><option key={k} value={k}>{v.l}</option>)}</Select>
+          {f.admissao && (EXPERIENCIA[f.experiencia||"45+45"]||{p:[]}).p.length>0 && <span className="block text-[11px] text-slate-500 mt-1 normal-case font-normal tracking-normal">Termina {(EXPERIENCIA[f.experiencia||"45+45"].p).map(n=>fmtDataBR(somaDiasStr(f.admissao,n-1))).join(" e ")} · alerta 10 dias antes</span>}</Field>}
+        {!ehFixo && <Field label="Último exame médico (ASO)"><Input type="date" aria-label="Último exame médico" value={f.ultimoExame||""} onChange={e=>set("ultimoExame",e.target.value)}/>
+          <span className="block text-[11px] text-slate-500 mt-1 normal-case font-normal tracking-normal">{(f.ultimoExame||f.admissao)?"Periódico vence "+fmtDataBR(_addMeses(f.ultimoExame||f.admissao,MESES_PERIODICO))+(f.ultimoExame?"":" (sem exame: conta da admissão)"):"Em branco = conta da admissão"}</span></Field>}
         {f.origem==="convite" && !f.admissao && <div className="sm:col-span-2 p-3 rounded-xl bg-amber-50 text-amber-800 text-sm flex items-start gap-2"><Icon d={I.calendar} className="w-4 h-4 mt-0.5 shrink-0"/><span>Cadastro recebido pelo convite. <b>Defina a data de admissão</b>: a pessoa só entra na escala (e só consegue bater ponto) a partir dessa data.</span></div>}
         <Field label="Salário mensal (R$)"><Input type="number" value={f.salario||0} onChange={e=>set("salario",Number(e.target.value))} placeholder="Ex.: 2200"/></Field>
         <Field label="Salário combinado c/ Diretoria (R$)"><Input type="number" value={f.salarioCombinado||""} onChange={e=>set("salarioCombinado",Number(e.target.value)||0)} placeholder="Ex.: 3500 (opcional)"/>
@@ -3189,6 +3267,7 @@ function ColaboradoresCLT() {
   const [demitir,setDemitir]=useState(null);     // {c, data, tipo, motivo}
   const [cancAdm,setCancAdm]=useState(null);     // {c, motivo}
   const [verDeslig,setVerDeslig]=useState(false);
+  useEffect(()=>{ const id=window.__wpAbrirDemissao; if(id==null) return; window.__wpAbrirDemissao=null; const c=clts.find(x=>String(x.id)===String(id)); if(c) setDemitir({c,data:hojeStr(),tipo:"",motivo:""}); },[]); // eslint-disable-line
   const ehFixo=(c)=>c.vinculo==="fixo";
   const ehConf=(c)=>c.vinculo==="confianca";
   const casaOk=(c)=> casa==="todas" || c.unidade===casa || (ehConf(c)&&(c.unidade==="todas"||c.unidade==null));
@@ -9980,7 +10059,7 @@ function Shell({ onLogout }) {
           <div className="lg:hidden"><Logo size="text-base"/></div>
           <div className="hidden lg:flex items-center gap-2 text-sm text-slate-400"><Icon d={(NAV.flatMap(g=>g.items).find(it=>it.k===view)||{}).d||I.grid} className="w-4 h-4 text-brand-600"/><span>{(NAV.find(g=>g.items.some(it=>it.k===view))||{}).sec}</span><span>/</span><span className="text-slate-700 font-semibold">{TITULOS[view]}</span></div>
           <div className="ml-auto flex items-center gap-2">
-            {!abaRestrita && <button onClick={()=>setView("ajustes")} title={ajustesPend?ajustesPend+" ajuste(s) de ponto aguardando aprovação":"Sem pendências"} className="relative w-9 h-9 rounded-xl bg-white border border-slate-200 grid place-items-center text-slate-500 hover:bg-slate-50"><Icon d={I.bell} className="w-4 h-4"/>{ajustesPend>0 && <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold grid place-items-center">{ajustesPend}</span>}</button>}
+            {!abaRestrita && <SinoAlertas ajustesPend={ajustesPend} irPara={setView}/>}
           </div>
         </header>
         <main className="flex-1 px-4 lg:px-8 py-5"><ErroTela chave={view} onVoltar={()=>setView("dashboard")}>{views[view]}</ErroTela></main>
