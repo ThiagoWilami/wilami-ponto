@@ -735,19 +735,19 @@ function calcRescisao(c, salarioMes){
   const anosServ=avosFerias(adm,d.data).anos;
   const diasAviso=(!fimDet&&tipo==="semjusta"&&aviso==="indenizado") ? Math.min(90,30+3*anosServ) : 0;
   const fimProj=diasAviso? ymd(addDias(new Date(d.data+"T12:00:00"),diasAviso)) : d.data;
-  const r2=(v)=>Math.round(v*100)/100; const itens=[];
-  if(diasAviso) itens.push({k:"aviso", rot:"Aviso prévio indenizado", ref:diasAviso+" dias", valor:r2(salarioMes/30*diasAviso)});
+  const r2=(v)=>Math.round(v*100)/100; const itens=[]; const S=fmtBRL(salarioMes);
+  if(diasAviso) itens.push({k:"aviso", rot:"Aviso prévio indenizado", ref:diasAviso+" dias", valor:r2(salarioMes/30*diasAviso), calc:S+" ÷ 30 × "+diasAviso+" dias (30 + 3 por ano completo: "+anosServ+" ano(s))"});
   const ind479=fimDet ? r2(salarioMes/30*diasRest/2) : 0;
-  if(fimDet && tipo==="semjusta" && ind479>0) itens.push({k:"art479", rot:"Indenização art. 479 CLT (metade dos dias restantes)", ref:diasRest+" dias ÷ 2 · contrato até "+fmtDataBR(fimDet), valor:ind479});
-  if(tipo!=="justa"){ const a13=avos13(adm,fimProj); if(a13>0) itens.push({k:"13", rot:"13º salário proporcional", ref:a13+"/12", valor:r2(salarioMes/12*a13)}); }
+  if(fimDet && tipo==="semjusta" && ind479>0) itens.push({k:"art479", rot:"Indenização art. 479 CLT (metade dos dias restantes)", ref:diasRest+" dias ÷ 2 · contrato até "+fmtDataBR(fimDet), valor:ind479, calc:S+" ÷ 30 × "+diasRest+" dias que faltavam (de "+fmtDataBR(d.data)+" a "+fmtDataBR(fimDet)+") ÷ 2"});
+  if(tipo!=="justa"){ const a13=avos13(adm,fimProj); if(a13>0) itens.push({k:"13", rot:"13º salário proporcional", ref:a13+"/12", valor:r2(salarioMes/12*a13), calc:S+" ÷ 12 × "+a13+" mês(es) de "+fimProj.slice(0,4)+" com 15 dias ou mais"+(diasAviso?" (conta o aviso até "+fmtDataBR(fimProj)+")":"")}); }
   const vencidas=Math.max(0,Math.floor(Number(d.feriasVencidas)||0));
-  if(vencidas>0){ const v=r2(salarioMes*vencidas); itens.push({k:"fv", rot:"Férias vencidas", ref:vencidas+" período(s)", valor:v}); itens.push({k:"fv3", rot:"1/3 sobre férias vencidas", ref:"", valor:r2(v/3)}); }
-  if(tipo!=="justa"){ const af=avosFerias(adm,fimProj).avos; if(af>0){ const v=r2(salarioMes/12*af); itens.push({k:"fp", rot:"Férias proporcionais", ref:af+"/12", valor:v}); itens.push({k:"fp3", rot:"1/3 sobre férias proporcionais", ref:"", valor:r2(v/3)}); } }
-  const descontos=[]; if(tipo==="pedido"&&aviso==="descontar") descontos.push({k:"avisodesc", rot:"Aviso prévio não cumprido", ref:"30 dias", valor:r2(salarioMes)});
-  if(fimDet && tipo==="pedido" && ind479>0) descontos.push({k:"art480", rot:"Indenização art. 480 CLT (saída antes do fim do contrato)", ref:diasRest+" dias ÷ 2 · contrato até "+fmtDataBR(fimDet), valor:ind479});
+  if(vencidas>0){ const v=r2(salarioMes*vencidas); itens.push({k:"fv", rot:"Férias vencidas", ref:vencidas+" período(s)", valor:v, calc:S+" × "+vencidas+" período(s) não tirado(s)"}); itens.push({k:"fv3", rot:"1/3 sobre férias vencidas", ref:"", valor:r2(v/3), calc:fmtBRL(v)+" ÷ 3"}); }
+  if(tipo!=="justa"){ const af=avosFerias(adm,fimProj).avos; if(af>0){ const v=r2(salarioMes/12*af); itens.push({k:"fp", rot:"Férias proporcionais", ref:af+"/12", valor:v, calc:S+" ÷ 12 × "+af+" mês(es) desde "+fmtDataBR(_addMeses(adm,12*avosFerias(adm,fimProj).anos))+" (fração de 15 dias ou mais conta)"}); itens.push({k:"fp3", rot:"1/3 sobre férias proporcionais", ref:"", valor:r2(v/3), calc:fmtBRL(v)+" ÷ 3"}); } }
+  const descontos=[]; if(tipo==="pedido"&&aviso==="descontar") descontos.push({k:"avisodesc", rot:"Aviso prévio não cumprido", ref:"30 dias", valor:r2(salarioMes), calc:S+" (30 dias)"});
+  if(fimDet && tipo==="pedido" && ind479>0) descontos.push({k:"art480", rot:"Indenização art. 480 CLT (saída antes do fim do contrato)", ref:diasRest+" dias ÷ 2 · contrato até "+fmtDataBR(fimDet), valor:ind479, calc:S+" ÷ 30 × "+diasRest+" dias que faltavam ÷ 2"});
   const prov=r2(itens.reduce((s,x)=>s+x.valor,0)), desc=r2(descontos.reduce((s,x)=>s+x.valor,0));
   const prazo=ymd(addDias(new Date(d.data+"T12:00:00"),10));   // art. 477 §6º: até 10 dias do término
-  return { tipo, aviso, diasAviso, fimProj, fimDet, diasRest, itens, descontos, prov, desc, total:r2(prov-desc), prazo, multaFGTS:tipo==="semjusta", data:d.data }; }
+  return { tipo, aviso, diasAviso, anosServ, salarioMes, adm, fimProj, fimDet, diasRest, feriasVencidas:vencidas, itens, descontos, prov, desc, total:r2(prov-desc), prazo, multaFGTS:tipo==="semjusta", data:d.data }; }
 // Cargo de confiança (sem ponto): salário proporcional aos dias de contrato no mês + rescisão no mês da demissão
 function previstoConf(c, ini, fim){ const sm=Number(c.salario||0); let dc=30, sv=sm;
   if(sm && ini && fim){ const di=(c.admissao&&c.admissao>ini)?c.admissao:ini, df=(c.fimContrato&&c.fimContrato<fim)?c.fimContrato:fim; if(di>df){ dc=0; sv=0; } else if(di!==ini||df!==fim){ dc=Math.min(30,datasEntre(di,df).length); sv=Math.round(sm*dc/30*100)/100; } }
@@ -837,7 +837,7 @@ function calcFolhaLinha(c, ctx){
   let liquido=salario+extrasVal+notVal+dsrReflexo+reposicao-descontos+(rescisao?rescisao.total:0);
   if(rescisao && liquido<0){ // desconto do aviso não cumprido limitado ao que há a receber (não gera saldo negativo)
     const corte=Math.min(-liquido, rescisao.desc); if(corte>0){ let resta=corte; rescisao.descontos=rescisao.descontos.map(x=>{ if((x.k!=="avisodesc"&&x.k!=="art480")||resta<=0) return x; const c2=Math.min(resta,x.valor); resta-=c2; return {...x,valor:Math.round((x.valor-c2)*100)/100,ref:x.ref+" (limitado ao saldo)"}; }); rescisao.desc=Math.round((rescisao.desc-corte)*100)/100; rescisao.total=Math.round((rescisao.prov-rescisao.desc)*100)/100; liquido+=corte; } }
-  return { id:c.id, rescisao, nome:c.nome, foto:c.foto, pix:c.pix, escala:c.escala, salario, vHora, gorjeta, combinado, combinadoMes, recebido, reposicao,
+  return { id:c.id, rescisao, demitidoEm:(c.demissao&&c.demissao.data)||"", nome:c.nome, foto:c.foto, pix:c.pix, escala:c.escala, salario, vHora, gorjeta, combinado, combinadoMes, recebido, reposicao,
     extrasMin, extras100Min, extrasHoras:extrasMin+extras100Min, extrasVal, extrasEditado, notMin, notRelMin, notVal, extSemanal, extNot50Min, extNot100Min,
     he50Val, he100Val, heNotVal, dsrReflexo, diasUteis, diasDSR, dias, cpf:c.cpf||"", cargo:c.cargo||"", admissao:c.admissao||"", unidade:c.unidade, vinculo:c.vinculo||"clt",
     atrasosDatas:atrasosD.map(x=>x.data), atrasosHoras:atrasosD.reduce((s,x)=>s+(Number(x.horas)||0),0), descAtrasos,
@@ -1896,6 +1896,77 @@ function LoginScreen({ onLogin }) {
 }
 
 /* ============================ DASHBOARD ============================ */
+// ===== Rescisão: detalhe com o cálculo de cada verba (usado em Pagamentos, na pasta do colaborador e no simulador) =====
+function DetalheRescisao({r, saldo, vtDesconto, abateVT, titulo}){
+  if(!r) return null; const L=(rot,calc,v,cor,k)=><div key={k} className="py-1.5 flex justify-between gap-3 border-b border-slate-100 last:border-0"><div className="min-w-0"><div className="text-slate-700">{rot}</div>{calc && <div className="text-[11px] text-slate-400">{calc}</div>}</div><div className={cx("tabular-nums whitespace-nowrap font-semibold",cor)}>{v}</div></div>;
+  const total=Math.round(((saldo?saldo.valor:0)+r.total-(vtDesconto||0)-(abateVT||0))*100)/100;
+  return <div className="text-sm" aria-label="Cálculo da rescisão">
+    <div className="text-[11px] font-bold text-rose-600 uppercase mb-1">{titulo||"Rescisão"} · {TIPOS_DEMISSAO[r.tipo]||""}{r.aviso&&AVISO_DEMISSAO[r.aviso]?" · "+AVISO_DEMISSAO[r.aviso]:""} · último dia {fmtDataBR(r.data)}</div>
+    <div className="text-[11px] text-slate-500 mb-1">Salário base {fmtBRL(r.salarioMes)} · admissão {fmtDataBR(r.adm)} · {r.anosServ} ano(s) completo(s){r.fimDet?" · contrato por prazo até "+fmtDataBR(r.fimDet):""}</div>
+    {saldo && L("Saldo de salário",saldo.calc,"+"+fmtBRL(saldo.valor),"text-emerald-600","saldo")}
+    {r.itens.map(x=>L(x.rot+(x.ref?" ("+x.ref+")":""),x.calc,"+"+fmtBRL(x.valor),"text-emerald-600",x.k))}
+    {vtDesconto>0 && L("Desconto VT 6%","6% do saldo de salário, limitado ao VT do mês","-"+fmtBRL(vtDesconto),"text-rose-600","vt")}
+    {r.descontos.map(x=>L(x.rot+(x.ref?" ("+x.ref+")":""),x.calc,"-"+fmtBRL(x.valor),"text-rose-600",x.k))}
+    {abateVT>0 && L("VT pago a mais (adiantado para dias depois da saída)","","-"+fmtBRL(abateVT),"text-rose-600","abvt")}
+    {saldo && <div className="flex justify-between font-bold pt-1.5 text-slate-900"><span>Total a pagar ao colaborador</span><span className="tabular-nums">{fmtBRL(total)}</span></div>}
+    <div className="text-[11px] text-slate-400 mt-1">Pagar até {fmtDataBR(r.prazo)} (10 dias, art. 477).{r.multaFGTS?" Multa de 40% do FGTS: recolher em guia (GRRF), fora deste valor.":""} Avos: mês com 15 dias ou mais conta 1/12. Valores brutos — INSS/IRRF com a contabilidade.</div>
+  </div>; }
+function SimuladorRescisao({go}){
+  const { clts } = useStore();
+  const lista=(clts||[]).filter(c=>!c.admissaoCancelada && c.vinculo!=="fixo" && Number(c.salario)>0).sort((a,b)=>String(a.nome).localeCompare(String(b.nome)));
+  const [pid,setPid]=useState(""); const [man,setMan]=useState({salario:"",admissao:"",experiencia:"sem"});
+  const [d,setD]=useState({data:hojeStr(), tipo:"semjusta", aviso:"", feriasVencidas:0, saldoFGTS:""});
+  const p=pid?lista.find(c=>String(c.id)===String(pid)):null;
+  const base=p ? {...p} : {id:"sim", nome:"Simulação", salario:Number(man.salario)||0, admissao:man.admissao, experiencia:man.experiencia};
+  const sal=Number(base.salario)||0;
+  const c={...base, demissao:{data:d.data, tipo:d.tipo, aviso:d.aviso||undefined, feriasVencidas:d.feriasVencidas}};
+  const r=(sal>0 && base.admissao && d.data && d.data>=base.admissao) ? calcRescisao(c,sal) : null;
+  const fimDet=(d.tipo==="semjusta"||d.tipo==="pedido")&&base.admissao&&d.data ? fimPrazoDeterminado(c,d.data) : null;
+  // saldo de salário do mês da saída: salário ÷ 30 × dias (do dia 1 ou da admissão até o último dia)
+  const ini=d.data?d.data.slice(0,8)+"01":""; const di=base.admissao&&base.admissao>ini?base.admissao:ini; const dias=d.data&&di<=d.data?Math.min(30,datasEntre(di,d.data).length):0;
+  const saldo={valor:Math.round(sal/30*dias*100)/100, calc:fmtBRL(sal)+" ÷ 30 × "+dias+" dia(s) trabalhados no mês"};
+  const vtDia=Number(base.vtDia||0); const vtMes=vtDia>0?Math.round(vtDia*dias*100)/100:0; const vtDesc=vtMes>0?Math.min(Math.round(saldo.valor*0.06*100)/100,vtMes):0;
+  const aPagar=r?Math.max(0,Math.round((saldo.valor+r.total-vtDesc)*100)/100):0;
+  // FGTS: saldo informado ou estimativa (8% do salário por mês de casa, sem 13º/férias) · multa 40% só sem justa causa
+  const meses=base.admissao&&d.data?Math.max(0,(_diaNum(d.data)-_diaNum(base.admissao)+1)/30.4375):0;
+  const fgtsEst=Math.round(sal*0.08*meses*100)/100; const fgtsBase=d.saldoFGTS!==""?Number(d.saldoFGTS)||0:fgtsEst;
+  const fgtsRescisao=r?Math.round(0.08*(saldo.valor+(r.itens.filter(x=>x.k==="aviso"||x.k==="13").reduce((s2,x)=>s2+x.valor,0)))*100)/100:0;
+  const multa=r&&r.multaFGTS?Math.round((fgtsBase+fgtsRescisao)*0.4*100)/100:0;
+  const custo=Math.round((aPagar+vtDesc+fgtsRescisao+multa)*100)/100;
+  const demitir=()=>{ if(!p) return; window.__wpAbrirDemissao={id:p.id, data:d.data, tipo:d.tipo, aviso:d.aviso||"", feriasVencidas:d.feriasVencidas}; go&&go("clt"); };
+  return <div className="fade-in">
+    <PageHeader title="Simulador de rescisão" sub="Calcule quanto custa um desligamento antes de decidir — nada é gravado"/>
+    <div className="grid lg:grid-cols-5 gap-4">
+      <Card className="p-4 lg:col-span-2 space-y-3">
+        <Field label="Colaborador"><Select aria-label="Colaborador da simulação" value={pid} onChange={e=>setPid(e.target.value)}><option value="">— Outro (digitar salário e admissão) —</option>{lista.map(c=><option key={c.id} value={c.id}>{c.nome}{c.demissao?" (desligado)":""}</option>)}</Select></Field>
+        {!p && <div className="grid grid-cols-2 gap-2">
+          <Field label="Salário (R$)"><Input type="number" aria-label="Salário simulado" value={man.salario} onChange={e=>setMan({...man,salario:e.target.value})}/></Field>
+          <Field label="Admissão"><Input type="date" aria-label="Admissão simulada" value={man.admissao} onChange={e=>setMan({...man,admissao:e.target.value})}/></Field>
+          <div className="col-span-2"><Field label="Contrato"><Select aria-label="Contrato simulado" value={man.experiencia} onChange={e=>setMan({...man,experiencia:e.target.value})}>{Object.entries(EXPERIENCIA).map(([k,v])=><option key={k} value={k}>{v.l}</option>)}</Select></Field></div></div>}
+        {p && <div className="text-xs text-slate-500">Salário {fmtBRL(sal)} · admissão {p.admissao?fmtDataBR(p.admissao):"—"} · {(EXPERIENCIA[p.experiencia||"45+45"]||{}).l}</div>}
+        <Field label="Último dia de trabalho"><Input type="date" aria-label="Data simulada" value={d.data} onChange={e=>setD({...d,data:e.target.value})}/></Field>
+        <Field label="Tipo"><Select aria-label="Tipo simulado" value={d.tipo} onChange={e=>setD({...d,tipo:e.target.value,aviso:""})}>{Object.entries(TIPOS_DEMISSAO).map(([k,l])=><option key={k} value={k}>{l}</option>)}</Select></Field>
+        {fimDet && <div className="p-2.5 rounded-xl bg-amber-50 text-xs text-amber-800">Contrato por prazo em curso (até {fmtDataBR(fimDet)}): {d.tipo==="semjusta"?"indenização do art. 479 no lugar do aviso.":"desconto do art. 480 no lugar do aviso."}</div>}
+        {!fimDet && (d.tipo==="semjusta"||d.tipo==="pedido") && <Field label="Aviso prévio"><Select aria-label="Aviso simulado" value={d.aviso||(d.tipo==="semjusta"?"indenizado":"dispensado")} onChange={e=>setD({...d,aviso:e.target.value})}>{(d.tipo==="semjusta"?["indenizado","trabalhado"]:["dispensado","trabalhado","descontar"]).map(k=><option key={k} value={k}>{AVISO_DEMISSAO[k]}</option>)}</Select></Field>}
+        <Field label="Férias vencidas não tiradas (períodos)"><Input type="number" min="0" aria-label="Férias vencidas simuladas" value={d.feriasVencidas} onChange={e=>setD({...d,feriasVencidas:Math.max(0,Math.floor(Number(e.target.value)||0))})}/></Field>
+        {d.tipo==="semjusta" && <Field label="Saldo do FGTS (opcional)"><Input type="number" aria-label="Saldo FGTS" value={d.saldoFGTS} placeholder={"estimado "+fmtBRL(fgtsEst)} onChange={e=>setD({...d,saldoFGTS:e.target.value})}/></Field>}
+      </Card>
+      <div className="lg:col-span-3 space-y-4">
+        {!r ? <Card className="p-8 text-center text-slate-400 text-sm">Escolha o colaborador (ou digite salário e admissão) e a data para ver o cálculo.</Card> : <>
+          <div className="grid grid-cols-2 gap-3">
+            <Card className="p-4"><div className="text-xs text-slate-500">A pagar ao colaborador</div><div className="text-2xl font-extrabold text-slate-900 tabular-nums" aria-label="Total simulado">{fmtBRL(aPagar)}</div><div className="text-[11px] text-slate-400">até {fmtDataBR(r.prazo)}</div></Card>
+            <Card className="p-4"><div className="text-xs text-slate-500">Custo total para a empresa</div><div className="text-2xl font-extrabold text-rose-600 tabular-nums" aria-label="Custo simulado">{fmtBRL(custo)}</div><div className="text-[11px] text-slate-400">inclui FGTS{r.multaFGTS?" e multa de 40%":""}</div></Card>
+          </div>
+          <Card className="p-4"><DetalheRescisao r={r} saldo={saldo} vtDesconto={vtDesc} titulo="Simulação"/></Card>
+          <Card className="p-4 text-sm space-y-1"><div className="text-[11px] font-bold text-slate-500 uppercase mb-1">Encargos da empresa (fora do valor do colaborador)</div>
+            <div className="flex justify-between"><span className="text-slate-600">FGTS 8% sobre saldo, aviso e 13º<div className="text-[11px] text-slate-400">férias indenizadas não têm FGTS</div></span><span className="tabular-nums">{fmtBRL(fgtsRescisao)}</span></div>
+            {r.multaFGTS && <div className="flex justify-between"><span className="text-slate-600">Multa 40% do FGTS<div className="text-[11px] text-slate-400">40% × ({d.saldoFGTS!==""?"saldo informado":"saldo estimado: "+fmtBRL(sal)+" × 8% × "+meses.toFixed(1)+" meses"} {fmtBRL(fgtsBase)} + {fmtBRL(fgtsRescisao)})</div></span><span className="tabular-nums">{fmtBRL(multa)}</span></div>}
+            <div className="text-[11px] text-slate-400 pt-1">Estimativa para decisão: o valor final da folha também considera faltas, horas extras e VT já pagos (veja em Pagamentos depois do desligamento). INSS/IRRF com a contabilidade.</div></Card>
+          {p && !p.demissao && <Btn variant="danger" icon={I.logout} onClick={demitir}>Demitir {p.nome.split(" ")[0]} com esses dados</Btn>}
+        </>}
+      </div>
+    </div>
+  </div>; }
 // ===== Alertas de RH: exame periódico (6 meses), pagamento da rescisão (10 dias) e fim do contrato de experiência =====
 const EXPERIENCIA={ "45+45":{l:"45 + 45 dias",p:[45,90]}, "30+60":{l:"30 + 60 dias",p:[30,90]}, "60+30":{l:"60 + 30 dias",p:[60,90]}, "90":{l:"90 dias direto",p:[90]},
   "180":{l:"Prazo determinado — 180 dias",p:[180],aviso:15,determinado:true}, "sem":{l:"Sem experiência",p:[]} };
@@ -3283,7 +3354,7 @@ function ColaboradoresCLT() {
   const [demitir,setDemitir]=useState(null);     // {c, data, tipo, motivo}
   const [cancAdm,setCancAdm]=useState(null);     // {c, motivo}
   const [verDeslig,setVerDeslig]=useState(false);
-  useEffect(()=>{ const r=window.__wpAbrirDemissao; if(r==null) return; window.__wpAbrirDemissao=null; const o=typeof r==="object"?r:{id:r}; const c=clts.find(x=>String(x.id)===String(o.id)); if(c) setDemitir({c,data:o.data||hojeStr(),tipo:c.vinculo==="fixo"?"":(o.tipo||""),motivo:o.tipo==="termino"?"Término do contrato — não vamos seguir":""}); },[]); // eslint-disable-line
+  useEffect(()=>{ const r=window.__wpAbrirDemissao; if(r==null) return; window.__wpAbrirDemissao=null; const o=typeof r==="object"?r:{id:r}; const c=clts.find(x=>String(x.id)===String(o.id)); if(c) setDemitir({c,data:o.data||hojeStr(),tipo:c.vinculo==="fixo"?"":(o.tipo||""),aviso:o.aviso||undefined,feriasVencidas:o.feriasVencidas||0,motivo:o.tipo==="termino"?"Término do contrato — não vamos seguir":""}); },[]); // eslint-disable-line
   const ehFixo=(c)=>c.vinculo==="fixo";
   const ehConf=(c)=>c.vinculo==="confianca";
   const casaOk=(c)=> casa==="todas" || c.unidade===casa || (ehConf(c)&&(c.unidade==="todas"||c.unidade==null));
@@ -3434,7 +3505,9 @@ function ColaboradoresCLT() {
               <div key={l} className="p-4 rounded-xl bg-slate-50"><div className="text-xs text-slate-400 font-semibold uppercase">{l}</div><div className="font-semibold text-slate-800 mt-1">{v}</div></div>)}
             {pasta.demissao && <div className="sm:col-span-2 p-4 rounded-xl bg-rose-50 border border-rose-100 text-sm"><div className="text-xs text-rose-500 font-semibold uppercase">Demissão</div>
               <div className="font-semibold text-slate-800 mt-1">Último dia {fmtDataBR(pasta.demissao.data)}{pasta.demissao.tipo&&TIPOS_DEMISSAO[pasta.demissao.tipo]?" · "+TIPOS_DEMISSAO[pasta.demissao.tipo]:""}{pasta.demissao.aviso&&AVISO_DEMISSAO[pasta.demissao.aviso]?" · "+AVISO_DEMISSAO[pasta.demissao.aviso]:""}{Number(pasta.demissao.feriasVencidas)>0?" · "+pasta.demissao.feriasVencidas+" período(s) de férias vencidas":""}</div>
-              <div className="text-slate-600 mt-1 whitespace-pre-wrap">Motivo: {pasta.demissao.motivo}</div></div>}
+              <div className="text-slate-600 mt-1 whitespace-pre-wrap">Motivo: {pasta.demissao.motivo}</div>
+              {(()=>{ const r=calcRescisao(pasta,Number(pasta.salario)||0); return r ? <div className="mt-3 pt-3 border-t border-rose-100 bg-white rounded-lg p-3"><DetalheRescisao r={r}/><div className="text-[11px] text-slate-500 mt-1">+ saldo de salário dos dias do mês (com faltas, extras e VT) — o valor final está em <b>Pagamentos</b>.</div></div>
+                : <div className="mt-2 text-[11px] text-slate-500">{ehFixo(pasta)?"Freela Fixo: sem verbas rescisórias, só os dias trabalhados até o último dia.":"Sem salário cadastrado: não dá para calcular as verbas."}</div>; })()}</div>}
             {pasta.admissaoCancelada && <div className="sm:col-span-2 p-4 rounded-xl bg-slate-100 text-sm"><div className="text-xs text-slate-500 font-semibold uppercase">Admissão cancelada{pasta.admissaoCancelada.em?" em "+fmtDataBR(ymd(pasta.admissaoCancelada.em)):""}</div>
               <div className="text-slate-700 mt-1 whitespace-pre-wrap">Motivo: {pasta.admissaoCancelada.motivo}</div></div>}
             <div className="sm:col-span-2 flex flex-wrap gap-2"><Btn variant="ghost" icon={I.edit} onClick={()=>{setForm({inicial:pasta});setPasta(null);}}>Editar dados</Btn>
@@ -4553,20 +4626,12 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
                     {d.descVTFaltas>0 && L(`VT de ${d.vtFaltasAnt||d.faltasQtd} falta(s)${d.vtPorDia?" de "+fmtCompetencia(d.vtMesAnt):""}`,"-"+fmtBRL(d.descVTFaltas),"text-rose-600")}
                     {descFaltasDSR>0 && L(`Faltas (${d.faltasQtd}${d.dsrQtd?` + ${d.dsrQtd} DSR`:""})`,"-"+fmtBRL(descFaltasDSR),"text-rose-600")}
                     {d.descAtrasos>0 && L("Atrasos","-"+fmtBRL(d.descAtrasos),"text-rose-600")}
-                    {d.rescisao && <div className="mt-2 pt-2 border-t border-dashed border-rose-200" aria-label={"Rescisão de "+l.nome}>
-                      <div className="text-[11px] font-bold text-rose-600 uppercase mb-1">Rescisão · {TIPOS_DEMISSAO[d.rescisao.tipo]||""}{d.rescisao.aviso&&AVISO_DEMISSAO[d.rescisao.aviso]?" · "+AVISO_DEMISSAO[d.rescisao.aviso]:""} · último dia {fmtDataBR(d.rescisao.data)}</div>
-                      {d.rescisao.itens.map(x=><React.Fragment key={x.k}>{L(x.rot+(x.ref?" ("+x.ref+")":""),"+"+fmtBRL(x.valor),"text-emerald-600")}</React.Fragment>)}
-                      {d.rescisao.descontos.map(x=><React.Fragment key={x.k}>{L(x.rot+(x.ref?" ("+x.ref+")":""),"-"+fmtBRL(x.valor),"text-rose-600")}</React.Fragment>)}
-                      <div className="text-[11px] text-slate-400">Saldo de salário = salário base acima ({d.diasContrato}/30 dias). Pagar até {fmtDataBR(d.rescisao.prazo)}.{d.rescisao.multaFGTS?" Multa de 40% do FGTS em guia (GRRF), fora deste valor.":""} Valores brutos — INSS/IRRF com a contabilidade.</div>
-                    </div>}
+                    {d.rescisao && <div className="mt-2 pt-2 border-t border-dashed border-rose-200" aria-label={"Rescisão de "+l.nome}><DetalheRescisao r={d.rescisao}/></div>}
+                    {!d.rescisao && d.demitidoEm && <div className="mt-2 pt-2 border-t border-dashed border-slate-200 text-[11px] text-slate-500" aria-label={"Rescisão de "+l.nome}>Desligado(a) em {fmtDataBR(d.demitidoEm)}. {d.vinculo==="fixo"?"Freela Fixo não tem verbas rescisórias: recebe só os dias até o último dia (salário base acima).":"Sem verbas rescisórias neste mês (salário não cadastrado ou desligamento em outro mês)."}</div>}
                   </>; })()}
                   {modo==="confianca" && (()=>{ const d=l.det||{}; const rc=d.rescisao; return <>
                     <div className="flex justify-between"><span className="text-slate-500">{d.diasContrato!=null&&d.diasContrato<30?`Salário (${fmtBRL(d.salarioMes)} ÷ 30 × ${d.diasContrato} dias)`:"Salário mensal"}</span><span className="tabular-nums">{fmtBRL(d.salario!=null?d.salario:l.total)}</span></div>
-                    {rc && <div className="mt-2 pt-2 border-t border-dashed border-rose-200" aria-label={"Rescisão de "+l.nome}>
-                      <div className="text-[11px] font-bold text-rose-600 uppercase mb-1">Rescisão · {TIPOS_DEMISSAO[rc.tipo]||""}{rc.aviso&&AVISO_DEMISSAO[rc.aviso]?" · "+AVISO_DEMISSAO[rc.aviso]:""} · último dia {fmtDataBR(rc.data)}</div>
-                      {rc.itens.map(x=><div key={x.k} className="flex justify-between"><span className="text-slate-500">{x.rot}{x.ref?" ("+x.ref+")":""}</span><span className="tabular-nums text-emerald-600">+{fmtBRL(x.valor)}</span></div>)}
-                      {rc.descontos.map(x=><div key={x.k} className="flex justify-between"><span className="text-slate-500">{x.rot}</span><span className="tabular-nums text-rose-600">-{fmtBRL(x.valor)}</span></div>)}
-                      <div className="text-[11px] text-slate-400">Pagar até {fmtDataBR(rc.prazo)}.{rc.multaFGTS?" Multa de 40% do FGTS em guia (GRRF), fora deste valor.":""}</div></div>}</>; })()}
+                    {rc && <div className="mt-2 pt-2 border-t border-dashed border-rose-200" aria-label={"Rescisão de "+l.nome}><DetalheRescisao r={rc}/></div>}</>; })()}
                   {ehPJ && l.det && <>
                     <div className="flex justify-between"><span className="text-slate-500">Valor mensal × {l.det.meses.length} mês(es){l.total!==Number((l.det&&l.det.valorMensal)||0)*l.det.meses.length?" (proporcional à vigência)":""}</span><span className="tabular-nums">{fmtBRL(l.total)}</span></div>
                     {l.det.parcelas ? l.det.parcelas.map(p=><div key={p.n} className="flex justify-between" aria-label={"Parcela "+p.n+" de "+l.nome}><span className="text-slate-500">Parcela {p.n}/{p.N} ({p.pct}%) · vence {fmtDataBR(p.venc)}</span><span className={cx("tabular-nums",p.falta<=0.009?"text-emerald-600":"")}>{fmtBRL(p.valor)}{p.falta<=0.009?" · paga":p.pago>0?" · falta "+fmtBRL(p.falta):""}</span></div>)
@@ -9789,6 +9854,7 @@ const NAV = [
     {k:"financeiro",l:"Financeiro",d:I.wallet},
     {k:"notasPJ",l:"Notas fiscais PJ",d:I.receipt},
     {k:"pagamentos",l:"Pagamentos",d:I.pix},
+    {k:"rescisao",l:"Simulador de rescisão",d:I.wallet},
     {k:"unidades",l:"Unidades",d:I.pin},
     {k:"links",l:"Links & QR",d:I.qr},
   ]},
@@ -10066,7 +10132,7 @@ function Shell({ onLogout }) {
   if(acesso && acesso.semAcesso) return <TelaBloqueio icone={I.shield} titulo="Sua conta ainda não tem acesso" texto="Peça ao administrador para vincular seu e-mail a um cliente. Assim que ele liberar, é só entrar novamente." onLogout={onLogout}/>;
   if(acesso && acesso.tenantBind!=null && acesso.tenantBind!==tenantAtual) return <TelaBloqueio spin titulo="Abrindo seu cliente…"/>;
   const views={ dashboard:<Dashboard go={setView}/>, escala:<EscalaVisual/>, ponto:<PontoLive/>, ajustes:<AjustesPonto/>, clt:<ColaboradoresCLT/>, freelas:<Freelancers/>,
-    dossie:<Dossie/>, pjs:<PrestadoresPJ/>, cargos:<CargosPage/>, convites:<ConvitesPage/>, arquivos:<ArquivosPage/>, holerites:<HoleritesPage/>, termos:<TermosPage/>, entregas:<EntregasPage/>, modeloContrato:<ModeloContratoPage/>, equipe:<Equipe/>, contabilidade:<ContabilidadePage/>, pcmso:<PcmsoPage/>, relatorios:<Relatorios/>, financeiro:<Financeiro/>, notasPJ:<NotasPJPage/>, rs:<RSPage/>, pagamentos:<Pagamentos/>, unidades:<Unidades/>, links:<LinksQR/>, acessos:<GerentesAcesso/>, config:<Configuracoes/>, ajuda:<Ajuda/> };
+    dossie:<Dossie/>, pjs:<PrestadoresPJ/>, cargos:<CargosPage/>, convites:<ConvitesPage/>, arquivos:<ArquivosPage/>, holerites:<HoleritesPage/>, termos:<TermosPage/>, entregas:<EntregasPage/>, modeloContrato:<ModeloContratoPage/>, equipe:<Equipe/>, contabilidade:<ContabilidadePage/>, pcmso:<PcmsoPage/>, relatorios:<Relatorios/>, financeiro:<Financeiro/>, notasPJ:<NotasPJPage/>, rs:<RSPage/>, pagamentos:<Pagamentos/>, rescisao:<SimuladorRescisao go={setView}/>, unidades:<Unidades/>, links:<LinksQR/>, acessos:<GerentesAcesso/>, config:<Configuracoes/>, ajuda:<Ajuda/> };
   return <ToastCtx.Provider value={pushToast}>
     <div className="flex min-h-screen">
       <Sidebar view={view} setView={setView} open={sbOpen} setOpen={setSbOpen} onLogout={onLogout}/>
