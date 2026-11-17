@@ -82,6 +82,7 @@
   .overflow-x-auto::-webkit-scrollbar-track{ background:#eef2ec; border-radius:10px; }
   .overflow-x-auto::-webkit-scrollbar-thumb{ background:#8aa383; border-radius:10px; border:3px solid #eef2ec; }
   .overflow-x-auto::-webkit-scrollbar-thumb:hover{ background:#5f7d57; }
+  .rolagem-topo{ position:sticky; top:0; z-index:15; background:#fff; }
   .glass{ background:rgba(255,255,255,.72); backdrop-filter:blur(12px); }
   .grad-brand{ background-image:linear-gradient(135deg,#4c9a3f 0%,#2f6f2a 55%,#22521f 100%); }
   .grad-gold{ background-image:linear-gradient(135deg,#f3cf5a 0%,#e1aa2e 50%,#b97a18 100%); }
@@ -201,6 +202,17 @@ const Toggle = ({on, onChange}) =>
   <button onClick={()=>onChange(!on)} className={cx("w-11 h-6 rounded-full p-0.5 transition", on?"grad-brand":"bg-slate-300")}>
     <div className={cx("w-5 h-5 bg-white rounded-full shadow transition", on&&"translate-x-5")}/></button>;
 
+// Rolagem horizontal com barra EM CIMA e embaixo (sincronizadas): não precisa descer a tela para rolar a tabela
+function RolagemX({children, className}){
+  const topo=useRef(null), corpo=useRef(null), [larg,setLarg]=useState(0), [precisa,setPrecisa]=useState(false), trava=useRef(false);
+  useEffect(()=>{ const el=corpo.current; if(!el) return; const medir=()=>{ setLarg(el.scrollWidth); setPrecisa(el.scrollWidth>el.clientWidth+2); };
+    medir(); let ro=null; try{ ro=new ResizeObserver(medir); ro.observe(el); if(el.firstElementChild) ro.observe(el.firstElementChild); }catch(e){ window.addEventListener("resize",medir); }
+    return ()=>{ if(ro) ro.disconnect(); else window.removeEventListener("resize",medir); }; });
+  const sinc=(de,para)=>{ if(trava.current){ trava.current=false; return; } if(de.current&&para.current&&para.current.scrollLeft!==de.current.scrollLeft){ trava.current=true; para.current.scrollLeft=de.current.scrollLeft; } };
+  return <>
+    {precisa && <div ref={topo} onScroll={()=>sinc(topo,corpo)} className="overflow-x-auto rolagem-topo" aria-label="Barra de rolagem superior"><div style={{width:larg,height:1}}/></div>}
+    <div ref={corpo} onScroll={()=>sinc(corpo,topo)} className={cx("overflow-x-auto",className)}>{children}</div>
+  </>; }
 const Modal = ({open, onClose, children, wide}) => {
   if(!open) return null;
   // Renderiza no <body> (portal): assim a janela fica sempre por cima do cabeçalho,
@@ -4348,12 +4360,12 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
         <StatCard icon={I.calendar} label="Falta pagar" value={fmtBRL(tot.falta)} tone={tot.falta>0?"amber":"slate"}/>
         <StatCard icon={I.pix} label="Pago a mais" value={fmtBRL(tot.amais)} tone={tot.amais>0?"amber":"slate"}/>
       </div>
-      <Card className="overflow-hidden mb-3"><div className="overflow-x-auto"><table className="w-full text-sm min-w-[1080px]">
-        <thead><tr className="text-left text-xs text-slate-400 border-b border-slate-100">{["","Colaborador","VT/dia","Dias","VT bruto","(−) Faltas mês ant.","(−) Pago a mais ant.","VT do mês","Já pago","Situação","Vencimento",""].map((h,i)=><th key={i} className={cx(th, i===1&&"sticky left-0 z-10 bg-white shadow-[2px_0_4px_-2px_rgba(0,0,0,.08)]", i===11&&"sticky right-0 z-10 bg-white")}>{h}</th>)}</tr></thead>
+      <Card className="overflow-hidden mb-3"><RolagemX><table className="w-full text-sm min-w-[1080px]">
+        <thead><tr className="text-left text-xs text-slate-400 border-b border-slate-100">{["","Colaborador","VT/dia","Dias","VT bruto","(−) Faltas mês ant.","(−) Pago a mais ant.","VT do mês","Já pago","Situação","Vencimento",""].map((h,i)=><th key={i} className={cx(th, i===11&&"sticky right-0 z-10 bg-white")}>{h}</th>)}</tr></thead>
         <tbody className="divide-y divide-slate-50">{vts.map(l=>{ const x=info(l); const ab=abr===l.k; return [
           <tr key={l.k} className="hover:bg-slate-50/60">
             <td className="px-2 py-2"><button onClick={()=>setAbr(ab?null:l.k)} className="text-slate-400 hover:text-slate-700" aria-label={"Detalhe VT "+l.nome}><Icon d={ab?I.x:I.plus} className="w-3.5 h-3.5"/></button></td>
-            <td className="px-3 py-2 sticky left-0 z-[5] bg-white shadow-[2px_0_4px_-2px_rgba(0,0,0,.08)]"><div className="font-semibold text-slate-800">{l.nome}</div><div className="text-[11px] text-slate-400">{x.vinc}{x.manualVt?" · lançado à mão":""}</div></td>
+            <td className="px-3 py-2"><div className="font-semibold text-slate-800">{l.nome}</div><div className="text-[11px] text-slate-400">{x.vinc}{x.manualVt?" · lançado à mão":""}</div></td>
             <td className={td}>{x.vtDia?fmtBRL(x.vtDia):"—"}</td><td className={td}>{x.dias||"—"}</td><td className={td}>{fmtBRL(x.bruto)}</td>
             <td className={cx(td,x.faltasValor?"text-rose-600":"text-slate-300")}>{x.faltasValor?"−"+fmtBRL(x.faltasValor)+" ("+x.faltasQtd+")":"—"}</td>
             <td className={cx(td,l.cred?"text-violet-700":"text-slate-300")}>{l.cred?"−"+fmtBRL(l.cred):"—"}{l.credAnulado&&<div className="text-[10px] text-amber-700">antigo {fmtBRL(l.credGrav)} {l.cred>0?"reduzido":"anulado"}</div>}</td>
@@ -4374,7 +4386,7 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
           {vts.length===0 && <tr><td colSpan={12} className="px-4 py-8 text-center text-slate-400">Ninguém com VT neste mês. O VT aparece para quem tem “VT por dia” no cadastro ou valor lançado à mão.</td></tr>}
         </tbody>
         {vts.length>0 && <tfoot><tr className="border-t-2 border-slate-100 bg-slate-50/60 font-bold"><td/><td className="px-3 py-2">Total</td><td/><td/><td className={td}>{fmtBRL(tot.bruto)}</td><td className={cx(td,"text-rose-600")}>{tot.faltas?"−"+fmtBRL(tot.faltas):"—"}</td><td className={cx(td,"text-violet-700")}>{tot.cred?"−"+fmtBRL(tot.cred):"—"}</td><td className={td}>{fmtBRL(tot.prev)}</td><td className={cx(td,"text-emerald-600")}>{fmtBRL(tot.pago)}</td><td className={cx(td,"text-amber-700")}>falta {fmtBRL(tot.falta)}</td><td/><td/></tr></tfoot>}
-      </table></div></Card>
+      </table></RolagemX></Card>
       <Card className="p-4 flex flex-wrap items-center gap-2"><div className="font-bold text-slate-800 mr-2">Relatório analítico do VT</div><div className="flex-1"/>
         <Btn icon={I.download} onClick={exportarVTExcel}>Excel (com dias contados)</Btn><Btn variant="soft" icon={I.download} onClick={exportarVTPdf}>PDF analítico</Btn></Card>
       {modalBaixa}
@@ -4519,9 +4531,9 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
         <span className="text-sm font-bold text-slate-800">{rot}</span>
         <span className="text-xs text-slate-500">{arr.length} · previsto {fmtBRL(soma(arr,"previsto"))} · a pagar {fmtBRL(r2(arr.reduce((s,l)=>s+Math.max(0,l.saldo),0)))}</span>
       </div>
-      <div className="overflow-x-auto"><table className="w-full text-sm min-w-[860px]">
+      <RolagemX><table className="w-full text-sm min-w-[860px]">
         <thead><tr className="text-left text-slate-400 text-xs border-b border-slate-100">{["","Nome","Tipo","Previsto","Vencimento","Situação",""].map((h,i)=><th key={i} className="px-2 py-2 font-semibold">{h}</th>)}</tr></thead>
-        <tbody className="divide-y divide-slate-50">{arr.map(linhaTr)}</tbody></table></div>
+        <tbody className="divide-y divide-slate-50">{arr.map(linhaTr)}</tbody></table></RolagemX>
     </Card>)}
     {cardExport}
     {modalBaixa}
