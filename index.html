@@ -1464,8 +1464,17 @@ function StoreProvider({children}) {
     // Dias que já têm ajuste por data (de hoje em diante) não leem o padrão semanal → inclui a pessoa neles também.
     const hj=hojeStr();
     setEscalaOv(prev=>{ const u=prev&&prev[unidadeId]; if(!u) return prev; let mudou=false; const nu={...u};
-      Object.keys(u).forEach(ds=>{ if(ds<hj) return; const arr=u[ds]||[]; if(arr.some(a=>String(a.pid)===String(pid)&&a.tipo===tipo)) return;
-        const d=wdDe(ds); nu[ds]=[...arr,{id:`${tipo==="pj"?"p":"c"}${pid}_${d}_${ds}`,pid,tipo,turno:ehFolgaDia(d)?"folga":(turnoFixo||turnoPorDia(d))}]; mudou=true; });
+      Object.keys(u).forEach(ds=>{ if(ds<hj) return; const arr=u[ds]||[]; const d=wdDe(ds); const eu=(a)=>String(a.pid)===String(pid)&&a.tipo===tipo;
+        if(arr.some(eu)){
+          // padrão novo (ex.: folga mudou de domingo para segunda): reaplica nas datas futuras já abertas,
+          // menos nas marcações feitas à mão na grade (manualFolga), que continuam valendo
+          if(soFaltantes) return;
+          let mud=false; const novo=arr.map(a=>{ if(!eu(a)||a.manualFolga||a.marca) return a; const folga=ehFolgaDia(d);
+            if(folga && a.turno!=="folga"){ mud=true; return {...a, turno:"folga", turnoBase:a.turno}; }
+            if(!folga && a.turno==="folga"){ mud=true; return {...a, turno:turnoFixo||a.turnoBase||turnoPorDia(d)}; }
+            return a; });
+          if(mud){ nu[ds]=novo; mudou=true; } return; }
+        nu[ds]=[...arr,{id:`${tipo==="pj"?"p":"c"}${pid}_${d}_${ds}`,pid,tipo,turno:ehFolgaDia(d)?"folga":(turnoFixo||turnoPorDia(d))}]; mudou=true; });
       return mudou?{...prev,[unidadeId]:nu}:prev; });
   };
 
@@ -1511,11 +1520,11 @@ function StoreProvider({children}) {
   const horarioMudou=(ant,c)=> !!(c.horaEntrada && c.horaSaida) && (!ant || ant.horaEntrada!==c.horaEntrada || ant.horaSaida!==c.horaSaida);
   const salvarClt=(c)=>{
     if(ehAuto(c.id)){ const ant=cadAuto.find(x=>x.id===c.id); cadOps.update(c._docId||docIdDe(c.id), semDocsInline(c)); subirDocsInline("clt",c);
-      const regen=ant && ((ant.grupoFolga||"")!==(c.grupoFolga||"") || String(ant.folgaDias||"")!==String(c.folgaDias||"")) && c.unidade!=null && c.admissao;
+      const regen=ant && ((ant.grupoFolga||"")!==(c.grupoFolga||"") || String(ant.folgaDias||"")!==String(c.folgaDias||"") || String(ant.folgaDia??"")!==String(c.folgaDia??"") || (ant.escala||"")!==(c.escala||"")) && c.unidade!=null && c.admissao;
       if(regen){ const tu=c.horaEntrada?turnoDaHora(c.horaEntrada):(GRUPO_FOLGA.turno[chaveVig("clt",c.id)]||null); gerarEscalaFixa(c.id, c.escala||"6x1", c.unidade, false, folgaRefDe(c), "clt", tu); if((ant.grupoFolga||"")!==(c.grupoFolga||"")) liberarRodizioFuturo(c.id,"clt"); }
       if(c.horaEntrada && c.horaSaida && (regen || horarioMudou(ant,c))) aplicarHorarioEscala(c.id,"clt",c.horaEntrada,c.horaSaida); return; }
     if(c.id){ const ant=cltsBase.find(x=>x.id===c.id); setClts(prev=>prev.map(x=>x.id===c.id?{...x,...semDocsInline(c)}:x)); subirDocsInline("clt",c);
-      const regen=ant && ((ant.grupoFolga||"")!==(c.grupoFolga||"") || String(ant.folgaDias||"")!==String(c.folgaDias||"")) && c.vinculo!=="confianca" && c.unidade!=null;
+      const regen=ant && ((ant.grupoFolga||"")!==(c.grupoFolga||"") || String(ant.folgaDias||"")!==String(c.folgaDias||"") || String(ant.folgaDia??"")!==String(c.folgaDia??"") || (ant.escala||"")!==(c.escala||"")) && c.vinculo!=="confianca" && c.unidade!=null;
       if(regen){ const tu=c.horaEntrada?turnoDaHora(c.horaEntrada):(GRUPO_FOLGA.turno[chaveVig("clt",c.id)]||null); gerarEscalaFixa(c.id, c.escala||"6x1", c.unidade, false, folgaRefDe(c), "clt", tu); if((ant.grupoFolga||"")!==(c.grupoFolga||"")) liberarRodizioFuturo(c.id,"clt"); }
       if(c.vinculo!=="confianca" && c.horaEntrada && c.horaSaida && (regen || horarioMudou(ant,c))) aplicarHorarioEscala(c.id,"clt",c.horaEntrada,c.horaSaida); }
     else { const base={...c,extras:"0h00",atrasos:"0h00",docs:c.docs||{},status:"ativo"};   // "banco" é o NOME do banco (não o banco de horas)
@@ -1960,7 +1969,7 @@ function SimuladorRescisao({go}){
         {!p && <div className="grid grid-cols-2 gap-2">
           <Field label="Salário (R$)"><Input type="number" aria-label="Salário simulado" value={man.salario} onChange={e=>setMan({...man,salario:e.target.value})}/></Field>
           <Field label="Admissão"><Input type="date" aria-label="Admissão simulada" value={man.admissao} onChange={e=>setMan({...man,admissao:e.target.value})}/></Field>
-          <div className="col-span-2"><Field label="Contrato"><Select aria-label="Contrato simulado" value={man.experiencia} onChange={e=>setMan({...man,experiencia:e.target.value})}>{Object.entries(EXPERIENCIA).map(([k,v])=><option key={k} value={k}>{v.l}</option>)}</Select></Field></div></div>}
+          <div className="col-span-2"><Field label="Contrato"><Select aria-label="Contrato simulado" value={man.experiencia} onChange={e=>setMan({...man,experiencia:e.target.value})}>{EXP_ORDEM.map(k=>[k,EXPERIENCIA[k]]).map(([k,v])=><option key={k} value={k}>{v.l}</option>)}</Select></Field></div></div>}
         {p && <div className="text-xs text-slate-500">Salário {fmtBRL(sal)} · admissão {p.admissao?fmtDataBR(p.admissao):"—"} · {(EXPERIENCIA[p.experiencia||"45+45"]||{}).l}</div>}
         <Field label="Último dia de trabalho"><Input type="date" aria-label="Data simulada" value={d.data} onChange={e=>setD({...d,data:e.target.value})}/></Field>
         <Field label="Tipo"><Select aria-label="Tipo simulado" value={d.tipo} onChange={e=>setD({...d,tipo:e.target.value,aviso:""})}>{Object.entries(TIPOS_DEMISSAO).map(([k,l])=><option key={k} value={k}>{l}</option>)}</Select></Field>
@@ -1988,6 +1997,7 @@ function SimuladorRescisao({go}){
 // ===== Alertas de RH: exame periódico (6 meses), pagamento da rescisão (10 dias) e fim do contrato de experiência =====
 const EXPERIENCIA={ "45+45":{l:"45 + 45 dias",p:[45,90]}, "30+60":{l:"30 + 60 dias",p:[30,90]}, "60+30":{l:"60 + 30 dias",p:[60,90]}, "90":{l:"90 dias direto",p:[90]},
   "180":{l:"Prazo determinado — 180 dias",p:[180],aviso:15,determinado:true}, "sem":{l:"Sem experiência",p:[]} };
+const EXP_ORDEM=["45+45","30+60","60+30","90","180","sem"];   // ordem de exibição (chaves numéricas mudariam a ordem do objeto)
 const MESES_PERIODICO=6;
 const somaDiasStr=(ds,n)=>ymd(addDias(new Date(ds+"T12:00:00"),n));
 const diasAte=(ds)=>Math.round((_diaNum(ds)-_diaNum(hojeStr())));
@@ -3276,7 +3286,7 @@ function ColabForm({ tipo, inicial, onSalvar, onClose, vinculo }) {
         </Field></div>
         <Field label="Admissão / início na escala"><Input type="date" value={f.admissao} onChange={e=>set("admissao",e.target.value)}/></Field>
         <Field label="Válido até (fim do contrato, opcional)"><Input type="date" value={f.fimContrato||""} onChange={e=>set("fimContrato",e.target.value)}/></Field>
-        {!ehFixo && <Field label="Contrato de experiência"><Select aria-label="Contrato de experiência" value={f.experiencia||"45+45"} onChange={e=>set("experiencia",e.target.value)}>{Object.entries(EXPERIENCIA).map(([k,v])=><option key={k} value={k}>{v.l}</option>)}</Select>
+        {!ehFixo && <Field label="Contrato de experiência"><Select aria-label="Contrato de experiência" value={f.experiencia||"45+45"} onChange={e=>set("experiencia",e.target.value)}>{EXP_ORDEM.map(k=>[k,EXPERIENCIA[k]]).map(([k,v])=><option key={k} value={k}>{v.l}</option>)}</Select>
           {f.admissao && (EXPERIENCIA[f.experiencia||"45+45"]||{p:[]}).p.length>0 && <span className="block text-[11px] text-slate-500 mt-1 normal-case font-normal tracking-normal">Termina {(EXPERIENCIA[f.experiencia||"45+45"].p).map(n=>fmtDataBR(somaDiasStr(f.admissao,n-1))).join(" e ")} · alerta {EXPERIENCIA[f.experiencia||"45+45"].aviso||10} dias antes</span>}</Field>}
         {!ehFixo && <Field label="Último exame médico (ASO)"><Input type="date" aria-label="Último exame médico" value={f.ultimoExame||""} onChange={e=>set("ultimoExame",e.target.value)}/>
           <span className="block text-[11px] text-slate-500 mt-1 normal-case font-normal tracking-normal">{(f.ultimoExame||f.admissao)?"Periódico vence "+fmtDataBR(_addMeses(f.ultimoExame||f.admissao,MESES_PERIODICO))+(f.ultimoExame?"":" (sem exame: conta da admissão)"):"Em branco = conta da admissão"}</span></Field>}
