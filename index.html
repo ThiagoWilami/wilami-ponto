@@ -624,6 +624,10 @@ const GRUPOS_FOLGA={
 };
 const NOMES_DIAS=["Segunda","Terça","Quarta","Quinta","Sexta","Sábado","Domingo"];
 // referência de folga para gerar o padrão semanal: 2 dias escolhidos (5x2) ou o dia-base
+// o dia da semana d (0=seg … 6=dom) é folga no padrão semanal desta escala/referência? (mesma regra de gerarEscalaFixa)
+function folgaPadraoDia(escalaTipo, folgaDia, d){ const nF=(escalaTipo==="5x2"||escalaTipo==="6x2")?2:(escalaTipo==="12x36"?0:1);
+  if(Array.isArray(folgaDia)) return folgaDia.map(Number).includes(d); if(folgaDia==null||nF===0) return false; const b=((Number(folgaDia)%7)+7)%7;
+  for(let k=0;k<nF;k++){ if(((b+k)%7)===d) return true; } return false; }
 const folgaRefDe=(c)=> (c && Array.isArray(c.folgaDias) && c.folgaDias.length) ? c.folgaDias : (c?c.folgaDia:null);
 const GRUPO_FOLGA={ map:{}, turno:{} };   // "tipo-pid" → chave do grupo (preenchido pelo Store)
 const _diaNum=(ds)=>{ const [y,m,d]=String(ds).split("-").map(Number); return Math.round(Date.UTC(y,(m||1)-1,d||1)/864e5); };
@@ -1452,7 +1456,7 @@ function StoreProvider({children}) {
     const nFolgas = (escalaTipo==="5x2"||escalaTipo==="6x2") ? 2 : (escalaTipo==="12x36" ? 0 : 1);
     const lista = Array.isArray(folgaDia) ? folgaDia.map(Number) : null;
     const base = (lista || folgaDia==null) ? null : ((folgaDia%7)+7)%7;
-    const ehFolgaDia=(d)=>{ if(lista) return lista.includes(d); if(base==null||nFolgas===0) return false; for(let k=0;k<nFolgas;k++){ if(((base+k)%7)===d) return true; } return false; };
+    const ehFolgaDia=(d)=>folgaPadraoDia(escalaTipo, lista||base, d);
     setEscala(prev=>{
       const n={...prev}; if(!n[unidadeId]) n[unidadeId]=escalaVaziaUnidade(); else n[unidadeId]={...n[unidadeId]};
       for(let d=0;d<7;d++){
@@ -1469,7 +1473,9 @@ function StoreProvider({children}) {
           // padrão novo (ex.: folga mudou de domingo para segunda): reaplica nas datas futuras já abertas,
           // menos nas marcações feitas à mão na grade (manualFolga), que continuam valendo
           if(soFaltantes) return;
-          let mud=false; const novo=arr.map(a=>{ if(!eu(a)||a.manualFolga||a.marca) return a; const folga=ehFolgaDia(d);
+          let mud=false; const novo=arr.map(a0=>{ let a=a0; if(!eu(a)) return a;
+            if(a.manualFolga && a.h && a.turno!=="folga"){ a={...a, manualH:true}; delete a.manualFolga; mud=true; }   // era só horário (trava antiga)
+            if(a.manualFolga||a.marca) return a; const folga=ehFolgaDia(d);
             if(folga && a.turno!=="folga"){ mud=true; return {...a, turno:"folga", turnoBase:a.turno}; }
             if(!folga && a.turno==="folga"){ mud=true; return {...a, turno:turnoFixo||a.turnoBase||turnoPorDia(d)}; }
             return a; });
@@ -1517,14 +1523,20 @@ function StoreProvider({children}) {
   const liberarRodizioFuturo=(pid,tipo)=>{ const hj=hojeStr(); const eu=(a)=>String(a.pid)===String(pid) && (tipo==="pj" ? a.tipo==="pj" : a.tipo===tipo);
     setEscalaOv(prev=>{ let m=false; const n={...(prev||{})}; Object.keys(n).forEach(uid=>{ const u={...(n[uid]||{})}; Object.keys(u).forEach(ds=>{ if(ds<hj) return; const arr=u[ds]||[]; if(!arr.some(a=>eu(a)&&a.manualFolga)) return;
       u[ds]=arr.map(a=>{ if(!eu(a)||!a.manualFolga) return a; m=true; const o={...a}; delete o.manualFolga; if(o.h) o.manualH=true; return o; }); }); n[uid]=u; }); return m?n:prev; }); };
+  // a grade não bate com o cadastro (ex.: folga salva antes da correção)? então regenera ao salvar
+  const padraoDivergente=(c)=>{ if(!c||c.unidade==null||c.vinculo==="confianca") return false; const g=grupoFolgaDe(c,"clt"); if(g&&GRUPOS_FOLGA[g]&&GRUPOS_FOLGA[g].ancora) return false;
+    const ref=folgaRefDe(c); const esc=c.escala||"6x1"; const u=(escala||{})[c.unidade]||{}; const eu=(a)=>String(a.pid)===String(c.id)&&a.tipo==="clt";
+    for(let d=0;d<7;d++){ const a=(u[d]||[]).find(eu); if(a && (a.turno==="folga")!==folgaPadraoDia(esc,ref,d)) return true; }
+    const hj=hojeStr(); const ov=(escalaOv||{})[c.unidade]||{};
+    return Object.keys(ov).some(ds=>{ if(ds<hj) return false; const a=(ov[ds]||[]).find(eu); if(!a||a.marca) return false; if(a.manualFolga && !(a.h&&a.turno!=="folga")) return false; return (a.turno==="folga")!==folgaPadraoDia(esc,ref,wdDe(ds)); }); };
   const horarioMudou=(ant,c)=> !!(c.horaEntrada && c.horaSaida) && (!ant || ant.horaEntrada!==c.horaEntrada || ant.horaSaida!==c.horaSaida);
   const salvarClt=(c)=>{
     if(ehAuto(c.id)){ const ant=cadAuto.find(x=>x.id===c.id); cadOps.update(c._docId||docIdDe(c.id), semDocsInline(c)); subirDocsInline("clt",c);
-      const regen=ant && ((ant.grupoFolga||"")!==(c.grupoFolga||"") || String(ant.folgaDias||"")!==String(c.folgaDias||"") || String(ant.folgaDia??"")!==String(c.folgaDia??"") || (ant.escala||"")!==(c.escala||"")) && c.unidade!=null && c.admissao;
+      const regen=ant && ((ant.grupoFolga||"")!==(c.grupoFolga||"") || String(ant.folgaDias||"")!==String(c.folgaDias||"") || String(ant.folgaDia??"")!==String(c.folgaDia??"") || (ant.escala||"")!==(c.escala||"") || padraoDivergente(c)) && c.unidade!=null && c.admissao;
       if(regen){ const tu=c.horaEntrada?turnoDaHora(c.horaEntrada):(GRUPO_FOLGA.turno[chaveVig("clt",c.id)]||null); gerarEscalaFixa(c.id, c.escala||"6x1", c.unidade, false, folgaRefDe(c), "clt", tu); if((ant.grupoFolga||"")!==(c.grupoFolga||"")) liberarRodizioFuturo(c.id,"clt"); }
       if(c.horaEntrada && c.horaSaida && (regen || horarioMudou(ant,c))) aplicarHorarioEscala(c.id,"clt",c.horaEntrada,c.horaSaida); return; }
     if(c.id){ const ant=cltsBase.find(x=>x.id===c.id); setClts(prev=>prev.map(x=>x.id===c.id?{...x,...semDocsInline(c)}:x)); subirDocsInline("clt",c);
-      const regen=ant && ((ant.grupoFolga||"")!==(c.grupoFolga||"") || String(ant.folgaDias||"")!==String(c.folgaDias||"") || String(ant.folgaDia??"")!==String(c.folgaDia??"") || (ant.escala||"")!==(c.escala||"")) && c.vinculo!=="confianca" && c.unidade!=null;
+      const regen=ant && ((ant.grupoFolga||"")!==(c.grupoFolga||"") || String(ant.folgaDias||"")!==String(c.folgaDias||"") || String(ant.folgaDia??"")!==String(c.folgaDia??"") || (ant.escala||"")!==(c.escala||"") || padraoDivergente(c)) && c.vinculo!=="confianca" && c.unidade!=null;
       if(regen){ const tu=c.horaEntrada?turnoDaHora(c.horaEntrada):(GRUPO_FOLGA.turno[chaveVig("clt",c.id)]||null); gerarEscalaFixa(c.id, c.escala||"6x1", c.unidade, false, folgaRefDe(c), "clt", tu); if((ant.grupoFolga||"")!==(c.grupoFolga||"")) liberarRodizioFuturo(c.id,"clt"); }
       if(c.vinculo!=="confianca" && c.horaEntrada && c.horaSaida && (regen || horarioMudou(ant,c))) aplicarHorarioEscala(c.id,"clt",c.horaEntrada,c.horaSaida); }
     else { const base={...c,extras:"0h00",atrasos:"0h00",docs:c.docs||{},status:"ativo"};   // "banco" é o NOME do banco (não o banco de horas)
