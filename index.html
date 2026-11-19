@@ -1550,12 +1550,15 @@ function StoreProvider({children}) {
     return id; };
   // Horário fixo do cadastro → escala: muda o turno (pela hora de entrada) e o horário em TODO o padrão semanal
   // e nas datas futuras já abertas. Ajustes manuais de um dia específico (feitos na grade) são mantidos.
-  const aplicarHorarioEscala=(pid,tipo,hi,hf)=>{ if(!hi||!hf) return; const h=hi+"–"+hf; const turno=turnoDaHora(hi);
+  // todos=true (salvar o cadastro): o horário do cadastro vale para TODOS os dias de hoje em diante, inclusive horários
+  // ajustados antes na grade; só a FOLGA marcada à mão num dia continua. todos=false: respeita os ajustes manuais.
+  const aplicarHorarioEscala=(pid,tipo,hi,hf,todos)=>{ if(!hi||!hf) return; const h=hi+"–"+hf; const turno=turnoDaHora(hi);
     const eu=(a)=>String(a.pid)===String(pid) && (tipo==="pj" ? a.tipo==="pj" : a.tipo===tipo);
-    const muda=(a)=> a.turno==="folga" ? {...a,h,turnoBase:turno} : {...a,turno,h};
+    const muda=(a0)=>{ const a={...a0}; if(todos && a.turno!=="folga"){ delete a.manualH; delete a.manualFolga; } return a.turno==="folga" ? {...a,h,turnoBase:turno} : {...a,turno,h}; };
+    const travado=(a)=> todos ? (a.manualFolga && a.turno==="folga") : (a.manualFolga||a.manualH);
     setEscala(prev=>{ let m=false; const n={}; Object.keys(prev||{}).forEach(uid=>{ n[uid]={}; Object.keys(prev[uid]||{}).forEach(d=>{ n[uid][d]=(prev[uid][d]||[]).map(a=>{ if(!eu(a)) return a; m=true; return muda(a); }); }); }); return m?n:prev; });
     const hj=hojeStr();
-    setEscalaOv(prev=>{ let m=false; const n={...(prev||{})}; Object.keys(n).forEach(uid=>{ const u={...(n[uid]||{})}; Object.keys(u).forEach(ds=>{ if(ds<hj) return; const arr=u[ds]||[]; if(!arr.some(a=>eu(a)&&!a.manualFolga&&!a.manualH)) return; u[ds]=arr.map(a=>{ if(!eu(a)||a.manualFolga||a.manualH) return a; m=true; return muda(a); }); }); n[uid]=u; }); return m?n:prev; });
+    setEscalaOv(prev=>{ let m=false; const n={...(prev||{})}; Object.keys(n).forEach(uid=>{ const u={...(n[uid]||{})}; Object.keys(u).forEach(ds=>{ if(ds<hj) return; const arr=u[ds]||[]; if(!arr.some(a=>eu(a)&&!travado(a))) return; u[ds]=arr.map(a=>{ if(!eu(a)||travado(a)) return a; m=true; return muda(a); }); }); n[uid]=u; }); return m?n:prev; });
   };
   // Ao trocar o grupo de folga (cor), a nova regra passa a valer nas datas de hoje em diante:
   // marcações manuais de folga/turno dessa pessoa nessas datas deixam de travar o rodízio (o horário manual é mantido).
@@ -1568,16 +1571,21 @@ function StoreProvider({children}) {
     for(let d=0;d<7;d++){ const a=(u[d]||[]).find(eu); if(a && (a.turno==="folga")!==folgaPadraoDia(esc,ref,d)) return true; }
     const hj=hojeStr(); const ov=(escalaOv||{})[c.unidade]||{};
     return Object.keys(ov).some(ds=>{ if(ds<hj) return false; const a=(ov[ds]||[]).find(eu); if(!a||a.marca) return false; if(a.manualFolga && !(a.h&&a.turno!=="folga")) return false; return (a.turno==="folga")!==folgaPadraoDia(esc,ref,wdDe(ds)); }); };
+  // a grade tem dias (de hoje em diante) com horário diferente do cadastro?
+  const horarioDivergente=(c)=>{ if(!c||!c.horaEntrada||!c.horaSaida) return false; const H=c.horaEntrada+"–"+c.horaSaida; const eu=(a)=>String(a.pid)===String(c.id)&&a.tipo==="clt";
+    const dif=(a)=> a.turno==="folga" ? false : (a.h!==H || a.turno!==turnoDaHora(c.horaEntrada));
+    if(Object.values(escala||{}).some(u=>Object.values(u||{}).some(arr=>(arr||[]).some(a=>eu(a)&&dif(a))))) return true;
+    const hj=hojeStr(); return Object.values(escalaOv||{}).some(u=>Object.entries(u||{}).some(([ds,arr])=>ds>=hj && (arr||[]).some(a=>eu(a)&&dif(a)))); };
   const horarioMudou=(ant,c)=> !!(c.horaEntrada && c.horaSaida) && (!ant || ant.horaEntrada!==c.horaEntrada || ant.horaSaida!==c.horaSaida);
   const salvarClt=(c)=>{
     if(ehAuto(c.id)){ const ant=cadAuto.find(x=>x.id===c.id); cadOps.update(c._docId||docIdDe(c.id), semDocsInline(c)); subirDocsInline("clt",c);
       const regen=ant && ((ant.grupoFolga||"")!==(c.grupoFolga||"") || String(ant.folgaDias||"")!==String(c.folgaDias||"") || String(ant.folgaDia??"")!==String(c.folgaDia??"") || (ant.escala||"")!==(c.escala||"") || padraoDivergente(c)) && c.unidade!=null && c.admissao;
       if(regen){ const tu=c.horaEntrada?turnoDaHora(c.horaEntrada):(GRUPO_FOLGA.turno[chaveVig("clt",c.id)]||null); gerarEscalaFixa(c.id, c.escala||"6x1", c.unidade, false, folgaRefDe(c), "clt", tu); if((ant.grupoFolga||"")!==(c.grupoFolga||"")) liberarRodizioFuturo(c.id,"clt"); }
-      if(c.horaEntrada && c.horaSaida && (regen || horarioMudou(ant,c))) aplicarHorarioEscala(c.id,"clt",c.horaEntrada,c.horaSaida); return; }
+      if(c.horaEntrada && c.horaSaida && (regen || horarioMudou(ant,c) || horarioDivergente(c))) aplicarHorarioEscala(c.id,"clt",c.horaEntrada,c.horaSaida,true); return; }
     if(c.id){ const ant=cltsBase.find(x=>x.id===c.id); setClts(prev=>prev.map(x=>x.id===c.id?{...x,...semDocsInline(c)}:x)); subirDocsInline("clt",c);
       const regen=ant && ((ant.grupoFolga||"")!==(c.grupoFolga||"") || String(ant.folgaDias||"")!==String(c.folgaDias||"") || String(ant.folgaDia??"")!==String(c.folgaDia??"") || (ant.escala||"")!==(c.escala||"") || padraoDivergente(c)) && c.vinculo!=="confianca" && c.unidade!=null;
       if(regen){ const tu=c.horaEntrada?turnoDaHora(c.horaEntrada):(GRUPO_FOLGA.turno[chaveVig("clt",c.id)]||null); gerarEscalaFixa(c.id, c.escala||"6x1", c.unidade, false, folgaRefDe(c), "clt", tu); if((ant.grupoFolga||"")!==(c.grupoFolga||"")) liberarRodizioFuturo(c.id,"clt"); }
-      if(c.vinculo!=="confianca" && c.horaEntrada && c.horaSaida && (regen || horarioMudou(ant,c))) aplicarHorarioEscala(c.id,"clt",c.horaEntrada,c.horaSaida); }
+      if(c.vinculo!=="confianca" && c.horaEntrada && c.horaSaida && (regen || horarioMudou(ant,c) || horarioDivergente(c))) aplicarHorarioEscala(c.id,"clt",c.horaEntrada,c.horaSaida,true); }
     else { const base={...c,extras:"0h00",atrasos:"0h00",docs:c.docs||{},status:"ativo"};   // "banco" é o NOME do banco (não o banco de horas)
       let novoId;
       if(window.__WPDB) novoId=novoCadastroIndividual("clt",base);
@@ -3338,7 +3346,7 @@ function ColabForm({ tipo, inicial, onSalvar, onClose, vinculo }) {
             <Input type="time" value={f.horaSaida||""} onChange={e=>set("horaSaida",e.target.value)} aria-label="Saída na escala" className="w-32"/>
             {["08:00","10:00","11:00","12:00","14:00","16:00","18:00"].map(h=><button key={h} type="button" onClick={()=>setF(p=>({...p,horaEntrada:h,horaSaida:somaHora(h,8*60+20)}))} className={cx("px-2 py-1 rounded-lg text-xs font-semibold border", f.horaEntrada===h?"grad-brand text-white border-transparent":"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>{h}</button>)}
           </div>
-          <span className="block text-[11px] text-slate-500 mt-1 normal-case font-normal tracking-normal">{f.horaEntrada&&f.horaSaida ? <>Na escala: turno da <b>{TURNOS[turnoDaHora(f.horaEntrada)].l}</b>, {f.horaEntrada} às {f.horaSaida}. Pode mudar quando quiser — dias ajustados à mão na grade continuam como estão.</> : "Defina para a pessoa já entrar no turno certo da escala (Manhã, Tarde ou Noite)."}</span>
+          <span className="block text-[11px] text-slate-500 mt-1 normal-case font-normal tracking-normal">{f.horaEntrada&&f.horaSaida ? <>Na escala: turno da <b>{TURNOS[turnoDaHora(f.horaEntrada)].l}</b>, {f.horaEntrada} às {f.horaSaida}. Ao salvar, este horário vale para todos os dias de hoje em diante (só as folgas marcadas à mão na grade continuam).</> : "Defina para a pessoa já entrar no turno certo da escala (Manhã, Tarde ou Noite)."}</span>
         </Field></div>
         <Field label="Admissão / início na escala"><Input type="date" value={f.admissao} onChange={e=>set("admissao",e.target.value)}/></Field>
         <Field label="Válido até (fim do contrato, opcional)"><Input type="date" value={f.fimContrato||""} onChange={e=>set("fimContrato",e.target.value)}/></Field>
