@@ -4,6 +4,7 @@
 // O index.html da raiz continua funcionando sozinho (abre direto no navegador, sem build).
 import { readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import path from "node:path";
 
@@ -41,6 +42,10 @@ const css = readFileSync(path.join(TMP, "out.css"), "utf8");
 trocar(cfg[0], "", "bloco tailwind.config");
 trocar('<script src="https://cdn.tailwindcss.com"></script>\n', "<style>" + css + "</style>\n", "script do Tailwind CDN");
 rmSync(TMP, { recursive: true, force: true });
+
+// 3) Identificador da versão: as telas abertas (quiosque do ponto) comparam com o servidor e se atualizam sozinhas
+const buildId = createHash("sha1").update(html).digest("hex").slice(0, 12);
+trocar("<head>", '<head>\n<meta name="wp-build" content="' + buildId + '">', "tag head");
 
 mkdirSync(OUT, { recursive: true });
 writeFileSync(path.join(OUT, "index.html"), html);
