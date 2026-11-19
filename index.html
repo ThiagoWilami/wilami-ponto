@@ -760,7 +760,14 @@ function fimPrazoDeterminado(c, data){
   if(ex.p.length>1 && dec.p1!=="prorrogado"){ const f1=fim(ex.p[0]); if(data===f1) return null; if(data<f1) return f1; }
   return ult; }
 function calcRescisao(c, salarioMes){
-  const d=c&&c.demissao; if(!d||!d.data||c.vinculo==="fixo"||!(salarioMes>0)) return null;
+  const d=c&&c.demissao; if(!d||!d.data||!(salarioMes>0)) return null;
+  // "Só dias trabalhados + VT": sem 13º, férias, 1/3, aviso nem indenizações — só os dias até o último dia (no salário do mês)
+  // e o VT; aceita linhas lançadas à mão. Freela Fixo é sempre assim.
+  if(c.vinculo==="fixo" || d.modo==="simples"){ const r2=(v)=>Math.round(v*100)/100; const itens=[], descontos=[];
+    ((d.ajustes||{}).extras||[]).forEach(e=>{ const v=r2(Number(e.valor)||0); if(!(v>0)) return; const it={k:"ex-"+e.id, rot:e.rot||"Ajuste", ref:"", valor:v, calc:"lançado à mão"+(e.obs?" · "+e.obs:""), extra:true}; (e.tipo==="desc"?descontos:itens).push(it); });
+    const prov=r2(itens.reduce((s,x)=>s+x.valor,0)), desc=r2(descontos.reduce((s,x)=>s+x.valor,0));
+    return { simples:true, tipo:d.tipo||"", aviso:"", diasAviso:0, anosServ:avosFerias(c.admissao||d.data,d.data).anos, salarioMes, adm:c.admissao||d.data, fimProj:d.data, fimDet:null, diasRest:0, feriasVencidas:0,
+      itens, descontos, prov, desc, total:r2(prov-desc), prazo:ymd(addDias(new Date(d.data+"T12:00:00"),10)), multaFGTS:false, data:d.data }; }
   const tipo=d.tipo||"semjusta"; const adm=c.admissao||d.data;
   // arts. 479/480: rompimento antecipado de contrato por prazo determinado → metade da remuneração dos dias que faltavam (substitui o aviso prévio)
   const fimDet=(tipo==="semjusta"||tipo==="pedido") ? fimPrazoDeterminado(c,d.data) : null;
@@ -1959,7 +1966,7 @@ function DetalheRescisao({r, saldo, vtDesconto, abateVT, titulo}){
   if(!r) return null; const L=(rot,calc,v,cor,k)=><div key={k} className="py-1.5 flex justify-between gap-3 border-b border-slate-100 last:border-0"><div className="min-w-0"><div className="text-slate-700">{rot}</div>{calc && <div className="text-[11px] text-slate-400">{calc}</div>}</div><div className={cx("tabular-nums whitespace-nowrap font-semibold",cor)}>{v}</div></div>;
   const total=Math.round(((saldo?saldo.valor:0)+r.total-(vtDesconto||0)-(abateVT||0))*100)/100;
   return <div className="text-sm" aria-label="Cálculo da rescisão">
-    <div className="text-[11px] font-bold text-rose-600 uppercase mb-1">{titulo||"Rescisão"} · {TIPOS_DEMISSAO[r.tipo]||""}{r.aviso&&AVISO_DEMISSAO[r.aviso]?" · "+AVISO_DEMISSAO[r.aviso]:""} · último dia {fmtDataBR(r.data)}</div>
+    <div className="text-[11px] font-bold text-rose-600 uppercase mb-1">{titulo||"Rescisão"} · {r.simples?"Só dias trabalhados + VT":(TIPOS_DEMISSAO[r.tipo]||"")}{r.aviso&&AVISO_DEMISSAO[r.aviso]?" · "+AVISO_DEMISSAO[r.aviso]:""} · último dia {fmtDataBR(r.data)}</div>
     <div className="text-[11px] text-slate-500 mb-1">Salário base {fmtBRL(r.salarioMes)} · admissão {fmtDataBR(r.adm)} · {r.anosServ} ano(s) completo(s){r.fimDet?" · contrato por prazo até "+fmtDataBR(r.fimDet):""}</div>
     {saldo && L("Saldo de salário",saldo.calc,"+"+fmtBRL(saldo.valor),"text-emerald-600","saldo")}
     {r.itens.map(x=>L(x.rot+(x.ref?" ("+x.ref+")":"")+(x.editado?" ✎":""),x.editado?("ajustado à mão (calculado "+fmtBRL(x.valorCalc)+")"):x.calc,"+"+fmtBRL(x.valor),"text-emerald-600",x.k))}
@@ -2037,7 +2044,7 @@ function alertasRHDe(clts, pagamentosCLT){
   (clts||[]).forEach(c=>{ if(!c||c.admissaoCancelada||c.status==="inativo") return; const nome=c.nome||"";
     const saiu=!!(c.fimContrato && c.fimContrato<hoje);
     // 1) rescisão: pagar até 10 dias após o último dia (some quando marcada como paga ou há pagamento de salário depois do desligamento)
-    if(c.demissao && c.demissao.data && !c.demissao.pagoEm && c.vinculo!=="fixo"){
+    if(c.demissao && c.demissao.data && !c.demissao.pagoEm){
       const prazo=somaDiasStr(c.demissao.data,10);
       const pagou=((pagamentosCLT||{})[String(c.id)]||[]).some(p=>p.tipo!=="vt" && p.data && p.data>=c.demissao.data);
       if(!pagou && diasAte(prazo)>=-30) out.push({k:"resc-"+c.id, tipo:"rescisao", c, nome, data:prazo, dias:diasAte(prazo),
@@ -3432,7 +3439,7 @@ function ColaboradoresCLT() {
     if(c.admissao && d.data<c.admissao){ toast("A data da demissão não pode ser antes da admissão ("+fmtDataBR(c.admissao)+")"); return; }
     if(precisaTipo && !d.tipo){ toast("Escolha o tipo: pedido de demissão, sem justa causa ou justa causa"); return; }
     if(!String(d.motivo||"").trim()){ toast("Explique o motivo da demissão"); return; }
-    const reg={ data:d.data, motivo:String(d.motivo).trim(), registradoEm:Date.now() }; if(precisaTipo){ reg.tipo=d.tipo;
+    const reg={ data:d.data, motivo:String(d.motivo).trim(), registradoEm:Date.now() }; if(d.modo==="simples") reg.modo="simples"; if(precisaTipo){ reg.tipo=d.tipo;
       if(d.tipo==="semjusta"||d.tipo==="pedido") reg.aviso=d.aviso||(d.tipo==="semjusta"?"indenizado":"dispensado"); reg.feriasVencidas=Math.max(0,Math.floor(Number(d.feriasVencidas)||0)); }
     salvarClt({...c, fimContrato:d.data, demissao:reg, fimAntesDemissao:c.fimContrato||""});
     setDemitir(null); setPasta(null); toast(c.nome.split(" ")[0]+" demitido(a) — último dia "+fmtDataBR(d.data)+". Os dias até essa data continuam na folha do mês."); };
@@ -3508,13 +3515,14 @@ function ColaboradoresCLT() {
             {(demitir.tipo==="semjusta"?["indenizado","trabalhado"]:["dispensado","trabalhado","descontar"]).map(k=><option key={k} value={k}>{AVISO_DEMISSAO[k]}</option>)}</Select></Field>}
           {!fixo && demitir.tipo && (()=>{ const anos=c.admissao&&demitir.data?avosFerias(c.admissao,demitir.data).anos:0; return <Field label="Férias vencidas ainda não tiradas (períodos)"><Input type="number" min="0" max="3" aria-label="Férias vencidas" value={demitir.feriasVencidas||0} onChange={e=>setDemitir({...demitir,feriasVencidas:Math.max(0,Math.floor(Number(e.target.value)||0))})}/>
             <div className="text-[11px] text-slate-400 mt-1">{anos>0?anos+" ano(s) completo(s) de casa. Informe quantos períodos de férias ele ainda não tirou.":"Menos de 1 ano de casa: normalmente 0."}</div></Field>; })()}
-          {!fixo && demitir.tipo && Number(c.salario)>0 && demitir.data && (()=>{ const r=calcRescisao({...c,demissao:{data:demitir.data,tipo:demitir.tipo,aviso:demitir.aviso,feriasVencidas:demitir.feriasVencidas}},Number(c.salario)); if(!r) return null;
+          {!fixo && demitir.tipo && Number(c.salario)>0 && demitir.data && (()=>{ const r=calcRescisao({...c,demissao:{data:demitir.data,tipo:demitir.tipo,aviso:demitir.aviso,feriasVencidas:demitir.feriasVencidas,modo:demitir.modo}},Number(c.salario)); if(!r) return null;
             return <div className="p-3 rounded-xl bg-slate-50 border border-slate-100 text-xs" aria-label="Prévia da rescisão"><div className="font-bold text-slate-700 mb-1">Prévia da rescisão (além do saldo de salário do mês)</div>
               {r.itens.map(x=><div key={x.k} className="flex justify-between gap-2"><span className="text-slate-500">{x.rot}{x.ref?" ("+x.ref+")":""}</span><span className="tabular-nums">{fmtBRL(x.valor)}</span></div>)}
               {r.descontos.map(x=><div key={x.k} className="flex justify-between gap-2 text-rose-600"><span>{x.rot}</span><span className="tabular-nums">-{fmtBRL(x.valor)}</span></div>)}
               {!r.itens.length&&!r.descontos.length && <div className="text-slate-500">Só o saldo de salário.</div>}
               <div className="flex justify-between font-bold border-t border-slate-200 mt-1 pt-1"><span>Verbas rescisórias</span><span className="tabular-nums">{fmtBRL(r.total)}</span></div>
               <div className="text-slate-400 mt-1">Pagar até {fmtDataBR(r.prazo)} (10 dias).{r.multaFGTS?" Multa de 40% do FGTS: recolher em guia (GRRF), fora deste valor.":""}</div></div>; })()}
+          {!fixo && <label className="flex items-start gap-2 text-sm text-slate-700"><input type="checkbox" className="mt-1" aria-label="Só dias trabalhados e VT" checked={demitir.modo==="simples"} onChange={e=>setDemitir({...demitir,modo:e.target.checked?"simples":""})}/><span><b>Pagar só os dias trabalhados + VT</b> <span className="text-slate-500">(sem aviso, 13º, férias e 1/3 — pode mudar depois em Pagamentos → Rescisões)</span></span></label>}
           <Field label="Motivo"><textarea value={demitir.motivo} onChange={e=>setDemitir({...demitir,motivo:e.target.value})} rows={3} aria-label="Motivo da demissão" placeholder={fixo?"Ex.: encerramos a parceria, mudança de escala…":"Explique o que aconteceu"} className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-brand-400 text-sm"/></Field>
         </div>
         <div className="flex gap-2 mt-5"><Btn variant="ghost" className="flex-1" onClick={()=>setDemitir(null)}>Voltar</Btn>
@@ -4587,8 +4595,9 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
 }
 // ===== Aba Rescisões: todos os desligados, cálculo de cada verba e valores editáveis =====
 function AbaRescisoes({uni, irContas}){
-  const { clts, registros, pontoHist, getDossie, cltExtraAjuste, gorjetasCLT, escala, escalaOv, atestados, pagamentosCLT, faltaDescontoDesde, feriadosExtras, salvarClt, acesso } = useStore();
+  const { clts, registros, pontoHist, getDossie, cltExtraAjuste, gorjetasCLT, escala, escalaOv, atestados, pagamentosCLT, faltaDescontoDesde, feriadosExtras, salvarClt, acesso, pjs, pagamentosPJ, relFin, setRelFin } = useStore();
   const toast=useContext(ToastCtx); const podeSigilo=!acesso||acesso.podeSigilo;
+  const setModo=(c,modo)=>{ salvarClt({...c, demissao:{...c.demissao, modo:modo||null}}); toast(modo==="simples"?"Rescisão de "+c.nome.split(" ")[0]+": só dias trabalhados + VT":"Rescisão de "+c.nome.split(" ")[0]+": cálculo completo"); };
   const [ver,setVer]=useState("pendentes"); const [aberto,setAberto]=useState(null); const [ed,setEd]=useState(null);   // ed: {itens:{}, extras:[], obs}
   const r2=(v)=>Math.round((Number(v)||0)*100)/100;
   const desligados=(clts||[]).filter(c=>c.demissao&&c.demissao.data && !c.admissaoCancelada && (uni==="todas"||Number(c.unidade)===Number(uni)||c.unidade==null||c.unidade==="todas"))
@@ -4596,16 +4605,29 @@ function AbaRescisoes({uni, irContas}){
   const meses=[...new Set(desligados.map(c=>c.demissao.data.slice(0,7)))].sort(); const [y0,m0]=(meses[0]||hojeStr().slice(0,7)).split("-").map(Number); const [y1,m1]=(meses[meses.length-1]||hojeStr().slice(0,7)).split("-").map(Number);
   useRegistrosPeriodo(mesDe(y0,m0)[0], mesDe(y1,m1)[1]);
   const linhaDe=(c)=>{ const ym=c.demissao.data.slice(0,7); const [y,m]=ym.split("-").map(Number); const [a,b]=mesDe(y,m); const nd=(d)=>!!d&&d>=a&&d<=b;
-    const sal=Number(c.salario||0); let liquido, r, saldo;
+    const sal=Number(c.salario||0); let liquido, r, saldo, vtInfo=null;
     if(c.vinculo==="confianca"){ const pc=previstoConf(c,a,b); r=pc.rescisao; saldo=pc.salario; liquido=pc.total; }
     else { const regs=[...(pontoHist||[]),...(registros||[])];
       const l=calcFolhaLinha(c,{ apurCLT:apurarHoras(regs).filter(x=>x.tipo==="clt"&&x.completo&&nd(x.dia)), cltExtraAjuste:cltExtraAjuste||{}, gorjetasCLT:gorjetasCLT||{}, ymRef:ym, getDossie,
         naData:nd, faltasCtx:{escala,escalaOv,registros:regs,atestados,ini:a,fim:b,hoje:hojeStr(),nowMin:0,desde:faltaDescontoDesde}, feriados:feriadosExtras });
-      r=l.rescisao; saldo=l.salario; liquido=l.liquido; }
+      r=l.rescisao; saldo=l.salario; liquido=l.liquido; vtInfo={dias:l.vtDias, dia:l.vtDia, prev:Math.round(Number(l.vtLiquido!=null?l.vtLiquido:l.vt||0)*100)/100}; }
     const pagos=(pagamentosCLT[String(c.id)]||[]).filter(p=>p.tipo!=="vt" && (p.comp===ym || (p.data&&p.data>=c.demissao.data))); const pago=r2(pagos.reduce((s,p)=>s+(Number(p.valor)||0),0));
     const prazo=somaDiasStr(c.demissao.data,10); const quitado=!!c.demissao.pagoEm || (pago>0 && pago>=r2(liquido)-0.009);
-    return { c, ym, r, saldo, liquido:r2(liquido), pago, prazo, quitado, sal }; };
+    if(vtInfo){ const ajVT=((((relFin||{})[ym]||{}).aj||{})["vt-"+c.id]||{}).valor; if(ajVT!=null&&ajVT!=="") vtInfo.prev=r2(ajVT);
+      vtInfo.pago=r2((pagamentosCLT[String(c.id)]||[]).filter(p=>p.tipo==="vt"&&p.comp===ym).reduce((s2,p)=>s2+(Number(p.valor)||0),0)); vtInfo.saldo=r2(vtInfo.prev-vtInfo.pago); }
+    return { c, ym, r, saldo, liquido:r2(liquido), pago, prazo, quitado, sal, vtInfo, acerto:Math.max(0,r2(liquido+(vtInfo?vtInfo.saldo:0))) }; };
   const linhas=desligados.map(linhaDe).filter(x=> ver==="todas" || !x.quitado);
+  // Prestadores PJ com contrato encerrado: valor proporcional aos dias do último mês, pago e saldo (o valor pode ser trocado: vale em Contas do mês)
+  const [edPJ,setEdPJ]=useState({});
+  const pjsEnc=(pjs||[]).filter(pj=>!pjAtivoHoje(pj) && (pj.fim||pj.encerradoEm) && (uni==="todas"||String(pj.unidade)===String(uni)||pj.unidade==null||pj.unidade==="todas")).map(pj=>{
+    const fimP=pj.fim||pj.encerradoEm; const ym=fimP.slice(0,7); const [y,m]=ym.split("-").map(Number); const [a,b]=mesDe(y,m); const nd=(d)=>!!d&&d>=a&&d<=b;
+    const pv=pjValorNoPeriodo(pj,a,b); const det=pv.det[0]||{dias:0,cheio:false,valor:0}; const parc=pjParcelasNoMes(pj,ym,pv.total);
+    const aj=((((relFin||{})[ym]||{}).aj||{})["pj-"+pj.id]||{}); const prev=(aj.valor!=null&&aj.valor!=="")?r2(aj.valor):pv.total;
+    const pago=r2(((pagamentosPJ||{})[String(pj.id)]||[]).filter(p=>pagoNaCompetencia(p,ym,nd)).reduce((s2,p)=>s2+(Number(p.valor)||0),0));
+    return { pj, ym, fimP, det, total:pv.total, prev, editado:aj.valor!=null&&aj.valor!=="", parcelas:parc.length, pago, saldo:r2(prev-pago), prazo:(parc[parc.length-1]||{}).venc||"" }; })
+    .filter(x=> ver==="todas" || x.saldo>0.009).sort((a,b)=>String(b.fimP).localeCompare(String(a.fimP)));
+  const salvarPJ=(x,valor)=>{ const v=valor===""||valor==null?null:r2(valor); setRelFin(prev=>{ const P=prev||{}; const cur=P[x.ym]||{}; const aj=cur.aj||{}; const k="pj-"+x.pj.id; const o={...(aj[k]||{})}; if(v==null) delete o.valor; else o.valor=v;
+      return {...P,[x.ym]:{...cur, aj:{...aj,[k]:o}, manuais:cur.manuais||[]}}; }); toast(v==null?"Valor do PJ voltou ao cálculo":"Valor do PJ salvo — já vale em Contas do mês"); setEdPJ(e=>{ const n={...e}; delete n[x.pj.id]; return n; }); };
   const abrir=(x)=>{ if(aberto===x.c.id){ setAberto(null); setEd(null); return; } setAberto(x.c.id); const aj=x.c.demissao.ajustes||{}; setEd({itens:{...(aj.itens||{})}, extras:(aj.extras||[]).map(e=>({...e})), obs:aj.obs||""}); };
   const salvarAj=(x)=>{ const itens={}; Object.entries(ed.itens||{}).forEach(([k,v])=>{ if(v!==""&&v!=null&&!isNaN(Number(v))) itens[k]=r2(v); });
     const extras=(ed.extras||[]).filter(e=>String(e.rot||"").trim()&&Number(e.valor)>0).map(e=>({id:e.id, rot:String(e.rot).trim(), valor:r2(e.valor), tipo:e.tipo==="desc"?"desc":"prov", obs:e.obs||""}));
@@ -4624,14 +4646,17 @@ function AbaRescisoes({uni, irContas}){
         <button onClick={()=>abrir(x)} className="w-full text-left p-4 flex flex-wrap items-center gap-3 hover:bg-slate-50/70">
           <Avatar name={c.nome} src={c.foto} tone={c.vinculo==="fixo"?"free":"brand"}/>
           <div className="flex-1 min-w-[180px]"><div className="font-bold text-slate-900">{c.nome} <span className="text-xs font-normal text-slate-500">{c.vinculo==="fixo"?"Freela Fixo":c.vinculo==="confianca"?"Gerência":"CLT"} · {c.cargo||""}</span></div>
-            <div className="text-xs text-slate-500">Último dia {fmtDataBR(c.demissao.data)}{TIPOS_DEMISSAO[c.demissao.tipo]?" · "+TIPOS_DEMISSAO[c.demissao.tipo]:""} · pagar até {fmtDataBR(x.prazo)}{c.demissao.ajustes?" · ✎ valores ajustados":""}</div></div>
-          <div className="text-right"><div className="text-[11px] text-slate-400">Total do mês da saída</div><div className="text-lg font-extrabold text-slate-900 tabular-nums" aria-label={"Total rescisão "+c.nome}>{fmtBRL(x.liquido)}</div>
+            <div className="text-xs text-slate-500">Último dia {fmtDataBR(c.demissao.data)}{TIPOS_DEMISSAO[c.demissao.tipo]?" · "+TIPOS_DEMISSAO[c.demissao.tipo]:""}{(c.vinculo==="fixo"||c.demissao.modo==="simples")?" · só dias trabalhados + VT":""} · pagar até {fmtDataBR(x.prazo)}{c.demissao.ajustes?" · ✎ valores ajustados":""}</div></div>
+          <div className="text-right"><div className="text-[11px] text-slate-400">{x.vtInfo&&x.vtInfo.saldo>0.009?"Salário + VT a pagar":x.vtInfo&&x.vtInfo.saldo< -0.009?"Salário − VT pago a mais":"Total do mês da saída"}</div><div className="text-lg font-extrabold text-slate-900 tabular-nums" aria-label={"Total rescisão "+c.nome}>{fmtBRL(x.acerto)}</div>
             <div className="text-[11px] text-slate-500">{x.pago>0?"pago "+fmtBRL(x.pago):""}</div></div>
           <Badge tone={x.quitado?"green":atras?"red":"amber"}>{x.quitado?"Pago":atras?"Vencido":"A pagar"}</Badge>
           <Icon d={ab?I.x:I.plus} className="w-4 h-4 text-slate-400"/>
         </button>
         {ab && <div className="px-4 pb-4 border-t border-slate-100 pt-3">
-          {!r ? <p className="text-sm text-slate-500">{c.vinculo==="fixo"?"Freela Fixo não tem verbas rescisórias: recebe só os dias trabalhados até o último dia ("+fmtBRL(x.saldo||0)+").":"Sem salário cadastrado: não dá para calcular as verbas."}</p> : <>
+          {c.vinculo!=="fixo" && <div className="flex flex-wrap items-center gap-2 mb-3"><span className="text-xs font-bold text-slate-500 uppercase">Cálculo</span>
+            {[["","Completo (CLT: aviso, 13º, férias…)"],["simples","Só dias trabalhados + VT"]].map(([k,l])=><button key={k||"c"} aria-pressed={(c.demissao.modo||"")===k} onClick={()=>setModo(c,k)} className={cx("px-3 py-1.5 rounded-lg text-xs font-semibold border", (c.demissao.modo||"")===k?"grad-brand text-white border-transparent":"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>{l}</button>)}</div>}
+          {c.vinculo==="fixo" && <p className="text-xs text-slate-500 mb-2">Freela Fixo: sem 13º, férias, 1/3 nem aviso — só os dias trabalhados até o último dia e o VT. Use “Lançar outra linha” para qualquer acerto.</p>}
+          {!r ? <p className="text-sm text-slate-500">Sem salário cadastrado: não dá para calcular. Lance os valores em Contas do mês.</p> : <>
           <div className="text-[11px] text-slate-500 mb-2">Salário base {fmtBRL(x.sal)} · admissão {fmtDataBR(c.admissao)} · {r.anosServ} ano(s) completo(s){r.fimDet?" · contrato por prazo até "+fmtDataBR(r.fimDet):""}{r.aviso&&AVISO_DEMISSAO[r.aviso]?" · "+AVISO_DEMISSAO[r.aviso]:""}</div>
           <table className="w-full text-sm"><tbody className="divide-y divide-slate-100">
             <tr><td className="py-1.5 pr-2"><div className="text-slate-700">Saldo de salário do mês</div><div className="text-[11px] text-slate-400">dias trabalhados até o último dia (com faltas, extras e descontos de VT — veja em Pagamentos → CLT)</div></td><td className="py-1.5 text-right tabular-nums text-slate-700 whitespace-nowrap" colSpan={2}>{fmtBRL(r2(x.liquido-x.r.total))}</td></tr>
@@ -4646,8 +4671,13 @@ function AbaRescisoes({uni, irContas}){
           </tbody></table>
           <button onClick={()=>setEd(v=>({...v,extras:[...(v.extras||[]),{id:Math.random().toString(36).slice(2,8),rot:"",valor:"",tipo:"prov"}]}))} className="mt-2 text-sm font-semibold text-brand-700 hover:underline">+ Lançar outra linha (provento ou desconto)</button>
           <div className="mt-2"><Input value={ed.obs} onChange={e=>setEd(v=>({...v,obs:e.target.value}))} placeholder="Observação (ex.: combinado com o colaborador, conferido com a contabilidade)" aria-label={"Observação rescisão "+c.nome}/></div>
-          {(()=>{ const totNovo=r2(x.liquido - x.r.total + r.total); return <div className="mt-3 p-3 rounded-xl bg-slate-50 flex flex-wrap items-center gap-3">
-            <div className="text-sm text-slate-600">Verbas rescisórias <b className="tabular-nums">{fmtBRL(r.total)}</b> · <span className="text-slate-900 font-bold">Total do mês da saída {fmtBRL(totNovo)}</span>{r.multaFGTS && <span className="text-[11px] text-slate-400"> · multa 40% do FGTS em guia, fora deste valor</span>}</div>
+          {x.vtInfo && (x.vtInfo.prev>0||x.vtInfo.pago>0) && <div className="mt-3 p-3 rounded-xl border border-amber-100 bg-amber-50/50 text-sm" aria-label={"VT rescisão "+c.nome}>
+            <div className="text-[11px] font-bold text-amber-800 uppercase mb-1">Vale-transporte do mês da saída</div>
+            <div className="flex justify-between"><span className="text-slate-600">VT devido{x.vtInfo.dias?` (${x.vtInfo.dias} dia(s) de escala até ${fmtDataBR(c.demissao.data)} × ${fmtBRL(x.vtInfo.dia)})`:""}</span><span className="tabular-nums">{fmtBRL(x.vtInfo.prev)}</span></div>
+            <div className="flex justify-between"><span className="text-slate-600">VT já pago</span><span className="tabular-nums">{fmtBRL(x.vtInfo.pago)}</span></div>
+            <div className="flex justify-between font-semibold"><span>{x.vtInfo.saldo>0.009?"VT a pagar":x.vtInfo.saldo< -0.009?"VT pago a mais (já descontado do salário)":"VT quitado"}</span><span className={cx("tabular-nums",x.vtInfo.saldo< -0.009?"text-violet-700":"")}>{fmtBRL(Math.abs(x.vtInfo.saldo))}</span></div></div>}
+          {(()=>{ const totNovo=r2(x.liquido - x.r.total + r.total); const vtP=x.vtInfo?x.vtInfo.saldo:0; return <div className="mt-3 p-3 rounded-xl bg-slate-50 flex flex-wrap items-center gap-3">
+            <div className="text-sm text-slate-600">{r.simples?"Lançamentos à mão":"Verbas rescisórias"} <b className="tabular-nums">{fmtBRL(r.total)}</b> · <span className="text-slate-900 font-bold">Salário do mês {fmtBRL(totNovo)}{vtP>0.009?" + VT "+fmtBRL(vtP)+" = "+fmtBRL(r2(totNovo+vtP)):vtP< -0.009?" − VT pago a mais "+fmtBRL(-vtP)+" = "+fmtBRL(Math.max(0,r2(totNovo+vtP))):""}</span>{r.multaFGTS && <span className="text-[11px] text-slate-400"> · multa 40% do FGTS em guia, fora deste valor</span>}</div>
             <div className="flex-1"/>
             {c.demissao.ajustes && <Btn size="sm" variant="ghost" onClick={()=>limpar(x)}>Voltar ao calculado</Btn>}
             <Btn size="sm" icon={I.check} onClick={()=>salvarAj(x)}>Salvar valores</Btn></div>; })()}
@@ -4658,6 +4688,24 @@ function AbaRescisoes({uni, irContas}){
           </div>
         </div>}
       </Card>; })}</div>
+    {pjsEnc.length>0 && <div className="mt-6">
+      <div className="text-sm font-bold text-slate-700 mb-2">Prestadores PJ encerrados <span className="text-xs font-normal text-slate-500">· valor proporcional aos dias do último mês (sem verbas trabalhistas)</span></div>
+      <div className="space-y-3">{pjsEnc.map(x=>{ const v=edPJ[x.pj.id]; return <Card key={x.pj.id} className="p-4" aria-label={"Encerramento PJ "+x.pj.nome}>
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="w-10 h-10 rounded-xl grad-brand grid place-items-center text-white"><Icon d={I.briefcase} className="w-5 h-5"/></div>
+          <div className="flex-1 min-w-[180px]"><div className="font-bold text-slate-900">{x.pj.nome} <span className="text-xs font-normal text-slate-500">PJ · {x.pj.servico||"Prestação de serviço"}</span></div>
+            <div className="text-xs text-slate-500">Encerrado em {fmtDataBR(x.fimP)}{x.pj.motivoEncerramento?" · "+x.pj.motivoEncerramento:""}</div></div>
+          <Badge tone={x.saldo<=0.009?"green":"amber"}>{x.saldo<=0.009?"Pago":"A pagar"}</Badge></div>
+        <div className="mt-3 text-sm space-y-1">
+          <div className="flex justify-between gap-3"><span className="text-slate-600">Valor do mês {fmtCompetencia(x.ym)}<div className="text-[11px] text-slate-400">{x.det.cheio?"mês inteiro":fmtBRL(Number(x.pj.valor||0))+" ÷ 30 × "+x.det.dias+" dia(s) até "+fmtDataBR(x.fimP)} · calculado {fmtBRL(x.total)}</div></span>
+            {x.parcelas>1 ? <span className="tabular-nums">{fmtBRL(x.prev)}</span>
+            : <span className="flex items-center gap-1"><input type="number" step="0.01" aria-label={"Valor PJ "+x.pj.nome} value={v!=null?v:x.prev} onChange={e=>setEdPJ(o=>({...o,[x.pj.id]:e.target.value}))} className={cx("px-2 py-1.5 rounded-lg border text-sm text-right tabular-nums w-28", x.editado?"border-amber-300 bg-amber-50":"border-slate-200")}/>
+              {v!=null && <Btn size="sm" icon={I.check} onClick={()=>salvarPJ(x,v)}>Salvar</Btn>}{x.editado && v==null && <button title="Voltar ao calculado" onClick={()=>salvarPJ(x,null)} className="text-xs text-slate-400 hover:text-slate-700">↺</button>}</span>}</div>
+          {x.parcelas>1 && <div className="text-[11px] text-slate-400">Pago em {x.parcelas} parcelas — para mudar o valor de cada parcela use Contas do mês.</div>}
+          <div className="flex justify-between"><span className="text-slate-600">Já pago</span><span className="tabular-nums">{fmtBRL(x.pago)}</span></div>
+          <div className="flex justify-between font-semibold"><span>{x.saldo< -0.009?"Pago a mais":"A pagar"}</span><span className={cx("tabular-nums",x.saldo< -0.009&&"text-violet-700")}>{fmtBRL(Math.abs(x.saldo))}</span></div></div>
+        <div className="mt-3"><Btn size="sm" variant="soft" icon={I.wallet} onClick={()=>irContas&&irContas(x.ym)}>Dar baixa em Contas do mês ({fmtCompetencia(x.ym)})</Btn></div>
+      </Card>; })}</div></div>}
   </div>; }
 function PagamentoSalariados({ modo, ini, fim, uni }){
   const { clts, pjs, unidades, registros, pontoHist, getDossie, cltExtraAjuste, gorjetasCLT, escala, escalaOv, atestados, acesso, pagamentosCLT, addPagamentoCLT, removePagamentoCLT, pagamentosPJ, addPagamentoPJ, removePagamentoPJ, faltaDescontoDesde, feriadosExtras, relFin, setRelFin } = useStore();
