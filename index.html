@@ -819,15 +819,27 @@ function calcFolhaLinha(c, ctx){
   let diasContrato=30, salario=salarioMes;
   if(salarioMes && fc.ini && fc.fim){ const di=(c.admissao&&c.admissao>fc.ini)?c.admissao:fc.ini, df=(c.fimContrato&&c.fimContrato<fc.fim)?c.fimContrato:fc.fim;
     if(di>df){ diasContrato=0; salario=0; } else if(di!==fc.ini || df!==fc.fim){ diasContrato=Math.min(30,datasEntre(di,df).length); salario=Math.round(salarioMes*diasContrato/30*100)/100; } }
+  // Desligado sem registro (Freela Fixo, ou "só dias trabalhados + VT"): paga POR DIA TRABALHADO até o último dia,
+  // não o proporcional do mês. Dias = dias com ponto (sem ponto: dias da escala); valor do dia = salário ÷ 30. Ambos editáveis.
+  const _dm=c.demissao; let porDia=null;
+  if(_dm && _dm.data && (c.vinculo==="fixo"||_dm.modo==="simples") && _dm.base!=="mes" && fc.ini && fc.fim && _dm.data>=fc.ini && _dm.data<=fc.fim){
+    const di=(c.admissao&&c.admissao>fc.ini)?c.admissao:fc.ini, df=_dm.data; const aj=_dm.ajustes||{};
+    const datasPonto=[...new Set((fc.registros||[]).filter(r=>r && r.data && r.data>=di && r.data<=df && ((r.pid!=null&&String(r.pid)===String(c.id)) || (r.nome&&r.nome===c.nome))).map(r=>r.data))].sort();
+    let fonte="ponto", datas=datasPonto;
+    if(!datas.length){ const lst=[]; if(fc.escala && c.unidade!=null) diasTrabalhoNoPeriodo(c,di,df,fc.escala,{},lst); datas=lst; fonte="escala"; }
+    let dias=datas.length; if(aj.diasTrab!=null&&aj.diasTrab!==""&&!isNaN(Number(aj.diasTrab))){ dias=Math.max(0,Math.round(Number(aj.diasTrab))); fonte="manual"; }
+    const vd=(aj.valorDia!=null&&aj.valorDia!==""&&!isNaN(Number(aj.valorDia)))?Number(aj.valorDia):salarioMes/30;
+    porDia={ dias, valorDia:Math.round(vd*100)/100, fonte, datas, diasPonto:datasPonto.length, valorDiaEditado:aj.valorDia!=null&&aj.valorDia!=="" };
+    salario=Math.round(vd*dias*100)/100; diasContrato=dias; }
   const vHora=salarioMes? salarioMes/220 : 0;        // hora normal (44h/sem → 220h/mês)
   const vDia =salarioMes? salarioMes/30  : 0;        // valor do dia (base da falta e do DSR)
   const he50Val=(extrasMin/60)*vHora*1.5, he100Val=(extras100Min/60)*vHora*2;
   const heNotVal=(extNot50Min/60)*vHora*0.2*0.5 + (extNot100Min/60)*vHora*0.2*1;   // adicional noturno sobre a extra (OJ 97)
   const extrasCalc=he50Val+he100Val+heNotVal;
   const extraOverride = cltExtraAjuste[c.id+"|"+ymRef];
-  const extrasVal = extraOverride!=null ? Number(extraOverride) : extrasCalc;
+  const extrasVal = extraOverride!=null ? Number(extraOverride) : (porDia ? 0 : extrasCalc);   // sem registro, pago por dia: sem horas extras
   const extrasEditado = extraOverride!=null;
-  const notVal=(notMin/60)*vHora*0.2;               // adicional noturno 20% sobre a hora noturna reduzida (art. 73)
+  const notVal=porDia ? 0 : (notMin/60)*vHora*0.2;               // adicional noturno 20% sobre a hora noturna reduzida (art. 73)
   // DSR sobre extras e adicional noturno: (extras + noturno) ÷ dias úteis × (domingos + feriados) do período
   let diasUteis=0, diasDSR=0; if(fc.ini&&fc.fim) datasEntre(fc.ini,fc.fim).forEach(ds=>{ if(wdDe(ds)===6||ehFeriado(ds,feriados)) diasDSR++; else diasUteis++; });
   const dsrReflexo = diasUteis>0 ? Math.round(((extrasVal+notVal)/diasUteis*diasDSR)*100)/100 : 0;
@@ -840,8 +852,8 @@ function calcFolhaLinha(c, ctx){
   const nFaltas=faltaDatas.length;
   const semanasFalta=new Set(faltaDatas.map(d=>{ const [y,m,dd]=d.split("-").map(Number); return ymd(segDaSemana(new Date(y,m-1,dd))); }));
   const nDSR=semanasFalta.size;                      // política escolhida: perde 1 DSR por semana com falta
-  const descFaltas=nFaltas*vDia, descDSR=nDSR*vDia;
-  const descAtrasos=atrasosD.reduce((s,x)=>s+vHora*(Number(x.horas)||0),0);
+  const descFaltas=porDia?0:nFaltas*vDia, descDSR=porDia?0:nDSR*vDia;   // pago por dia trabalhado: falta já não entra
+  const descAtrasos=porDia ? 0 : atrasosD.reduce((s,x)=>s+vHora*(Number(x.horas)||0),0);
   // Vale Transporte
   //  • Cadastro com VALOR POR DIA (novo): VT do mês = valor do dia × dias de trabalho na escala do período (folgas fora).
   //    As faltas de um mês são descontadas do VT no mês SEGUINTE (o VT é pago adiantado).
@@ -856,6 +868,7 @@ function calcFolhaLinha(c, ctx){
     // (trocas pontuais), que podem ter sido feitas antes de a pessoa entrar e a deixariam de fora desses dias.
     // Faltas do mês são descontadas no VT do mês SEGUINTE (descVTFaltas abaixo).
     vtDias = faltasCtx ? diasTrabalhoNoPeriodo(c,faltasCtx.ini,faltasCtx.fim,faltasCtx.escala,{},vtDatas) : 0;
+    if(porDia){ vtDias=porDia.dias; }   // sem registro: VT só dos dias trabalhados
     vt=Math.round(vtDia*vtDias*100)/100;
     if(faltasCtx){ const [pi,pf]=mesAnteriorDe(faltasCtx.ini); vtMesAnt=pi.slice(0,7);
       const manPrev=(dos.faltas||[]).filter(x=>x.tipo==="falta" && x.descontar && x.data>=pi && x.data<=pf).map(x=>x.data);
@@ -870,14 +883,14 @@ function calcFolhaLinha(c, ctx){
     vtDia = vt>0 ? vt/(diasEscalados||22) : 0;
   }
   const vtLiquido = vtDiaCad>0 ? Math.round(Math.max(0,vt-vtFaltasValor)*100)/100 : vt;   // VT a pagar no mês
-  const vtDesconto = vtLiquido>0 ? Math.min(salario*0.06, vtLiquido) : 0;
+  const vtDesconto = (vtLiquido>0 && !porDia) ? Math.min(salario*0.06, vtLiquido) : 0;   // 6% é desconto legal da CLT: não vale para quem não é registrado
   if(!(vtDiaCad>0)) descVTFaltas = vt>0 ? Math.min(Math.max(0,vt-vtDesconto), nFaltas*vtDia) : 0;
   const descontos=descFaltas+descDSR+descAtrasos+vtDesconto+descVTFaltas;
   // Salário combinado com a Diretoria: se salário + extras + adicional noturno + gorjetas do mês não alcançarem o combinado, a diferença vira "reposição".
   const gorjeta=Number(gorjetasCLT[c.id+"|"+ymRef]||0);
   // o combinado também é proporcional aos dias de contrato no mês (quem entra no dia 27 não tem garantia do mês inteiro)
   const combinadoMes=Number(c.salarioCombinado||0);
-  const combinado=(combinadoMes>0 && diasContrato<30) ? Math.round(combinadoMes*diasContrato/30*100)/100 : combinadoMes;
+  const combinado=porDia ? 0 : (combinadoMes>0 && diasContrato<30) ? Math.round(combinadoMes*diasContrato/30*100)/100 : combinadoMes;
   const recebido=salario+extrasVal+notVal+dsrReflexo+gorjeta;
   const reposicao=combinado>0 ? Math.max(0, Math.round((combinado-recebido)*100)/100) : 0;
   // rescisão: só no mês do último dia de trabalho
@@ -885,7 +898,7 @@ function calcFolhaLinha(c, ctx){
   let liquido=salario+extrasVal+notVal+dsrReflexo+reposicao-descontos+(rescisao?rescisao.total:0);
   if(rescisao && liquido<0){ // desconto do aviso não cumprido limitado ao que há a receber (não gera saldo negativo)
     const corte=Math.min(-liquido, rescisao.desc); if(corte>0){ let resta=corte; rescisao.descontos=rescisao.descontos.map(x=>{ if((x.k!=="avisodesc"&&x.k!=="art480")||resta<=0) return x; const c2=Math.min(resta,x.valor); resta-=c2; return {...x,valor:Math.round((x.valor-c2)*100)/100,ref:x.ref+" (limitado ao saldo)"}; }); rescisao.desc=Math.round((rescisao.desc-corte)*100)/100; rescisao.total=Math.round((rescisao.prov-rescisao.desc)*100)/100; liquido+=corte; } }
-  return { id:c.id, rescisao, demitidoEm:(c.demissao&&c.demissao.data)||"", nome:c.nome, foto:c.foto, pix:c.pix, escala:c.escala, salario, vHora, gorjeta, combinado, combinadoMes, recebido, reposicao,
+  return { id:c.id, rescisao, porDia, demitidoEm:(c.demissao&&c.demissao.data)||"", nome:c.nome, foto:c.foto, pix:c.pix, escala:c.escala, salario, vHora, gorjeta, combinado, combinadoMes, recebido, reposicao,
     extrasMin, extras100Min, extrasHoras:extrasMin+extras100Min, extrasVal, extrasEditado, notMin, notRelMin, notVal, extSemanal, extNot50Min, extNot100Min,
     he50Val, he100Val, heNotVal, dsrReflexo, diasUteis, diasDSR, dias, cpf:c.cpf||"", cargo:c.cargo||"", admissao:c.admissao||"", unidade:c.unidade, vinculo:c.vinculo||"clt",
     atrasosDatas:atrasosD.map(x=>x.data), atrasosHoras:atrasosD.reduce((s,x)=>s+(Number(x.horas)||0),0), descAtrasos,
@@ -4605,17 +4618,17 @@ function AbaRescisoes({uni, irContas}){
   const meses=[...new Set(desligados.map(c=>c.demissao.data.slice(0,7)))].sort(); const [y0,m0]=(meses[0]||hojeStr().slice(0,7)).split("-").map(Number); const [y1,m1]=(meses[meses.length-1]||hojeStr().slice(0,7)).split("-").map(Number);
   useRegistrosPeriodo(mesDe(y0,m0)[0], mesDe(y1,m1)[1]);
   const linhaDe=(c)=>{ const ym=c.demissao.data.slice(0,7); const [y,m]=ym.split("-").map(Number); const [a,b]=mesDe(y,m); const nd=(d)=>!!d&&d>=a&&d<=b;
-    const sal=Number(c.salario||0); let liquido, r, saldo, vtInfo=null;
+    const sal=Number(c.salario||0); let liquido, r, saldo, vtInfo=null, porDia=null;
     if(c.vinculo==="confianca"){ const pc=previstoConf(c,a,b); r=pc.rescisao; saldo=pc.salario; liquido=pc.total; }
     else { const regs=[...(pontoHist||[]),...(registros||[])];
       const l=calcFolhaLinha(c,{ apurCLT:apurarHoras(regs).filter(x=>x.tipo==="clt"&&x.completo&&nd(x.dia)), cltExtraAjuste:cltExtraAjuste||{}, gorjetasCLT:gorjetasCLT||{}, ymRef:ym, getDossie,
         naData:nd, faltasCtx:{escala,escalaOv,registros:regs,atestados,ini:a,fim:b,hoje:hojeStr(),nowMin:0,desde:faltaDescontoDesde}, feriados:feriadosExtras });
-      r=l.rescisao; saldo=l.salario; liquido=l.liquido; vtInfo={dias:l.vtDias, dia:l.vtDia, prev:Math.round(Number(l.vtLiquido!=null?l.vtLiquido:l.vt||0)*100)/100}; }
+      r=l.rescisao; saldo=l.salario; liquido=l.liquido; porDia=l.porDia; vtInfo={dias:l.vtDias, dia:l.vtDia, prev:Math.round(Number(l.vtLiquido!=null?l.vtLiquido:l.vt||0)*100)/100}; }
     const pagos=(pagamentosCLT[String(c.id)]||[]).filter(p=>p.tipo!=="vt" && (p.comp===ym || (p.data&&p.data>=c.demissao.data))); const pago=r2(pagos.reduce((s,p)=>s+(Number(p.valor)||0),0));
     const prazo=somaDiasStr(c.demissao.data,10); const quitado=!!c.demissao.pagoEm || (pago>0 && pago>=r2(liquido)-0.009);
     if(vtInfo){ const ajVT=((((relFin||{})[ym]||{}).aj||{})["vt-"+c.id]||{}).valor; if(ajVT!=null&&ajVT!=="") vtInfo.prev=r2(ajVT);
       vtInfo.pago=r2((pagamentosCLT[String(c.id)]||[]).filter(p=>p.tipo==="vt"&&p.comp===ym).reduce((s2,p)=>s2+(Number(p.valor)||0),0)); vtInfo.saldo=r2(vtInfo.prev-vtInfo.pago); }
-    return { c, ym, r, saldo, liquido:r2(liquido), pago, prazo, quitado, sal, vtInfo, acerto:Math.max(0,r2(liquido+(vtInfo?vtInfo.saldo:0))) }; };
+    return { c, ym, r, saldo, porDia, liquido:r2(liquido), pago, prazo, quitado, sal, vtInfo, acerto:Math.max(0,r2(liquido+(vtInfo?vtInfo.saldo:0))) }; };
   const linhas=desligados.map(linhaDe).filter(x=> ver==="todas" || !x.quitado);
   // Prestadores PJ com contrato encerrado: valor proporcional aos dias do último mês, pago e saldo (o valor pode ser trocado: vale em Contas do mês)
   const [edPJ,setEdPJ]=useState({});
@@ -4628,11 +4641,12 @@ function AbaRescisoes({uni, irContas}){
     .filter(x=> ver==="todas" || x.saldo>0.009).sort((a,b)=>String(b.fimP).localeCompare(String(a.fimP)));
   const salvarPJ=(x,valor)=>{ const v=valor===""||valor==null?null:r2(valor); setRelFin(prev=>{ const P=prev||{}; const cur=P[x.ym]||{}; const aj=cur.aj||{}; const k="pj-"+x.pj.id; const o={...(aj[k]||{})}; if(v==null) delete o.valor; else o.valor=v;
       return {...P,[x.ym]:{...cur, aj:{...aj,[k]:o}, manuais:cur.manuais||[]}}; }); toast(v==null?"Valor do PJ voltou ao cálculo":"Valor do PJ salvo — já vale em Contas do mês"); setEdPJ(e=>{ const n={...e}; delete n[x.pj.id]; return n; }); };
-  const abrir=(x)=>{ if(aberto===x.c.id){ setAberto(null); setEd(null); return; } setAberto(x.c.id); const aj=x.c.demissao.ajustes||{}; setEd({itens:{...(aj.itens||{})}, extras:(aj.extras||[]).map(e=>({...e})), obs:aj.obs||""}); };
+  const abrir=(x)=>{ if(aberto===x.c.id){ setAberto(null); setEd(null); return; } setAberto(x.c.id); const aj=x.c.demissao.ajustes||{}; setEd({itens:{...(aj.itens||{})}, extras:(aj.extras||[]).map(e=>({...e})), obs:aj.obs||"", diasTrab:aj.diasTrab!=null?aj.diasTrab:"", valorDia:aj.valorDia!=null?aj.valorDia:""}); };
   const salvarAj=(x)=>{ const itens={}; Object.entries(ed.itens||{}).forEach(([k,v])=>{ if(v!==""&&v!=null&&!isNaN(Number(v))) itens[k]=r2(v); });
     const extras=(ed.extras||[]).filter(e=>String(e.rot||"").trim()&&Number(e.valor)>0).map(e=>({id:e.id, rot:String(e.rot).trim(), valor:r2(e.valor), tipo:e.tipo==="desc"?"desc":"prov", obs:e.obs||""}));
-    salvarClt({...x.c, demissao:{...x.c.demissao, ajustes:{itens, extras, obs:ed.obs||"", em:Date.now()}}}); toast("Valores da rescisão de "+x.c.nome.split(" ")[0]+" salvos — já valem em Contas do mês"); };
-  const limpar=(x)=>{ if(!confirm("Voltar todos os valores da rescisão de "+x.c.nome+" para o cálculo do sistema?")) return; salvarClt({...x.c, demissao:{...x.c.demissao, ajustes:null}}); setEd({itens:{},extras:[],obs:""}); toast("Valores voltaram ao cálculo do sistema"); };
+    const num=(v)=> v===""||v==null||isNaN(Number(v)) ? null : Number(v);
+    salvarClt({...x.c, demissao:{...x.c.demissao, ajustes:{itens, extras, obs:ed.obs||"", diasTrab:num(ed.diasTrab), valorDia:num(ed.valorDia), em:Date.now()}}}); toast("Valores da rescisão de "+x.c.nome.split(" ")[0]+" salvos — já valem em Contas do mês"); };
+  const limpar=(x)=>{ if(!confirm("Voltar todos os valores da rescisão de "+x.c.nome+" para o cálculo do sistema?")) return; salvarClt({...x.c, demissao:{...x.c.demissao, ajustes:null}}); setEd({itens:{},extras:[],obs:"",diasTrab:"",valorDia:""}); toast("Valores voltaram ao cálculo do sistema"); };
   const marcarPago=(x,v)=>{ salvarClt({...x.c, demissao:{...x.c.demissao, pagoEm:v?hojeStr():null}}); toast(v?"Rescisão marcada como paga":"Rescisão voltou para pendente"); };
   // prévia com os valores digitados (antes de salvar)
   const previa=(x)=> ed ? calcRescisao({...x.c, demissao:{...x.c.demissao, ajustes:{itens:ed.itens, extras:(ed.extras||[]).map(e=>({...e,valor:Number(e.valor)||0}))}}}, x.sal) : x.r;
@@ -4641,7 +4655,9 @@ function AbaRescisoes({uni, irContas}){
     <div className="mb-3 p-3 rounded-xl bg-rose-50 text-rose-900 text-xs">Aqui ficam todos os <b>desligados</b>: o cálculo de cada verba, o total a pagar e o prazo (10 dias). Você pode <b>trocar qualquer valor</b> ou <b>lançar uma linha a mais</b> (provento ou desconto) — o valor salvo passa a valer em Contas do mês, na folha e no PDF. Freela Fixo não tem verbas rescisórias.</div>
     <div className="flex flex-wrap gap-2 mb-3">{[["pendentes","A pagar"],["todas","Todas"]].map(([k,l])=><button key={k} onClick={()=>setVer(k)} className={cx("px-3 py-1.5 rounded-lg text-xs font-semibold border", ver===k?"grad-brand text-white border-transparent":"bg-white border-slate-200 text-slate-600")}>{l}</button>)}</div>
     {linhas.length===0 && <Card className="p-8 text-center text-slate-400 text-sm">{ver==="pendentes"?"Nenhuma rescisão a pagar.":"Ninguém desligado ainda."} Para desligar alguém use <b>Demitir</b> em Colaboradores.</Card>}
-    <div className="space-y-3">{linhas.map(x=>{ const c=x.c; const ab=aberto===c.id; const r=ab?previa(x):x.r; const atras=!x.quitado&&x.prazo<hojeStr();
+    <div className="space-y-3">{linhas.map(x0=>{ const ab=aberto===x0.c.id;
+      const x = (ab && ed && (x0.c.vinculo==="fixo"||x0.c.demissao.modo==="simples")) ? (()=>{ const xp=linhaDe({...x0.c, demissao:{...x0.c.demissao, ajustes:{...(x0.c.demissao.ajustes||{}), diasTrab:ed.diasTrab===""?null:ed.diasTrab, valorDia:ed.valorDia===""?null:ed.valorDia}}}); return {...xp, r:x0.r, liquido:r2(xp.liquido-(xp.r?xp.r.total:0)+(x0.r?x0.r.total:0)), quitado:x0.quitado, pago:x0.pago}; })() : x0;
+      const c=x.c; const r=ab?previa(x):x.r; const atras=!x.quitado&&x.prazo<hojeStr();
       return <Card key={c.id} className="overflow-hidden" aria-label={"Rescisão "+c.nome}>
         <button onClick={()=>abrir(x)} className="w-full text-left p-4 flex flex-wrap items-center gap-3 hover:bg-slate-50/70">
           <Avatar name={c.nome} src={c.foto} tone={c.vinculo==="fixo"?"free":"brand"}/>
@@ -4655,7 +4671,18 @@ function AbaRescisoes({uni, irContas}){
         {ab && <div className="px-4 pb-4 border-t border-slate-100 pt-3">
           {c.vinculo!=="fixo" && <div className="flex flex-wrap items-center gap-2 mb-3"><span className="text-xs font-bold text-slate-500 uppercase">Cálculo</span>
             {[["","Completo (CLT: aviso, 13º, férias…)"],["simples","Só dias trabalhados + VT"]].map(([k,l])=><button key={k||"c"} aria-pressed={(c.demissao.modo||"")===k} onClick={()=>setModo(c,k)} className={cx("px-3 py-1.5 rounded-lg text-xs font-semibold border", (c.demissao.modo||"")===k?"grad-brand text-white border-transparent":"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>{l}</button>)}</div>}
-          {c.vinculo==="fixo" && <p className="text-xs text-slate-500 mb-2">Freela Fixo: sem 13º, férias, 1/3 nem aviso — só os dias trabalhados até o último dia e o VT. Use “Lançar outra linha” para qualquer acerto.</p>}
+          {(c.vinculo==="fixo"||c.demissao.modo==="simples") && <>
+            <p className="text-xs text-slate-500 mb-2">Sem registro: sem 13º, férias, 1/3, aviso nem desconto de 6% do VT. Use “Lançar outra linha” para qualquer acerto.</p>
+            <div className="flex flex-wrap items-center gap-2 mb-2"><span className="text-xs font-bold text-slate-500 uppercase">Pagar</span>
+              {[["","Por dia trabalhado"],["mes","Proporcional do mês (÷ 30 dias corridos)"]].map(([k,l])=><button key={k||"d"} aria-pressed={(c.demissao.base||"")===k} onClick={()=>{ salvarClt({...c, demissao:{...c.demissao, base:k||null}}); }} className={cx("px-3 py-1.5 rounded-lg text-xs font-semibold border", (c.demissao.base||"")===k?"grad-brand text-white border-transparent":"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>{l}</button>)}</div>
+            {x.porDia && <div className="p-3 rounded-xl border border-emerald-100 bg-emerald-50/50 text-sm mb-2" aria-label={"Por dia "+c.nome}>
+              <div className="flex flex-wrap items-end gap-2">
+                <Field label="Dias trabalhados"><input type="number" min="0" aria-label={"Dias trabalhados "+c.nome} value={ed&&ed.diasTrab!==""?ed.diasTrab:x0.porDia?x0.porDia.dias:0} onChange={e=>setEd(v=>({...v,diasTrab:e.target.value}))} className="px-2 py-1.5 rounded-lg border border-slate-200 text-sm text-right w-20"/></Field>
+                <span className="pb-2 text-slate-500">×</span>
+                <Field label="Valor do dia (R$)"><input type="number" step="0.01" aria-label={"Valor do dia "+c.nome} value={ed&&ed.valorDia!==""?ed.valorDia:x0.porDia?x0.porDia.valorDia:0} onChange={e=>setEd(v=>({...v,valorDia:e.target.value}))} className="px-2 py-1.5 rounded-lg border border-slate-200 text-sm text-right w-28"/></Field>
+                <span className="pb-2 text-slate-500">=</span><span className="pb-2 font-bold tabular-nums">{fmtBRL(x.saldo||0)}</span></div>
+              <div className="text-[11px] text-slate-500 mt-1">{x.porDia.fonte==="ponto"?`Dias com ponto até ${fmtDataBR(c.demissao.data)}: ${x.porDia.datas.map(d=>d.slice(8)+"/"+d.slice(5,7)).join(", ")}`:x.porDia.fonte==="escala"?`Sem ponto: dias da escala até ${fmtDataBR(c.demissao.data)} (${x.porDia.datas.length})`:`Dias digitados à mão (${x.porDia.diasPonto} com ponto)`} · valor do dia sugerido = salário ÷ 30 ({fmtBRL(x.sal/30)})</div></div>}
+          </>}
           {!r ? <p className="text-sm text-slate-500">Sem salário cadastrado: não dá para calcular. Lance os valores em Contas do mês.</p> : <>
           <div className="text-[11px] text-slate-500 mb-2">Salário base {fmtBRL(x.sal)} · admissão {fmtDataBR(c.admissao)} · {r.anosServ} ano(s) completo(s){r.fimDet?" · contrato por prazo até "+fmtDataBR(r.fimDet):""}{r.aviso&&AVISO_DEMISSAO[r.aviso]?" · "+AVISO_DEMISSAO[r.aviso]:""}</div>
           <table className="w-full text-sm"><tbody className="divide-y divide-slate-100">
