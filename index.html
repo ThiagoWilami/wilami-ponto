@@ -453,6 +453,18 @@ function jornadaDoDia(regs, nowS){
   let agoraEtapa=0; if((estado==="trab"||estado==="pausa") && nowS!=null && desde!=null){ const n=nz(nowS)<desde?nz(nowS)+86400:nz(nowS); agoraEtapa=Math.max(0,n-desde); if(estado==="trab") trab+=agoraEtapa; else pausa+=agoraEtapa; }
   const sai=ord.filter(p=>p.acao==="Saída").pop();
   return { trab, pausa, pausas, estado, etapa:agoraEtapa, ent: ent!=null?ent:null, sai: sai?sai.s:null, aberto: estado==="trab"||estado==="pausa", qtd:ord.length }; }
+// Turno que passa da meia-noite: entrou ontem e ainda não bateu a saída → as batidas de agora (até 18h depois da
+// entrada) continuam no turno de ONTEM (mesma data), e a apuração soma a madrugada (saída < entrada = dia seguinte).
+const VIRADA_MAX_H=18;
+function turnoAbertoOntem(regsPessoa, agora){
+  const d=agora||new Date(); const hoje=ymd(d), ontem=ymd(addDias(d,-1));
+  const doDia=(ds)=>(regsPessoa||[]).filter(r=>r.data===ds);
+  if(doDia(hoje).length) return null;
+  const ont=doDia(ontem).slice().sort((a,b)=>(Number(b.ts)||0)-(Number(a.ts)||0)); if(!ont.length) return null;
+  if(ont[0].acao==="Saída") return null;
+  const ent=ont.filter(r=>r.acao==="Entrada").map(r=>Number(r.min)).filter(x=>!isNaN(x)).sort((a,b)=>a-b)[0]; if(ent==null) return null;
+  const minAgora=1440+d.getHours()*60+d.getMinutes(); if(minAgora-ent>VIRADA_MAX_H*60) return null;
+  return { data:ontem, regs:ont }; }
 const JORNADA_CLT=480, TOL=10; // 8h e tolerância 10min (Art. 58 CLT)
 // extras: minutos de hora extra "normal" (acima de 8h em dia útil)
 // extras100: minutos de hora extra 100% (trabalho em dia de FOLGA) — Freela nunca gera extras.
@@ -2824,7 +2836,7 @@ function PontoKiosk({ mode, onClose }) {
         setCpfErr(pOutro.nome.split(" ")[0]+", seu cadastro é "+rot+". Abra o link de "+(mode==="clt"?"Freelancer":"CLT")+" para bater o ponto — não precisa cadastrar de novo."); return; }
       setCpfErr("CPF não encontrado. Use “Fazer cadastro (1º acesso)”. (ref. "+listaModo.length+"/"+(refIdx==null?"-":refIdx)+")"); return;
     }
-    if(!escaladoHojePid(p)){ setCpfErr(p.nome.split(" ")[0]+", você não está na escala de hoje — não é possível registrar ponto."); return; }
+    if(!escaladoHojePid(p) && !turnoAbertoOntem(regsDaPessoa(p))){ setCpfErr(p.nome.split(" ")[0]+", você não está na escala de hoje — não é possível registrar ponto."); return; }
     setPid(p.id); setUnidadeId(p.unidade||unidades[0]?.id); setCpfErr("");
     setPainel(true); // vai para o PAINEL DE STATUS do colaborador (mostra estado + ações certas do tipo)
   };
@@ -2913,8 +2925,10 @@ function PontoKiosk({ mode, onClose }) {
 
   // ===== Estado do colaborador hoje (deriva das batidas reais) — casa por pid/CPF/nome =====
   const _hojeK=hojeStr();
-  const meusRegs=(registros||[]).filter(r=> (r.pid&&pSel&&String(r.pid)===String(pSel.id)) || (r.cpf&&pSel&&soDigitos(r.cpf)===soDigitos(pSel.cpf)) || (pSel&&r.nome===pSel.nome))
-    .filter(r=>!r.data||r.data===_hojeK); // mais recente primeiro
+  const regsDaPessoa=(p)=>(registros||[]).filter(r=> p && ((r.pid&&String(r.pid)===String(p.id)) || (r.cpf&&soDigitos(r.cpf)===soDigitos(p.cpf)) || r.nome===p.nome));
+  const _todosMeus=regsDaPessoa(pSel);
+  const viradaTurno=pSel?turnoAbertoOntem(_todosMeus):null;   // turno de ontem ainda aberto depois da meia-noite
+  const meusRegs= viradaTurno ? viradaTurno.regs : _todosMeus.filter(r=>!r.data||r.data===_hojeK); // mais recente primeiro
   const ultimaAcao=meusRegs[0]?.acao;
   const estado = !ultimaAcao ? "aguardando" : (ultimaAcao==="Saída"?"encerrado" : ultimaAcao==="Início intervalo"?"pausa" : "trabalhando");
   const segStartMin = meusRegs[0]?.min; // início do estado atual (para cronômetro)
@@ -2935,7 +2949,8 @@ function PontoKiosk({ mode, onClose }) {
     const now=new Date();
     const hora=now.toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit",second:"2-digit"});
     const protocolo=(soDigitos(pSel?.cpf).slice(-4)||"0000")+"-"+now.getTime().toString(36).slice(-5).toUpperCase();
-    addRegistro({ nome: pSel?.nome || "Colaborador", pid: pSel?.id!=null?String(pSel.id):null, cpf: soDigitos(pSel?.cpf), tipo:mode, acao, unidade:unidade.nome, hora, geo:true, selfie:true, foto, protocolo });
+    addRegistro({ nome: pSel?.nome || "Colaborador", pid: pSel?.id!=null?String(pSel.id):null, cpf: soDigitos(pSel?.cpf), tipo:mode, acao, unidade:unidade.nome, hora, geo:true, selfie:true, foto, protocolo,
+      ...(viradaTurno?{data:viradaTurno.data, dia:viradaTurno.data, dataReal:hojeStr(), virouDia:true}:{}) });
     const jor = acao==="Saída" ? jornadaDoDia([...meusRegs,{acao,hora,min:now.getHours()*60+now.getMinutes()}]) : null;
     setComprovante({ acao, label:acaoLabel||rotuloAcao(acao), hora, unidade:unidade.nome, nome:pSel?.nome, protocolo, encerrou:acao==="Saída", jor });
     setStep(0);
@@ -2981,6 +2996,7 @@ function PontoKiosk({ mode, onClose }) {
               <div className="text-3xl font-extrabold tracking-tight text-slate-900 tabular-nums">{clock.toLocaleTimeString("pt-BR")}</div>
               <div className="text-slate-500 text-sm mt-1">{(pSel?.nome||"").split(" ").slice(0,2).join(" ")} · {mode==="clt"?"CLT":"Freelancer"} · {unidade?.nome}</div>
             </div>
+            {viradaTurno && <div className="mb-3 p-3 rounded-xl bg-indigo-50 text-indigo-800 text-xs text-center" aria-label="Turno da noite">🌙 Seu turno começou <b>ontem ({fmtDataBR(viradaTurno.data)})</b> e passou da meia-noite. As marcações de agora entram nesse mesmo turno.</div>}
             <div className={cx("rounded-2xl p-5 text-center mb-4", estado==="trabalhando"?"bg-emerald-50":estado==="pausa"?"bg-amber-50":estado==="encerrado"?"bg-slate-100":"bg-sky-50")}>
               <div className="text-xs font-bold uppercase tracking-wide mb-1" style={{color: estado==="trabalhando"?"#059669":estado==="pausa"?"#d97706":estado==="encerrado"?"#64748b":"#0284c7"}}>
                 {estado==="trabalhando"?"Em período de trabalho":estado==="pausa"?"Em pausa / almoço":estado==="encerrado"?"Jornada encerrada":"Aguardando entrada"}</div>
@@ -3057,6 +3073,7 @@ function PontoKiosk({ mode, onClose }) {
               <div className="w-14 h-14 mx-auto rounded-2xl bg-amber-500 grid place-items-center text-white mb-2"><Icon d={I.edit} className="w-7 h-7"/></div>
               <h3 className="text-lg font-bold text-slate-900">Solicitar ajuste de ponto</h3>
               <p className="text-sm text-slate-500">Digite o CPF uma vez e preencha só os horários que precisam de correção — pode colocar vários dias. O gestor aprova.</p>
+              <p className="text-xs text-indigo-700 mt-1">🌙 Saiu depois da meia-noite? Use o <b>dia em que entrou</b> e o horário real (ex.: 00:30) — o sistema entende que foi no dia seguinte.</p>
             </div>
             <Field label="Seu CPF"><Input value={aj.cpf} inputMode="numeric" placeholder="000.000.000-00" aria-label="CPF do ajuste" onChange={e=>{setAj({...aj,cpf:e.target.value}); setAjStatus("");}}/></Field>
             <div className="space-y-3 mt-3">
@@ -9852,8 +9869,9 @@ function AjustesPonto(){
         <div className="divide-y divide-slate-100">
           {g.itens.map(a=>{ const editing=editHora[a._docId]!==undefined;
             return <div key={a._docId} className="py-2 flex items-center gap-3 flex-wrap">
-              <div className="flex-1 min-w-[180px] text-sm"><span className="text-slate-500">{fmtDataBR(a.data)}</span> · <b>{a.acaoLabel||a.acao}</b> · <b className="tabular-nums">{a.hora}</b>{a.unidade?<span className="text-slate-400"> · {a.unidade}</span>:""}
-                <div className="text-xs text-slate-500">Motivo: {a.motivo||"—"}</div></div>
+              <div className="flex-1 min-w-[180px] text-sm"><span className="text-slate-500">{fmtDataBR(a.data)}</span> · <b>{a.acaoLabel||a.acao}</b> · <b className="tabular-nums">{a.hora}</b>{a.acao!=="Entrada" && String(a.hora||"")<"06:00" && <span className="text-indigo-600 text-xs"> (madrugada do dia seguinte)</span>}{a.unidade?<span className="text-slate-400"> · {a.unidade}</span>:""}
+                <div className="text-xs text-slate-500">Motivo: {a.motivo||"—"}</div>
+                {/virou|meia.?noite|madrugada/i.test(a.motivo||"") && a.acao==="Saída" && String(a.hora||"")>="22:00" && <div className="text-[11px] text-indigo-700 mt-0.5">🌙 Se a saída foi depois da meia-noite, use <b>Ajustar hora</b> com o horário real (ex.: 00:30): conta no mesmo turno, sem perder as horas da madrugada.</div>}</div>
               {editing
                 ? <div className="flex items-center gap-1"><input type="time" value={editHora[a._docId]} onChange={e=>setEditHora(h=>({...h,[a._docId]:e.target.value}))} className="px-2 py-1.5 rounded-lg border border-slate-300 text-sm"/><Btn size="sm" icon={I.check} onClick={()=>{aprovar(a, editHora[a._docId]); setEditHora(h=>{const n={...h};delete n[a._docId];return n;});}}>Salvar</Btn></div>
                 : <div className="flex gap-1.5 flex-wrap">
