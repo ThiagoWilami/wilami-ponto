@@ -826,7 +826,7 @@ function calcFolhaLinha(c, ctx){
     const di=(c.admissao&&c.admissao>fc.ini)?c.admissao:fc.ini, df=_dm.data; const aj=_dm.ajustes||{};
     const regsP=(fc.registros||[]).filter(r=>r && r.data && r.data>=di && r.data<=df && ((r.pid!=null&&String(r.pid)===String(c.id)) || (r.nome&&r.nome===c.nome)));
     const datasPonto=[...new Set(regsP.map(r=>r.data))].sort();
-    const dobras=new Set(regsP.filter(r=>r.dobra).map(r=>r.data));   // dia lançado como dobra = 2 diárias
+    const dobras=new Set([...regsP.filter(r=>r.dobra).map(r=>r.data), ...((aj.dobras)||[])]);   // dia lançado/marcado como dobra = 2 diárias
     let fonte="ponto", datas=datasPonto;
     if(!datas.length){ const lst=[]; if(fc.escala && c.unidade!=null) diasTrabalhoNoPeriodo(c,di,df,fc.escala,{},lst);
       const fora=new Set(((getDossie&&getDossie("clt-"+c.id).faltas)||[]).filter(x=>x.tipo==="falta"||x.tipo==="atestado").map(x=>x.data));
@@ -834,7 +834,8 @@ function calcFolhaLinha(c, ctx){
     let dias=datas.length+datas.filter(d=>dobras.has(d)).length; if(aj.diasTrab!=null&&aj.diasTrab!==""&&!isNaN(Number(aj.diasTrab))){ dias=Math.max(0,Math.round(Number(aj.diasTrab))); fonte="manual"; }
     const vd=(aj.valorDia!=null&&aj.valorDia!==""&&!isNaN(Number(aj.valorDia)))?Number(aj.valorDia):salarioMes/30;
     const vtD=(aj.vtDias!=null&&aj.vtDias!==""&&!isNaN(Number(aj.vtDias)))?Math.max(0,Math.round(Number(aj.vtDias))):(fonte==="manual"?dias:datas.length);   // dobra = 2 diárias, mas 1 dia de VT
-    porDia={ dias, vtDias:vtD, dobras:datas.filter(d=>dobras.has(d)).length, valorDia:Math.round(vd*100)/100, fonte, datas, diasPonto:datasPonto.length, valorDiaEditado:aj.valorDia!=null&&aj.valorDia!=="" };
+    const diasAuto=datas.length+datas.filter(d=>dobras.has(d)).length;
+    porDia={ dias, diasAuto, vtDiasAuto:datas.length, vtDiasManual:aj.vtDias!=null&&aj.vtDias!=="", vtDias:vtD, dobras:datas.filter(d=>dobras.has(d)).length, valorDia:Math.round(vd*100)/100, fonte, datas, diasPonto:datasPonto.length, valorDiaEditado:aj.valorDia!=null&&aj.valorDia!=="" };
     salario=Math.round(vd*dias*100)/100; diasContrato=dias; }
   const vHora=salarioMes? salarioMes/220 : 0;        // hora normal (44h/sem → 220h/mês)
   const vDia =salarioMes? salarioMes/30  : 0;        // valor do dia (base da falta e do DSR)
@@ -4697,7 +4698,9 @@ function AbaRescisoes({uni, irContas}){
                 <span className="pb-2 text-slate-500">=</span><span className="pb-2 font-bold tabular-nums">{fmtBRL(x.saldo||0)}</span>
                 <div className="ml-auto"><Field label="Dias de VT"><input type="number" min="0" aria-label={"Dias de VT "+c.nome} value={ed&&ed.vtDias!==""?ed.vtDias:x0.porDia?x0.porDia.vtDias:0} onChange={e=>setEd(v=>({...v,vtDias:e.target.value}))} className="px-2 py-1.5 rounded-lg border border-slate-200 text-sm text-right w-20"/></Field></div></div>
               <div className="text-[11px] text-slate-500 mt-1">Dobra conta 2 dias trabalhados e 1 dia de VT (mesma ida e volta).</div>
-              <div className="text-[11px] text-slate-500 mt-1">{x.porDia.fonte==="ponto"?`Dias com ponto até ${fmtDataBR(c.demissao.data)}: ${x.porDia.datas.map(d=>d.slice(8)+"/"+d.slice(5,7)).join(", ")}${x.porDia.dobras?` (${x.porDia.dobras} dobra = +${x.porDia.dobras} diária)`:""}`:x.porDia.fonte==="escala"?`Sem ponto: dias da escala até ${fmtDataBR(c.demissao.data)} (${x.porDia.datas.length})`:`Dias digitados à mão (${x.porDia.diasPonto} com ponto)`} · valor do dia sugerido = salário ÷ 30 ({fmtBRL(x.sal/30)})</div></div>}
+              {(x0.porDia && (x0.porDia.fonte==="manual"||x0.porDia.vtDiasManual) && x0.porDia.diasPonto>0) && <div className="mt-2 p-2 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-900 flex flex-wrap items-center gap-2"><span>Os dias estão <b>digitados à mão</b>. Pelo ponto lançado seriam <b>{x0.porDia.diasAuto} diária(s)</b> e <b>{x0.porDia.vtDiasAuto} dia(s) de VT</b>.</span>
+                <Btn size="sm" onClick={()=>{ salvarClt({...c, demissao:{...c.demissao, ajustes:{...(c.demissao.ajustes||{}), diasTrab:null, vtDias:null}}}); setEd(v=>({...v,diasTrab:"",vtDias:""})); toast("Usando os dias do ponto"); }}>Usar os dias do ponto</Btn></div>}
+              <div className="text-[11px] text-slate-500 mt-1">{x.porDia.fonte==="ponto"?`Dias com ponto até ${fmtDataBR(c.demissao.data)}: ${x.porDia.datas.map(d=>d.slice(8)+"/"+d.slice(5,7)).join(", ")}${x.porDia.dobras?` (${x.porDia.dobras} dobra = +${x.porDia.dobras} diária)`:""}`:x.porDia.fonte==="escala"?`Sem ponto: dias da escala até ${fmtDataBR(c.demissao.data)} (${x.porDia.datas.length})`:`Dias digitados à mão (pelo ponto seriam ${x.porDia.diasAuto}${x.porDia.dobras?` com ${x.porDia.dobras} dobra`:""})`} · valor do dia sugerido = salário ÷ 30 ({fmtBRL(x.sal/30)})</div></div>}
           </>}
           {!r ? <p className="text-sm text-slate-500">Sem salário cadastrado: não dá para calcular. Lance os valores em Contas do mês.</p> : <>
           <div className="text-[11px] text-slate-500 mb-2">Salário base {fmtBRL(x.sal)} · admissão {fmtDataBR(c.admissao)} · {r.anosServ} ano(s) completo(s){r.fimDet?" · contrato por prazo até "+fmtDataBR(r.fimDet):""}{r.aviso&&AVISO_DEMISSAO[r.aviso]?" · "+AVISO_DEMISSAO[r.aviso]:""}</div>
@@ -9912,7 +9915,7 @@ class ErroTela extends React.Component{
    (entrada, início e fim da pausa, saída) com a marca "lancadoGestor" — iguais às do quiosque para a apuração,
    mas SÓ em dias passados e SÓ onde a pessoa ainda não tem nenhuma batida. Não mexe no quiosque nem em pontos reais. */
 function LancarDiasSemPonto(){
-  const { clts, unidades, registros, addRegistro, escala, escalaOv, garantirRegistros, addFalta, getDossie } = useStore();
+  const { clts, unidades, registros, addRegistro, escala, escalaOv, garantirRegistros, addFalta, getDossie, salvarClt } = useStore();
   const toast=useContext(ToastCtx);
   const hoje=hojeStr();
   const _pre=useRef(window.__wpLancar||null); if(window.__wpLancar) window.__wpLancar=null;   // aberto a partir da aba Rescisões
@@ -9937,6 +9940,11 @@ function LancarDiasSemPonto(){
   const naEscala=(ds)=>{ if(!c||c.unidade==null) return false; const a=diaEscala(escala,escalaOv,c.unidade,ds,wdDe(ds)).find(x=>String(x.pid)===String(c.id)&&x.tipo==="clt"); return !!(a&&a.turno!=="folga"); };
   const dias=datasEntre(ini,fim).map(ds=>{ const motivo= ds>=hoje ? "futuro" : (c&&c.admissao&&ds<c.admissao) ? "antes" : (c&&c.fimContrato&&ds>c.fimContrato) ? "depois" : doDia(ds).length ? "ponto" : "";
     return { ds, wd:wdDe(ds), motivo, esc:naEscala(ds) }; });
+  // desligado: dia que já tem ponto pode ser marcado/desmarcado como DOBRA (vale no pagamento por dia)
+  const dobrasSalvas=new Set((c&&c.demissao&&c.demissao.ajustes&&c.demissao.ajustes.dobras)||[]);
+  const togDobraPonto=(ds)=>{ if(!c||!c.demissao) return; const set=new Set(dobrasSalvas); set.has(ds)?set.delete(ds):set.add(ds);
+    const aj={...(c.demissao.ajustes||{}), dobras:[...set].sort(), diasTrab:null, vtDias:null};
+    salvarClt({...c, demissao:{...c.demissao, ajustes:aj}}); toast(set.has(ds)?fmtDataBR(ds)+" marcado como dobra (2 diárias)":fmtDataBR(ds)+" voltou a 1 diária"); };
   // clique: trabalhado → dobra → falta → atestado → desmarca
   const toggle=(ds)=>{ const on=sel.has(ds), t=tipoDia[ds];
     if(!on){ setSel(p=>new Set([...p,ds])); setTipoDia(m=>{ const n={...m}; delete n[ds]; return n; }); return; }
@@ -9953,6 +9961,8 @@ function LancarDiasSemPonto(){
   const lancar=async()=>{ if(!c){ toast("Escolha o colaborador"); return; } if(!diasSelTodos.length){ toast("Marque os dias"); return; }
     if(diasSel.length && !ordemOk){ toast("Confira os horários: entrada < início da pausa < fim da pausa < saída (mesmo dia)"); return; }
     if(!confirm("Lançar para "+c.nome+": "+diasSel.length+" dia(s) trabalhado(s)"+(nDobras?" ("+nDobras+" dobra)":"")+(faltasSel.length?", "+faltasSel.length+" falta(s)/atestado(s)":"")+"?")) return;
+    // lançou o ponto de quem saiu → a rescisão volta a contar pelos dias com ponto (tira os dias digitados à mão)
+    if(c.demissao && c.demissao.ajustes && (c.demissao.ajustes.diasTrab!=null || c.demissao.ajustes.vtDias!=null)) salvarClt({...c, demissao:{...c.demissao, ajustes:{...c.demissao.ajustes, diasTrab:null, vtDias:null}}});
     faltasSel.forEach(ds=>{ const at=tipoDia[ds]==="a"; const key="clt-"+c.id; if(((getDossie&&getDossie(key).faltas)||[]).some(x=>x.data===ds)) return;
       addFalta(key,{ tipo:at?"atestado":"falta", data:ds, horas:8, descontar:!at, obs:(at?"Atestado":"Falta")+" lançado pelo gestor", ts:Date.now() }); });
     if(!diasSel.length){ toast(faltasSel.length+" falta(s)/atestado(s) lançados para "+c.nome); setSel(new Set()); setTipoDia({}); return; }
@@ -9988,20 +9998,22 @@ function LancarDiasSemPonto(){
         <Btn size="sm" variant="soft" onClick={marcarSegSab}>Marcar seg. a sáb.</Btn>
         <Btn size="sm" variant="ghost" onClick={()=>setSel(new Set())}>Limpar</Btn>
       </div>
+      {c.demissao && <div className="text-[11px] text-indigo-700 mt-2">Desligado: clique num dia <b>com ponto</b> para marcar/desmarcar como <b>dobra</b> (2 diárias).</div>}
       <div className="text-[11px] text-slate-500 mt-2">Clique no dia para marcar: <b className="text-brand-700">trabalhou</b> → <b className="text-indigo-700">dobra</b> (2 diárias) → <b className="text-rose-600">falta</b> → <b className="text-sky-600">atestado</b> → desmarca.</div>
       <div className="grid grid-cols-7 gap-1.5 mt-2" aria-label="Calendário de dias sem ponto">
         {WD.map(w=><div key={w} className="text-[10px] font-bold text-slate-400 text-center uppercase">{w}</div>)}
         {Array.from({length:primeiroWd}).map((_,i)=><div key={"v"+i}/>)}
-        {dias.map(d=>{ const on=sel.has(d.ds)&&!d.motivo; const bloq=!!d.motivo; const t=on?tipoDia[d.ds]:null;
-          return <button key={d.ds} disabled={bloq} onClick={()=>toggle(d.ds)} aria-label={"Dia "+d.ds} aria-pressed={on}
+        {dias.map(d=>{ const on=sel.has(d.ds)&&!d.motivo; const podeDobra=d.motivo==="ponto"&&!!(c&&c.demissao); const bloq=!!d.motivo&&!podeDobra; const t=on?tipoDia[d.ds]:null; const dobP=podeDobra&&dobrasSalvas.has(d.ds);
+          return <button key={d.ds} disabled={bloq} onClick={()=>podeDobra?togDobraPonto(d.ds):toggle(d.ds)} aria-label={"Dia "+d.ds} aria-pressed={on}
             title={d.motivo==="ponto"?"Já tem ponto neste dia":d.motivo==="antes"?"Antes da admissão":d.motivo==="futuro"?"Dia futuro":d.motivo==="depois"?"Depois do fim do contrato":(d.esc?"Dia de trabalho na escala":"Folga / fora da escala")}
             className={cx("rounded-lg border px-1 py-1.5 text-center text-sm transition",
               on?(t==="d"?"bg-indigo-600 text-white border-transparent":t==="f"?"bg-rose-500 text-white border-transparent":t==="a"?"bg-sky-500 text-white border-transparent":"grad-brand text-white border-transparent"):
-              d.motivo==="ponto"?"bg-emerald-50 border-emerald-200 text-emerald-700 cursor-not-allowed":
+              dobP?"bg-indigo-100 border-indigo-300 text-indigo-800":
+              d.motivo==="ponto"?cx("bg-emerald-50 border-emerald-200 text-emerald-700", podeDobra?"hover:bg-indigo-50":"cursor-not-allowed"):
               bloq?"bg-slate-50 border-slate-100 text-slate-300 cursor-not-allowed":
               d.esc?"bg-white border-slate-200 text-slate-800 hover:bg-brand-50":"bg-white border-dashed border-slate-200 text-slate-400 hover:bg-slate-50")}>
             <div className="font-bold leading-none">{Number(d.ds.slice(8))}</div>
-            <div className="text-[9px] mt-0.5 leading-none">{on?(t==="d"?"dobra":t==="f"?"falta":t==="a"?"atestado":"trabalhou"):d.motivo==="ponto"?"com ponto":d.motivo==="antes"?"antes adm.":d.motivo==="futuro"?"":d.esc?"escala":"folga"}</div>
+            <div className="text-[9px] mt-0.5 leading-none">{on?(t==="d"?"dobra":t==="f"?"falta":t==="a"?"atestado":"trabalhou"):dobP?"ponto · dobra":d.motivo==="ponto"?"com ponto":d.motivo==="antes"?"antes adm.":d.motivo==="futuro"?"":d.esc?"escala":"folga"}</div>
           </button>; })}
       </div>
       <div className="flex flex-wrap items-center gap-3 mt-3">
