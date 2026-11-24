@@ -829,7 +829,8 @@ function calcFolhaLinha(c, ctx){
     if(!datas.length){ const lst=[]; if(fc.escala && c.unidade!=null) diasTrabalhoNoPeriodo(c,di,df,fc.escala,{},lst); datas=lst; fonte="escala"; }
     let dias=datas.length; if(aj.diasTrab!=null&&aj.diasTrab!==""&&!isNaN(Number(aj.diasTrab))){ dias=Math.max(0,Math.round(Number(aj.diasTrab))); fonte="manual"; }
     const vd=(aj.valorDia!=null&&aj.valorDia!==""&&!isNaN(Number(aj.valorDia)))?Number(aj.valorDia):salarioMes/30;
-    porDia={ dias, valorDia:Math.round(vd*100)/100, fonte, datas, diasPonto:datasPonto.length, valorDiaEditado:aj.valorDia!=null&&aj.valorDia!=="" };
+    const vtD=(aj.vtDias!=null&&aj.vtDias!==""&&!isNaN(Number(aj.vtDias)))?Math.max(0,Math.round(Number(aj.vtDias))):dias;   // dobra = 2 diárias, mas 1 dia de VT
+    porDia={ dias, vtDias:vtD, valorDia:Math.round(vd*100)/100, fonte, datas, diasPonto:datasPonto.length, valorDiaEditado:aj.valorDia!=null&&aj.valorDia!=="" };
     salario=Math.round(vd*dias*100)/100; diasContrato=dias; }
   const vHora=salarioMes? salarioMes/220 : 0;        // hora normal (44h/sem → 220h/mês)
   const vDia =salarioMes? salarioMes/30  : 0;        // valor do dia (base da falta e do DSR)
@@ -868,7 +869,7 @@ function calcFolhaLinha(c, ctx){
     // (trocas pontuais), que podem ter sido feitas antes de a pessoa entrar e a deixariam de fora desses dias.
     // Faltas do mês são descontadas no VT do mês SEGUINTE (descVTFaltas abaixo).
     vtDias = faltasCtx ? diasTrabalhoNoPeriodo(c,faltasCtx.ini,faltasCtx.fim,faltasCtx.escala,{},vtDatas) : 0;
-    if(porDia){ vtDias=porDia.dias; }   // sem registro: VT só dos dias trabalhados
+    if(porDia){ vtDias=porDia.vtDias; }   // sem registro: VT só dos dias trabalhados
     vt=Math.round(vtDia*vtDias*100)/100;
     if(faltasCtx){ const [pi,pf]=mesAnteriorDe(faltasCtx.ini); vtMesAnt=pi.slice(0,7);
       const manPrev=(dos.faltas||[]).filter(x=>x.tipo==="falta" && x.descontar && x.data>=pi && x.data<=pf).map(x=>x.data);
@@ -4649,12 +4650,12 @@ function AbaRescisoes({uni, irContas}){
     .filter(x=> ver==="todas" || x.saldo>0.009).sort((a,b)=>String(b.fimP).localeCompare(String(a.fimP)));
   const salvarPJ=(x,valor)=>{ const v=valor===""||valor==null?null:r2(valor); setRelFin(prev=>{ const P=prev||{}; const cur=P[x.ym]||{}; const aj=cur.aj||{}; const k="pj-"+x.pj.id; const o={...(aj[k]||{})}; if(v==null) delete o.valor; else o.valor=v;
       return {...P,[x.ym]:{...cur, aj:{...aj,[k]:o}, manuais:cur.manuais||[]}}; }); toast(v==null?"Valor do PJ voltou ao cálculo":"Valor do PJ salvo — já vale em Contas do mês"); setEdPJ(e=>{ const n={...e}; delete n[x.pj.id]; return n; }); };
-  const abrir=(x)=>{ if(aberto===x.c.id){ setAberto(null); setEd(null); return; } setAberto(x.c.id); const aj=x.c.demissao.ajustes||{}; setEd({itens:{...(aj.itens||{})}, extras:(aj.extras||[]).map(e=>({...e})), obs:aj.obs||"", diasTrab:aj.diasTrab!=null?aj.diasTrab:"", valorDia:aj.valorDia!=null?aj.valorDia:""}); };
+  const abrir=(x)=>{ if(aberto===x.c.id){ setAberto(null); setEd(null); return; } setAberto(x.c.id); const aj=x.c.demissao.ajustes||{}; setEd({itens:{...(aj.itens||{})}, extras:(aj.extras||[]).map(e=>({...e})), obs:aj.obs||"", diasTrab:aj.diasTrab!=null?aj.diasTrab:"", valorDia:aj.valorDia!=null?aj.valorDia:"", vtDias:aj.vtDias!=null?aj.vtDias:""}); };
   const salvarAj=(x)=>{ const itens={}; Object.entries(ed.itens||{}).forEach(([k,v])=>{ if(v!==""&&v!=null&&!isNaN(Number(v))) itens[k]=r2(v); });
     const extras=(ed.extras||[]).filter(e=>String(e.rot||"").trim()&&Number(e.valor)>0).map(e=>({id:e.id, rot:String(e.rot).trim(), valor:r2(e.valor), tipo:e.tipo==="desc"?"desc":"prov", obs:e.obs||""}));
     const num=(v)=> v===""||v==null||isNaN(Number(v)) ? null : Number(v);
-    salvarClt({...x.c, demissao:{...x.c.demissao, ajustes:{itens, extras, obs:ed.obs||"", diasTrab:num(ed.diasTrab), valorDia:num(ed.valorDia), em:Date.now()}}}); toast("Valores da rescisão de "+x.c.nome.split(" ")[0]+" salvos — já valem em Contas do mês"); };
-  const limpar=(x)=>{ if(!confirm("Voltar todos os valores da rescisão de "+x.c.nome+" para o cálculo do sistema?")) return; salvarClt({...x.c, demissao:{...x.c.demissao, ajustes:null}}); setEd({itens:{},extras:[],obs:"",diasTrab:"",valorDia:""}); toast("Valores voltaram ao cálculo do sistema"); };
+    salvarClt({...x.c, demissao:{...x.c.demissao, ajustes:{itens, extras, obs:ed.obs||"", diasTrab:num(ed.diasTrab), valorDia:num(ed.valorDia), vtDias:num(ed.vtDias), em:Date.now()}}}); toast("Valores da rescisão de "+x.c.nome.split(" ")[0]+" salvos — já valem em Contas do mês"); };
+  const limpar=(x)=>{ if(!confirm("Voltar todos os valores da rescisão de "+x.c.nome+" para o cálculo do sistema?")) return; salvarClt({...x.c, demissao:{...x.c.demissao, ajustes:null}}); setEd({itens:{},extras:[],obs:"",diasTrab:"",valorDia:"",vtDias:""}); toast("Valores voltaram ao cálculo do sistema"); };
   const marcarPago=(x,v)=>{ salvarClt({...x.c, demissao:{...x.c.demissao, pagoEm:v?hojeStr():null}}); toast(v?"Rescisão marcada como paga":"Rescisão voltou para pendente"); };
   // prévia com os valores digitados (antes de salvar)
   const previa=(x)=> ed ? calcRescisao({...x.c, demissao:{...x.c.demissao, ajustes:{itens:ed.itens, extras:(ed.extras||[]).map(e=>({...e,valor:Number(e.valor)||0}))}}}, x.sal) : x.r;
@@ -4664,7 +4665,7 @@ function AbaRescisoes({uni, irContas}){
     <div className="flex flex-wrap gap-2 mb-3">{[["pendentes","A pagar"],["todas","Todas"]].map(([k,l])=><button key={k} onClick={()=>setVer(k)} className={cx("px-3 py-1.5 rounded-lg text-xs font-semibold border", ver===k?"grad-brand text-white border-transparent":"bg-white border-slate-200 text-slate-600")}>{l}</button>)}</div>
     {linhas.length===0 && <Card className="p-8 text-center text-slate-400 text-sm">{ver==="pendentes"?"Nenhuma rescisão a pagar.":"Ninguém desligado ainda."} Para desligar alguém use <b>Demitir</b> em Colaboradores.</Card>}
     <div className="space-y-3">{linhas.map(x0=>{ const ab=aberto===x0.c.id;
-      const x = (ab && ed && (x0.c.vinculo==="fixo"||x0.c.demissao.modo==="simples")) ? (()=>{ const xp=linhaDe({...x0.c, demissao:{...x0.c.demissao, ajustes:{...(x0.c.demissao.ajustes||{}), diasTrab:ed.diasTrab===""?null:ed.diasTrab, valorDia:ed.valorDia===""?null:ed.valorDia}}}); return {...xp, r:x0.r, liquido:r2(xp.liquido-(xp.r?xp.r.total:0)+(x0.r?x0.r.total:0)), quitado:x0.quitado, pago:x0.pago}; })() : x0;
+      const x = (ab && ed && (x0.c.vinculo==="fixo"||x0.c.demissao.modo==="simples")) ? (()=>{ const xp=linhaDe({...x0.c, demissao:{...x0.c.demissao, ajustes:{...(x0.c.demissao.ajustes||{}), diasTrab:ed.diasTrab===""?null:ed.diasTrab, valorDia:ed.valorDia===""?null:ed.valorDia, vtDias:ed.vtDias===""?null:ed.vtDias}}}); return {...xp, r:x0.r, liquido:r2(xp.liquido-(xp.r?xp.r.total:0)+(x0.r?x0.r.total:0)), quitado:x0.quitado, pago:x0.pago}; })() : x0;
       const c=x.c; const r=ab?previa(x):x.r; const atras=!x.quitado&&x.prazo<hojeStr();
       return <Card key={c.id} className="overflow-hidden" aria-label={"Rescisão "+c.nome}>
         <button onClick={()=>abrir(x)} className="w-full text-left p-4 flex flex-wrap items-center gap-3 hover:bg-slate-50/70">
@@ -4688,7 +4689,9 @@ function AbaRescisoes({uni, irContas}){
                 <Field label="Dias trabalhados"><input type="number" min="0" aria-label={"Dias trabalhados "+c.nome} value={ed&&ed.diasTrab!==""?ed.diasTrab:x0.porDia?x0.porDia.dias:0} onChange={e=>setEd(v=>({...v,diasTrab:e.target.value}))} className="px-2 py-1.5 rounded-lg border border-slate-200 text-sm text-right w-20"/></Field>
                 <span className="pb-2 text-slate-500">×</span>
                 <Field label="Valor do dia (R$)"><input type="number" step="0.01" aria-label={"Valor do dia "+c.nome} value={ed&&ed.valorDia!==""?ed.valorDia:x0.porDia?x0.porDia.valorDia:0} onChange={e=>setEd(v=>({...v,valorDia:e.target.value}))} className="px-2 py-1.5 rounded-lg border border-slate-200 text-sm text-right w-28"/></Field>
-                <span className="pb-2 text-slate-500">=</span><span className="pb-2 font-bold tabular-nums">{fmtBRL(x.saldo||0)}</span></div>
+                <span className="pb-2 text-slate-500">=</span><span className="pb-2 font-bold tabular-nums">{fmtBRL(x.saldo||0)}</span>
+                <div className="ml-auto"><Field label="Dias de VT"><input type="number" min="0" aria-label={"Dias de VT "+c.nome} value={ed&&ed.vtDias!==""?ed.vtDias:x0.porDia?x0.porDia.vtDias:0} onChange={e=>setEd(v=>({...v,vtDias:e.target.value}))} className="px-2 py-1.5 rounded-lg border border-slate-200 text-sm text-right w-20"/></Field></div></div>
+              <div className="text-[11px] text-slate-500 mt-1">Dobra conta 2 dias trabalhados e 1 dia de VT (mesma ida e volta).</div>
               <div className="text-[11px] text-slate-500 mt-1">{x.porDia.fonte==="ponto"?`Dias com ponto até ${fmtDataBR(c.demissao.data)}: ${x.porDia.datas.map(d=>d.slice(8)+"/"+d.slice(5,7)).join(", ")}`:x.porDia.fonte==="escala"?`Sem ponto: dias da escala até ${fmtDataBR(c.demissao.data)} (${x.porDia.datas.length})`:`Dias digitados à mão (${x.porDia.diasPonto} com ponto)`} · valor do dia sugerido = salário ÷ 30 ({fmtBRL(x.sal/30)})</div></div>}
           </>}
           {!r ? <p className="text-sm text-slate-500">Sem salário cadastrado: não dá para calcular. Lance os valores em Contas do mês.</p> : <>
