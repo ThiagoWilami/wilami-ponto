@@ -4652,7 +4652,7 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
 }
 // ===== Aba Rescisões: todos os desligados, cálculo de cada verba e valores editáveis =====
 function AbaRescisoes({uni, irContas}){
-  const { clts, registros, pontoHist, getDossie, cltExtraAjuste, gorjetasCLT, escala, escalaOv, atestados, pagamentosCLT, faltaDescontoDesde, feriadosExtras, salvarClt, acesso, pjs, pagamentosPJ, relFin, setRelFin } = useStore();
+  const { clts, registros, pontoHist, getDossie, cltExtraAjuste, gorjetasCLT, escala, escalaOv, atestados, pagamentosCLT, faltaDescontoDesde, feriadosExtras, salvarClt, acesso, pjs, pagamentosPJ, relFin, setRelFin, unidades, empresaContratante } = useStore();
   const toast=useContext(ToastCtx); const podeSigilo=!acesso||acesso.podeSigilo;
   const setModo=(c,modo)=>{ salvarClt({...c, demissao:{...c.demissao, modo:modo||null}}); toast(modo==="simples"?"Rescisão de "+c.nome.split(" ")[0]+": só dias trabalhados + VT":"Rescisão de "+c.nome.split(" ")[0]+": cálculo completo"); };
   const [ver,setVer]=useState("pendentes"); const [aberto,setAberto]=useState(null); const [ed,setEd]=useState(null);   // ed: {itens:{}, extras:[], obs}
@@ -4702,9 +4702,71 @@ function AbaRescisoes({uni, irContas}){
   // prévia com os valores digitados (antes de salvar)
   const previa=(x)=> ed ? calcRescisao({...x.c, demissao:{...x.c.demissao, ajustes:{itens:ed.itens, extras:(ed.extras||[]).map(e=>({...e,valor:Number(e.valor)||0}))}}}, x.sal) : x.r;
   const inp="px-2 py-1.5 rounded-lg border border-slate-200 text-sm text-right tabular-nums w-28 outline-none focus:ring-2 focus:ring-brand-400";
+  // ===== PDF para a Diretoria: rescisões da lista (filtro atual), com o cálculo de cada uma e o total a pagar =====
+  const exportarPdf=async()=>{ if(!linhas.length && !pjsEnc.length){ toast("Nenhuma rescisão na lista"); return; }
+    try{ const L=await carregarPdfLib(); const doc=await L.PDFDocument.create(); const f=await doc.embedFont(L.StandardFonts.Helvetica), b=await doc.embedFont(L.StandardFonts.HelveticaBold);
+      const limpo=(t)=>String(t??"").replace(/[—–−]/g,"-").replace(/[→⇒]/g,"=>").replace(/[“”]/g,'"').replace(/[^\x20-\x7E\u00A0-\u00FF]/g,"");
+      const C={esc:L.rgb(0.09,0.27,0.13),claro:L.rgb(0.94,0.97,0.93),cinza:L.rgb(0.42,0.42,0.42),linha:L.rgb(0.86,0.88,0.86),txt:L.rgb(0.12,0.12,0.12),verm:L.rgb(0.72,0.1,0.1),verde:L.rgb(0.05,0.45,0.2),branco:L.rgb(1,1,1),roxo:L.rgb(0.4,0.2,0.6),ambar:L.rgb(0.6,0.4,0.05)};
+      const W=595,H=842,M=36; let pg,y; const uNome=uni==="todas"?"Todas as casas":unidadeNome(Number(uni),unidades); const emp=empresaEfetiva(empresaContratante);
+      const txt=(t,x,yy,o={})=>pg.drawText(limpo(t),{x,y:yy,size:o.size||8.5,font:o.bold?b:f,color:o.cor||C.txt});
+      const dir=(t,xr,yy,o={})=>{ const fn=o.bold?b:f; txt(t,xr-fn.widthOfTextAtSize(limpo(t),o.size||8.5),yy,o); };
+      const quebra=(t,w,sz,bold)=>{ const fn=bold?b:f; const out=[]; let cur=""; limpo(t).split(" ").forEach(p=>{ const tt=cur?cur+" "+p:p; if(fn.widthOfTextAtSize(tt,sz)>w&&cur){ out.push(cur); cur=p; } else cur=tt; }); if(cur) out.push(cur); return out; };
+      const nova=()=>{ pg=doc.addPage([W,H]); pg.drawRectangle({x:0,y:H-58,width:W,height:58,color:C.esc});
+        txt("RESCISÕES A PAGAR",M,H-28,{bold:true,size:15,cor:C.branco}); txt((emp.razao||"")+" · "+uNome,M,H-44,{size:8.5,cor:C.branco});
+        dir(ver==="todas"?"Todos os desligados":"Somente pendentes",W-M,H-28,{bold:true,size:9,cor:C.branco}); dir("Emitido em "+fmtDataBR(hojeStr()),W-M,H-44,{size:8.5,cor:C.branco}); y=H-78; };
+      const precisa=(h)=>{ if(y-h<46) nova(); };
+      const lin=(rot,val,o={})=>{ const ls=quebra(rot,W-2*M-120,o.size||8.5,o.bold); precisa(ls.length*11+2); ls.forEach((l,i)=>{ txt(l,M+(o.ind||10),y,{size:o.size||8.5,bold:o.bold,cor:o.corRot||C.txt}); if(i===0&&val!=null) dir(val,W-M-6,y,{size:o.size||8.5,bold:o.bold,cor:o.cor||C.txt}); y-=11; }); };
+      const nota=(t)=>{ quebra(t,W-2*M-40,7).forEach(l=>{ precisa(9); txt(l,M+22,y,{size:7,cor:C.cinza}); y-=9; }); };
+      const dd=(d)=>d.slice(8)+"/"+d.slice(5,7);
+      nova();
+      // resumo
+      const aPagar=(x)=>r2(Math.max(0,x.acerto-x.pago)); const totAc=r2(linhas.reduce((s2,x)=>s2+x.acerto,0)), totPago=r2(linhas.reduce((s2,x)=>s2+x.pago,0)), totRest=r2(linhas.reduce((s2,x)=>s2+aPagar(x),0));
+      const totPJ=r2(pjsEnc.reduce((s2,x)=>s2+Math.max(0,x.saldo),0)); const venc=linhas.filter(x=>!x.quitado&&x.prazo<hojeStr()).length;
+      pg.drawRectangle({x:M,y:y-46,width:W-2*M,height:56,color:C.claro});
+      txt("RESUMO",M+10,y-2,{bold:true,size:8,cor:C.cinza});
+      txt(linhas.length+" colaborador(es)"+(pjsEnc.length?" · "+pjsEnc.length+" PJ encerrado(s)":"")+(venc?" · "+venc+" com prazo vencido":""),M+10,y-16,{size:9,cor:venc?C.verm:C.txt});
+      txt("Total das rescisões "+fmtBRL(totAc)+" · já pago "+fmtBRL(totPago)+(totPJ?" · PJ a pagar "+fmtBRL(totPJ):""),M+10,y-30,{size:9});
+      dir("A PAGAR "+fmtBRL(r2(totRest+totPJ)),W-M-10,y-16,{bold:true,size:14,cor:C.esc}); y-=68;
+      linhas.forEach(x=>{ const c=x.c; const r=x.r; const vinc=c.vinculo==="fixo"?"Freela Fixo":c.vinculo==="confianca"?"Gerência":"CLT"; const atras=!x.quitado&&x.prazo<hojeStr();
+        precisa(90); pg.drawRectangle({x:M,y:y-6,width:W-2*M,height:20,color:C.esc});
+        txt(c.nome,M+8,y,{bold:true,size:10.5,cor:C.branco}); dir(x.quitado?"PAGO":atras?"VENCIDO":"A PAGAR",W-M-8,y,{bold:true,size:9,cor:C.branco}); y-=20;
+        const casa=c.unidade!=null&&c.unidade!=="todas"?unidadeNome(Number(c.unidade),unidades):"";
+        quebra([vinc,c.cargo,casa].filter(Boolean).join(" · ")+" · admissão "+fmtDataBR(c.admissao)+" · último dia "+fmtDataBR(c.demissao.data)+(TIPOS_DEMISSAO[c.demissao.tipo]?" · "+TIPOS_DEMISSAO[c.demissao.tipo]:"")+((c.vinculo==="fixo"||c.demissao.modo==="simples")?" · só dias trabalhados + VT":"")+" · pagar até "+fmtDataBR(x.prazo)+(c.demissao.motivo?" · motivo: "+c.demissao.motivo:""),W-2*M-20,7.5).forEach(l=>{ txt(l,M+10,y,{size:7.5,cor:C.cinza}); y-=10; }); y-=3;
+        if(!r && !x.porDia){ lin("Sem salário cadastrado: valores lançados em Contas do mês.",null,{corRot:C.cinza}); }
+        // salário do mês
+        if(x.porDia){ const pd=x.porDia;
+          if(pd.faltas.length) lin(`Diárias do período: ${pd.dias} trabalhada(s)${pd.dobras?` (${pd.dobras} dobra)`:""} + ${pd.faltas.length} falta(s) × ${fmtBRL(pd.valorDia)}`,fmtBRL(r2(pd.valorDias+pd.descFaltas)));
+          else lin(`Dias trabalhados: ${pd.dias} × ${fmtBRL(pd.valorDia)}${pd.dobras?` (${pd.dobras} dobra)`:""}`,fmtBRL(pd.valorDias));
+          if(pd.fonte==="ponto"&&pd.datas.length) nota("Dias com ponto: "+pd.datas.map(dd).join(", "));
+          if(pd.faltas.length){ lin(`(-) Desconto de faltas: ${pd.faltas.length} × ${fmtBRL(pd.valorDia)} (${pd.faltas.map(dd).join(", ")})`,"-"+fmtBRL(pd.descFaltas),{cor:C.verm,corRot:C.verm}); lin("= Saldo dos dias trabalhados",fmtBRL(pd.valorDias),{bold:true}); }
+          if(pd.atestados.length) nota("Atestado ("+pd.atestados.map(dd).join(", ")+"): dia não trabalhado, não pago e sem desconto.");
+          const outros=r2(x.liquido-(r?r.total:0)-(pd.valorDias||0)); if(Math.abs(outros)>0.009) lin(outros<0?"(-) Outros descontos do mês (VT de faltas do mês anterior que passam do VT, etc.)":"Outros valores do mês",(outros<0?"-":"")+fmtBRL(Math.abs(outros)),{cor:outros<0?C.verm:C.txt});
+        } else lin("Saldo de salário do mês (dias até a saída, com faltas, extras e descontos)",fmtBRL(r2(x.liquido-(r?r.total:0))));
+        if(r && !r.simples){ r.itens.forEach(i=>lin(i.rot+(i.ref?" ("+i.ref+")":"")+(i.editado?" - ajustado":""),"+"+fmtBRL(i.valor))); r.descontos.forEach(i=>lin("(-) "+i.rot+(i.ref?" ("+i.ref+")":""),"-"+fmtBRL(i.valor),{cor:C.verm,corRot:C.verm})); }
+        else if(r && r.simples){ r.itens.filter(i=>i.valor).forEach(i=>lin(i.rot,"+"+fmtBRL(i.valor))); r.descontos.filter(i=>i.valor).forEach(i=>lin("(-) "+i.rot,"-"+fmtBRL(i.valor),{cor:C.verm,corRot:C.verm})); }
+        if(x.descAnt>0) lin("(-) Pago a mais em "+fmtCompetencia(x.pa.de)+(x.pa.autoVT>0?" (VT adiantado)":""),"-"+fmtBRL(x.descAnt),{cor:C.roxo,corRot:C.roxo});
+        if(x.vtInfo && (x.vtInfo.prev>0||x.vtInfo.pago>0||x.vtInfo.cred>0)){ const v=x.vtInfo;
+          if(v.saldo>0.009) lin(`Vale-transporte a pagar (${v.dias||0} dia(s) × ${fmtBRL(v.dia||0)}${v.cred>0?` - ${fmtBRL(v.cred)} pago a mais`:""}${v.pago>0?` - ${fmtBRL(v.pago)} já pago`:""})`,"+"+fmtBRL(v.saldo));
+          else if(v.saldo< -0.009) lin("(-) VT pago a mais (devolvido no acerto)","-"+fmtBRL(-v.saldo),{cor:C.roxo,corRot:C.roxo}); }
+        if(c.demissao.ajustes&&c.demissao.ajustes.obs) nota("Obs.: "+c.demissao.ajustes.obs);
+        precisa(44); y-=3; pg.drawLine({start:{x:M+10,y:y+10},end:{x:W-M-6,y:y+10},thickness:0.6,color:C.linha});
+        lin("Total da rescisão",fmtBRL(x.acerto),{bold:true,size:9.5}); if(x.pago>0) lin("Já pago",fmtBRL(x.pago),{corRot:C.cinza,cor:C.cinza});
+        lin("A pagar",fmtBRL(aPagar(x)),{bold:true,size:10,cor:aPagar(x)>0?C.esc:C.verde});
+        if(c.pix) nota("PIX: "+c.pix); if(r&&r.multaFGTS) nota("Multa de 40% do FGTS: recolher em guia (GRRF), fora deste valor.");
+        y-=10; });
+      if(pjsEnc.length){ precisa(40); txt("PRESTADORES PJ ENCERRADOS",M,y,{bold:true,size:9,cor:C.cinza}); y-=14;
+        pjsEnc.forEach(x=>{ precisa(30); lin(x.pj.nome+" · encerrado em "+fmtDataBR(x.fimP)+" · "+(x.det.cheio?"mês inteiro":x.det.dias+" dia(s) do mês")+(x.pago>0?" · já pago "+fmtBRL(x.pago):""),fmtBRL(Math.max(0,x.saldo)),{bold:true}); y-=2; }); }
+      nota("Valores brutos. INSS/IRRF com a contabilidade. Prazo de pagamento: 10 dias após o último dia (art. 477 da CLT).");
+      doc.getPages().forEach((p,i,a)=>p.drawText(limpo("Wilami Ponto & RH · gerado em "+new Date().toLocaleString("pt-BR")+" · página "+(i+1)+" de "+a.length),{x:M,y:20,size:6.5,font:f,color:C.cinza}));
+      const bytes=await doc.save(); const nome="Rescisoes a pagar "+hojeStr()+" - "+uNome.replace(/[\\/:*?"<>|]/g,"")+".pdf";
+      const blob=new Blob([bytes],{type:"application/pdf"}); let compartilhou=false;
+      try{ const file=new File([blob],nome.normalize("NFD").replace(/[\u0300-\u036f]/g,""),{type:"application/pdf"}); if(navigator.canShare && navigator.canShare({files:[file]}) && /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent||"")){ await navigator.share({files:[file], title:"Rescisões a pagar"}); compartilhou=true; } }catch(e){ if(e&&e.name==="AbortError") compartilhou=true; }
+      if(!compartilhou) baixarBlob(blob,nome); toast("PDF das rescisões gerado ("+linhas.length+" colaborador(es))");
+    }catch(e){ console.error(e); toast("Não foi possível gerar o PDF: "+e.message); } };
   return <div>
     <div className="mb-3 p-3 rounded-xl bg-rose-50 text-rose-900 text-xs">Aqui ficam todos os <b>desligados</b>: o cálculo de cada verba, o total a pagar e o prazo (10 dias). Você pode <b>trocar qualquer valor</b> ou <b>lançar uma linha a mais</b> (provento ou desconto) — o valor salvo passa a valer em Contas do mês, na folha e no PDF. Freela Fixo não tem verbas rescisórias.</div>
-    <div className="flex flex-wrap gap-2 mb-3">{[["pendentes","A pagar"],["todas","Todas"]].map(([k,l])=><button key={k} onClick={()=>setVer(k)} className={cx("px-3 py-1.5 rounded-lg text-xs font-semibold border", ver===k?"grad-brand text-white border-transparent":"bg-white border-slate-200 text-slate-600")}>{l}</button>)}</div>
+    <div className="flex flex-wrap items-center gap-2 mb-3">{[["pendentes","A pagar"],["todas","Todas"]].map(([k,l])=><button key={k} onClick={()=>setVer(k)} className={cx("px-3 py-1.5 rounded-lg text-xs font-semibold border", ver===k?"grad-brand text-white border-transparent":"bg-white border-slate-200 text-slate-600")}>{l}</button>)}
+      <div className="flex-1"/><Btn size="sm" icon={I.download||I.receipt} onClick={exportarPdf}>Exportar PDF para a Diretoria</Btn></div>
     {linhas.length===0 && <Card className="p-8 text-center text-slate-400 text-sm">{ver==="pendentes"?"Nenhuma rescisão a pagar.":"Ninguém desligado ainda."} Para desligar alguém use <b>Demitir</b> em Colaboradores.</Card>}
     <div className="space-y-3">{linhas.map(x0=>{ const ab=aberto===x0.c.id;
       const x = (ab && ed && (x0.c.vinculo==="fixo"||x0.c.demissao.modo==="simples")) ? (()=>{ const xp=linhaDe({...x0.c, demissao:{...x0.c.demissao, ajustes:{...(x0.c.demissao.ajustes||{}), diasTrab:ed.diasTrab===""?null:ed.diasTrab, valorDia:ed.valorDia===""?null:ed.valorDia, vtDias:ed.vtDias===""?null:ed.vtDias}}}); const dr=(x0.r?x0.r.total:0)-(xp.r?xp.r.total:0); return {...xp, r:x0.r, liquido:r2(xp.liquido+dr), liqAj:r2(xp.liqAj+dr), acerto:Math.max(0,r2(xp.acerto+dr)), quitado:x0.quitado, pago:x0.pago}; })() : x0;
