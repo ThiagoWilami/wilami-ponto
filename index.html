@@ -760,7 +760,14 @@ function fimPrazoDeterminado(c, data){
   if(ex.p.length>1 && dec.p1!=="prorrogado"){ const f1=fim(ex.p[0]); if(data===f1) return null; if(data<f1) return f1; }
   return ult; }
 function calcRescisao(c, salarioMes){
-  const d=c&&c.demissao; if(!d||!d.data||c.vinculo==="fixo"||!(salarioMes>0)) return null;
+  const d=c&&c.demissao; if(!d||!d.data||!(salarioMes>0)) return null;
+  // "Só dias trabalhados + VT": sem 13º, férias, 1/3, aviso nem indenizações — só os dias até o último dia (no salário do mês)
+  // e o VT; aceita linhas lançadas à mão. Freela Fixo é sempre assim.
+  if(c.vinculo==="fixo" || d.modo==="simples"){ const r2=(v)=>Math.round(v*100)/100; const itens=[], descontos=[];
+    ((d.ajustes||{}).extras||[]).forEach(e=>{ const v=r2(Number(e.valor)||0); if(!(v>0)) return; const it={k:"ex-"+e.id, rot:e.rot||"Ajuste", ref:"", valor:v, calc:"lançado à mão"+(e.obs?" · "+e.obs:""), extra:true}; (e.tipo==="desc"?descontos:itens).push(it); });
+    const prov=r2(itens.reduce((s,x)=>s+x.valor,0)), desc=r2(descontos.reduce((s,x)=>s+x.valor,0));
+    return { simples:true, tipo:d.tipo||"", aviso:"", diasAviso:0, anosServ:avosFerias(c.admissao||d.data,d.data).anos, salarioMes, adm:c.admissao||d.data, fimProj:d.data, fimDet:null, diasRest:0, feriasVencidas:0,
+      itens, descontos, prov, desc, total:r2(prov-desc), prazo:ymd(addDias(new Date(d.data+"T12:00:00"),10)), multaFGTS:false, data:d.data }; }
   const tipo=d.tipo||"semjusta"; const adm=c.admissao||d.data;
   // arts. 479/480: rompimento antecipado de contrato por prazo determinado → metade da remuneração dos dias que faltavam (substitui o aviso prévio)
   const fimDet=(tipo==="semjusta"||tipo==="pedido") ? fimPrazoDeterminado(c,d.data) : null;
@@ -779,6 +786,13 @@ function calcRescisao(c, salarioMes){
   if(tipo!=="justa"){ const af=avosFerias(adm,fimProj).avos; if(af>0){ const v=r2(salarioMes/12*af); itens.push({k:"fp", rot:"Férias proporcionais", ref:af+"/12", valor:v, calc:S+" ÷ 12 × "+af+" mês(es) desde "+fmtDataBR(_addMeses(adm,12*avosFerias(adm,fimProj).anos))+" (fração de 15 dias ou mais conta)"}); itens.push({k:"fp3", rot:"1/3 sobre férias proporcionais", ref:"", valor:r2(v/3), calc:fmtBRL(v)+" ÷ 3"}); } }
   const descontos=[]; if(tipo==="pedido"&&aviso==="descontar") descontos.push({k:"avisodesc", rot:"Aviso prévio não cumprido", ref:"30 dias", valor:r2(salarioMes), calc:S+" (30 dias)"});
   if(fimDet && tipo==="pedido" && ind479>0) descontos.push({k:"art480", rot:"Indenização art. 480 CLT (saída antes do fim do contrato)", ref:diasRest+" dias ÷ 2 · contrato até "+fmtDataBR(fimDet), valor:ind479, calc:S+" ÷ 30 × "+diasRest+" dias que faltavam ÷ 2"});
+  // ajustes feitos à mão na aba Rescisões: valor de cada verba e linhas extras (proventos ou descontos)
+  const aj=d.ajustes||{}; const ov=aj.itens||{};
+  const aplicaOv=(x)=>{ const v=ov[x.k]; if(v==null||v===""||isNaN(Number(v))) return x; const nv=r2(Number(v)); return nv===x.valor?x:{...x, valorCalc:x.valor, valor:nv, editado:true}; };
+  const itensF=itens.map(aplicaOv), descF=descontos.map(aplicaOv);
+  (aj.extras||[]).forEach(e=>{ const v=r2(Number(e.valor)||0); if(!(v>0)) return; const it={k:"ex-"+e.id, rot:e.rot||"Ajuste", ref:"", valor:v, calc:"lançado à mão"+(e.obs?" · "+e.obs:""), extra:true};
+    if(e.tipo==="desc") descF.push(it); else itensF.push(it); });
+  itens.length=0; itens.push(...itensF); descontos.length=0; descontos.push(...descF);
   const prov=r2(itens.reduce((s,x)=>s+x.valor,0)), desc=r2(descontos.reduce((s,x)=>s+x.valor,0));
   const prazo=ymd(addDias(new Date(d.data+"T12:00:00"),10));   // art. 477 §6º: até 10 dias do término
   return { tipo, aviso, diasAviso, anosServ, salarioMes, adm, fimProj, fimDet, diasRest, feriasVencidas:vencidas, itens, descontos, prov, desc, total:r2(prov-desc), prazo, multaFGTS:tipo==="semjusta", data:d.data }; }
@@ -805,15 +819,38 @@ function calcFolhaLinha(c, ctx){
   let diasContrato=30, salario=salarioMes;
   if(salarioMes && fc.ini && fc.fim){ const di=(c.admissao&&c.admissao>fc.ini)?c.admissao:fc.ini, df=(c.fimContrato&&c.fimContrato<fc.fim)?c.fimContrato:fc.fim;
     if(di>df){ diasContrato=0; salario=0; } else if(di!==fc.ini || df!==fc.fim){ diasContrato=Math.min(30,datasEntre(di,df).length); salario=Math.round(salarioMes*diasContrato/30*100)/100; } }
+  // Desligado sem registro (Freela Fixo, ou "só dias trabalhados + VT"): paga POR DIA TRABALHADO até o último dia,
+  // não o proporcional do mês. Dias = dias com ponto (sem ponto: dias da escala); valor do dia = salário ÷ 30. Ambos editáveis.
+  const _dm=c.demissao; let porDia=null;
+  if(_dm && _dm.data && (c.vinculo==="fixo"||_dm.modo==="simples") && _dm.base!=="mes" && fc.ini && fc.fim && _dm.data>=fc.ini && _dm.data<=fc.fim){
+    const di=(c.admissao&&c.admissao>fc.ini)?c.admissao:fc.ini, df=_dm.data; const aj=_dm.ajustes||{};
+    const regsP=(fc.registros||[]).filter(r=>r && r.data && r.data>=di && r.data<=df && ((r.pid!=null&&String(r.pid)===String(c.id)) || (r.nome&&r.nome===c.nome)));
+    const datasPonto=[...new Set(regsP.map(r=>r.data))].sort();
+    const dobras=new Set([...regsP.filter(r=>r.dobra).map(r=>r.data), ...((aj.dobras)||[])]);   // dia lançado/marcado como dobra = 2 diárias
+    let fonte="ponto", datas=datasPonto;
+    if(!datas.length){ const lst=[]; if(fc.escala && c.unidade!=null) diasTrabalhoNoPeriodo(c,di,df,fc.escala,{},lst);
+      const fora=new Set(((getDossie&&getDossie("clt-"+c.id).faltas)||[]).filter(x=>x.tipo==="falta"||x.tipo==="atestado").map(x=>x.data));
+      datas=lst.filter(d=>!fora.has(d)); fonte="escala"; }
+    let dias=datas.length+datas.filter(d=>dobras.has(d)).length; if(aj.diasTrab!=null&&aj.diasTrab!==""&&!isNaN(Number(aj.diasTrab))){ dias=Math.max(0,Math.round(Number(aj.diasTrab))); fonte="manual"; }
+    const vd=(aj.valorDia!=null&&aj.valorDia!==""&&!isNaN(Number(aj.valorDia)))?Number(aj.valorDia):salarioMes/30;
+    const vtD=(aj.vtDias!=null&&aj.vtDias!==""&&!isNaN(Number(aj.vtDias)))?Math.max(0,Math.round(Number(aj.vtDias))):(fonte==="manual"?dias:datas.length);   // dobra = 2 diárias, mas 1 dia de VT
+    const diasAuto=datas.length+datas.filter(d=>dobras.has(d)).length;
+    // faltas marcadas (Lançar / dossiê) no período: aparecem como DESCONTO de 1 diária cada.
+    // Para não descontar duas vezes, o bruto = (dias trabalhados + faltas) × valor do dia; − faltas = dias trabalhados.
+    const dosF=(getDossie&&getDossie("clt-"+c.id).faltas)||[]; const trab=new Set(datas);
+    const fPD=[...new Set(dosF.filter(x=>x.tipo==="falta"&&x.data>=di&&x.data<=df&&!trab.has(x.data)).map(x=>x.data))].sort();
+    const aPD=[...new Set(dosF.filter(x=>x.tipo==="atestado"&&x.data>=di&&x.data<=df&&!trab.has(x.data)).map(x=>x.data))].sort();
+    porDia={ faltas:fPD, atestados:aPD, valorDias:Math.round(vd*dias*100)/100, descFaltas:Math.round(vd*fPD.length*100)/100, dias, diasAuto, vtDiasAuto:datas.length, vtDiasManual:aj.vtDias!=null&&aj.vtDias!=="", vtDias:vtD, dobras:datas.filter(d=>dobras.has(d)).length, valorDia:Math.round(vd*100)/100, fonte, datas, diasPonto:datasPonto.length, valorDiaEditado:aj.valorDia!=null&&aj.valorDia!=="" };
+    salario=Math.round(vd*(dias+fPD.length)*100)/100; diasContrato=dias; }
   const vHora=salarioMes? salarioMes/220 : 0;        // hora normal (44h/sem → 220h/mês)
   const vDia =salarioMes? salarioMes/30  : 0;        // valor do dia (base da falta e do DSR)
   const he50Val=(extrasMin/60)*vHora*1.5, he100Val=(extras100Min/60)*vHora*2;
   const heNotVal=(extNot50Min/60)*vHora*0.2*0.5 + (extNot100Min/60)*vHora*0.2*1;   // adicional noturno sobre a extra (OJ 97)
   const extrasCalc=he50Val+he100Val+heNotVal;
   const extraOverride = cltExtraAjuste[c.id+"|"+ymRef];
-  const extrasVal = extraOverride!=null ? Number(extraOverride) : extrasCalc;
+  const extrasVal = extraOverride!=null ? Number(extraOverride) : (porDia ? 0 : extrasCalc);   // sem registro, pago por dia: sem horas extras
   const extrasEditado = extraOverride!=null;
-  const notVal=(notMin/60)*vHora*0.2;               // adicional noturno 20% sobre a hora noturna reduzida (art. 73)
+  const notVal=porDia ? 0 : (notMin/60)*vHora*0.2;               // adicional noturno 20% sobre a hora noturna reduzida (art. 73)
   // DSR sobre extras e adicional noturno: (extras + noturno) ÷ dias úteis × (domingos + feriados) do período
   let diasUteis=0, diasDSR=0; if(fc.ini&&fc.fim) datasEntre(fc.ini,fc.fim).forEach(ds=>{ if(wdDe(ds)===6||ehFeriado(ds,feriados)) diasDSR++; else diasUteis++; });
   const dsrReflexo = diasUteis>0 ? Math.round(((extrasVal+notVal)/diasUteis*diasDSR)*100)/100 : 0;
@@ -822,12 +859,12 @@ function calcFolhaLinha(c, ctx){
   const atrasosD=(dos.faltas||[]).filter(x=>x.tipo==="atraso" && x.descontar && naData(x.data));
   const dossieDatas=new Set((dos.faltas||[]).map(x=>x.data));   // datas já tratadas manualmente (falta OU abono)
   const auto = faltasCtx ? faltasAutoDe(c, faltasCtx).filter(d=>!dossieDatas.has(d)) : [];
-  const faltaDatas=[...new Set([...faltasManuais,...auto])].filter(naData);
+  const faltaDatas=porDia ? porDia.faltas.slice() : [...new Set([...faltasManuais,...auto])].filter(naData);
   const nFaltas=faltaDatas.length;
   const semanasFalta=new Set(faltaDatas.map(d=>{ const [y,m,dd]=d.split("-").map(Number); return ymd(segDaSemana(new Date(y,m-1,dd))); }));
-  const nDSR=semanasFalta.size;                      // política escolhida: perde 1 DSR por semana com falta
-  const descFaltas=nFaltas*vDia, descDSR=nDSR*vDia;
-  const descAtrasos=atrasosD.reduce((s,x)=>s+vHora*(Number(x.horas)||0),0);
+  const nDSR=porDia ? 0 : semanasFalta.size;                      // política escolhida: perde 1 DSR por semana com falta
+  const descFaltas=porDia?porDia.descFaltas:nFaltas*vDia, descDSR=porDia?0:nDSR*vDia;   // por dia: 1 diária por falta (sem DSR)
+  const descAtrasos=porDia ? 0 : atrasosD.reduce((s,x)=>s+vHora*(Number(x.horas)||0),0);
   // Vale Transporte
   //  • Cadastro com VALOR POR DIA (novo): VT do mês = valor do dia × dias de trabalho na escala do período (folgas fora).
   //    As faltas de um mês são descontadas do VT no mês SEGUINTE (o VT é pago adiantado).
@@ -842,6 +879,7 @@ function calcFolhaLinha(c, ctx){
     // (trocas pontuais), que podem ter sido feitas antes de a pessoa entrar e a deixariam de fora desses dias.
     // Faltas do mês são descontadas no VT do mês SEGUINTE (descVTFaltas abaixo).
     vtDias = faltasCtx ? diasTrabalhoNoPeriodo(c,faltasCtx.ini,faltasCtx.fim,faltasCtx.escala,{},vtDatas) : 0;
+    if(porDia){ vtDias=porDia.vtDias; }   // sem registro: VT só dos dias trabalhados
     vt=Math.round(vtDia*vtDias*100)/100;
     if(faltasCtx){ const [pi,pf]=mesAnteriorDe(faltasCtx.ini); vtMesAnt=pi.slice(0,7);
       const manPrev=(dos.faltas||[]).filter(x=>x.tipo==="falta" && x.descontar && x.data>=pi && x.data<=pf).map(x=>x.data);
@@ -856,14 +894,16 @@ function calcFolhaLinha(c, ctx){
     vtDia = vt>0 ? vt/(diasEscalados||22) : 0;
   }
   const vtLiquido = vtDiaCad>0 ? Math.round(Math.max(0,vt-vtFaltasValor)*100)/100 : vt;   // VT a pagar no mês
-  const vtDesconto = vtLiquido>0 ? Math.min(salario*0.06, vtLiquido) : 0;
+  const vtDesconto = (vtLiquido>0 && !porDia) ? Math.min(salario*0.06, vtLiquido) : 0;   // 6% é desconto legal da CLT: não vale para quem não é registrado
   if(!(vtDiaCad>0)) descVTFaltas = vt>0 ? Math.min(Math.max(0,vt-vtDesconto), nFaltas*vtDia) : 0;
+  // VT das faltas do mês anterior maior que o VT deste mês (ex.: rescisão com poucos dias): o que sobra sai do salário
+  let vtFaltasExced=0; if(vtDiaCad>0 && vtFaltasAnt>0){ vtFaltasExced=Math.round(Math.max(0, vtFaltasAnt*vtDia - vtFaltasValor)*100)/100; descVTFaltas=vtFaltasExced; }
   const descontos=descFaltas+descDSR+descAtrasos+vtDesconto+descVTFaltas;
   // Salário combinado com a Diretoria: se salário + extras + adicional noturno + gorjetas do mês não alcançarem o combinado, a diferença vira "reposição".
   const gorjeta=Number(gorjetasCLT[c.id+"|"+ymRef]||0);
   // o combinado também é proporcional aos dias de contrato no mês (quem entra no dia 27 não tem garantia do mês inteiro)
   const combinadoMes=Number(c.salarioCombinado||0);
-  const combinado=(combinadoMes>0 && diasContrato<30) ? Math.round(combinadoMes*diasContrato/30*100)/100 : combinadoMes;
+  const combinado=porDia ? 0 : (combinadoMes>0 && diasContrato<30) ? Math.round(combinadoMes*diasContrato/30*100)/100 : combinadoMes;
   const recebido=salario+extrasVal+notVal+dsrReflexo+gorjeta;
   const reposicao=combinado>0 ? Math.max(0, Math.round((combinado-recebido)*100)/100) : 0;
   // rescisão: só no mês do último dia de trabalho
@@ -871,12 +911,12 @@ function calcFolhaLinha(c, ctx){
   let liquido=salario+extrasVal+notVal+dsrReflexo+reposicao-descontos+(rescisao?rescisao.total:0);
   if(rescisao && liquido<0){ // desconto do aviso não cumprido limitado ao que há a receber (não gera saldo negativo)
     const corte=Math.min(-liquido, rescisao.desc); if(corte>0){ let resta=corte; rescisao.descontos=rescisao.descontos.map(x=>{ if((x.k!=="avisodesc"&&x.k!=="art480")||resta<=0) return x; const c2=Math.min(resta,x.valor); resta-=c2; return {...x,valor:Math.round((x.valor-c2)*100)/100,ref:x.ref+" (limitado ao saldo)"}; }); rescisao.desc=Math.round((rescisao.desc-corte)*100)/100; rescisao.total=Math.round((rescisao.prov-rescisao.desc)*100)/100; liquido+=corte; } }
-  return { id:c.id, rescisao, demitidoEm:(c.demissao&&c.demissao.data)||"", nome:c.nome, foto:c.foto, pix:c.pix, escala:c.escala, salario, vHora, gorjeta, combinado, combinadoMes, recebido, reposicao,
+  return { id:c.id, rescisao, porDia, demitidoEm:(c.demissao&&c.demissao.data)||"", nome:c.nome, foto:c.foto, pix:c.pix, escala:c.escala, salario, vHora, gorjeta, combinado, combinadoMes, recebido, reposicao,
     extrasMin, extras100Min, extrasHoras:extrasMin+extras100Min, extrasVal, extrasEditado, notMin, notRelMin, notVal, extSemanal, extNot50Min, extNot100Min,
     he50Val, he100Val, heNotVal, dsrReflexo, diasUteis, diasDSR, dias, cpf:c.cpf||"", cargo:c.cargo||"", admissao:c.admissao||"", unidade:c.unidade, vinculo:c.vinculo||"clt",
     atrasosDatas:atrasosD.map(x=>x.data), atrasosHoras:atrasosD.reduce((s,x)=>s+(Number(x.horas)||0),0), descAtrasos,
     faltasQtd:nFaltas, dsrQtd:nDSR, faltaDatas, descFaltas, descDSR, atrasosQtd:atrasosD.length,
-    salarioMes, diasContrato, vt, vtDesconto, vtDia, vtDias, vtPorDia:vtDiaCad>0, vtFaltasAnt, vtMesAnt, descVTFaltas, vtFaltasValor, vtFaltasAntDatas, vtLiquido, vtDatas, descontos, liquido, semSalario:!salario };
+    salarioMes, diasContrato, vt, vtDesconto, vtDia, vtDias, vtPorDia:vtDiaCad>0, vtFaltasAnt, vtMesAnt, descVTFaltas, vtFaltasExced, vtFaltasValor, vtFaltasAntDatas, vtLiquido, vtDatas, descontos, liquido, semSalario:!salario };
 }
 const escalaInicial = () => {
   const esc={};
@@ -952,6 +992,9 @@ const MESES_LONGO=["janeiro","fevereiro","março","abril","maio","junho","julho"
 const fmtCompetencia=(c)=>{ const m=/^(\d{4})-(\d{2})/.exec(String(c||"")); return m? (MESES_LONGO[Number(m[2])-1]+"/"+m[1]) : (c||"—"); };
 const fmtBytes=(n)=>{ n=Number(n)||0; return n<1024? n+" B" : n<1048576? (n/1024).toFixed(0)+" KB" : (n/1048576).toFixed(1)+" MB"; };
 const donoKeyDe=(tipo,id)=> tipo+"-"+id;
+// CLT+ = registro feito pela contabilidade e contrato assinado (custo com todos os encargos no CMO).
+// Marcação manual no colaborador (registrado true/false); sem marcação, vale "Admissão concluída" na aba Contabilidade.
+const ehCltMais=(c, envContab)=> !c || c.vinculo==="fixo" ? false : c.registrado!=null ? !!c.registrado : !!(envContab && envContab["clt-"+c.id] && envContab["clt-"+c.id].status==="concluido");
 // Normaliza texto p/ comparar nomes (sem acento, maiúsculo, espaços simples)
 const normTxt=(s)=> String(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toUpperCase().replace(/[^A-Z0-9 ]/g," ").replace(/\s+/g," ").trim();
 
@@ -1523,12 +1566,15 @@ function StoreProvider({children}) {
     return id; };
   // Horário fixo do cadastro → escala: muda o turno (pela hora de entrada) e o horário em TODO o padrão semanal
   // e nas datas futuras já abertas. Ajustes manuais de um dia específico (feitos na grade) são mantidos.
-  const aplicarHorarioEscala=(pid,tipo,hi,hf)=>{ if(!hi||!hf) return; const h=hi+"–"+hf; const turno=turnoDaHora(hi);
+  // todos=true (salvar o cadastro): o horário do cadastro vale para TODOS os dias de hoje em diante, inclusive horários
+  // ajustados antes na grade; só a FOLGA marcada à mão num dia continua. todos=false: respeita os ajustes manuais.
+  const aplicarHorarioEscala=(pid,tipo,hi,hf,todos)=>{ if(!hi||!hf) return; const h=hi+"–"+hf; const turno=turnoDaHora(hi);
     const eu=(a)=>String(a.pid)===String(pid) && (tipo==="pj" ? a.tipo==="pj" : a.tipo===tipo);
-    const muda=(a)=> a.turno==="folga" ? {...a,h,turnoBase:turno} : {...a,turno,h};
+    const muda=(a0)=>{ const a={...a0}; if(todos && a.turno!=="folga"){ delete a.manualH; delete a.manualFolga; } return a.turno==="folga" ? {...a,h,turnoBase:turno} : {...a,turno,h}; };
+    const travado=(a)=> todos ? (a.manualFolga && a.turno==="folga") : (a.manualFolga||a.manualH);
     setEscala(prev=>{ let m=false; const n={}; Object.keys(prev||{}).forEach(uid=>{ n[uid]={}; Object.keys(prev[uid]||{}).forEach(d=>{ n[uid][d]=(prev[uid][d]||[]).map(a=>{ if(!eu(a)) return a; m=true; return muda(a); }); }); }); return m?n:prev; });
     const hj=hojeStr();
-    setEscalaOv(prev=>{ let m=false; const n={...(prev||{})}; Object.keys(n).forEach(uid=>{ const u={...(n[uid]||{})}; Object.keys(u).forEach(ds=>{ if(ds<hj) return; const arr=u[ds]||[]; if(!arr.some(a=>eu(a)&&!a.manualFolga&&!a.manualH)) return; u[ds]=arr.map(a=>{ if(!eu(a)||a.manualFolga||a.manualH) return a; m=true; return muda(a); }); }); n[uid]=u; }); return m?n:prev; });
+    setEscalaOv(prev=>{ let m=false; const n={...(prev||{})}; Object.keys(n).forEach(uid=>{ const u={...(n[uid]||{})}; Object.keys(u).forEach(ds=>{ if(ds<hj) return; const arr=u[ds]||[]; if(!arr.some(a=>eu(a)&&!travado(a))) return; u[ds]=arr.map(a=>{ if(!eu(a)||travado(a)) return a; m=true; return muda(a); }); }); n[uid]=u; }); return m?n:prev; });
   };
   // Ao trocar o grupo de folga (cor), a nova regra passa a valer nas datas de hoje em diante:
   // marcações manuais de folga/turno dessa pessoa nessas datas deixam de travar o rodízio (o horário manual é mantido).
@@ -1541,16 +1587,21 @@ function StoreProvider({children}) {
     for(let d=0;d<7;d++){ const a=(u[d]||[]).find(eu); if(a && (a.turno==="folga")!==folgaPadraoDia(esc,ref,d)) return true; }
     const hj=hojeStr(); const ov=(escalaOv||{})[c.unidade]||{};
     return Object.keys(ov).some(ds=>{ if(ds<hj) return false; const a=(ov[ds]||[]).find(eu); if(!a||a.marca) return false; if(a.manualFolga && !(a.h&&a.turno!=="folga")) return false; return (a.turno==="folga")!==folgaPadraoDia(esc,ref,wdDe(ds)); }); };
+  // a grade tem dias (de hoje em diante) com horário diferente do cadastro?
+  const horarioDivergente=(c)=>{ if(!c||!c.horaEntrada||!c.horaSaida) return false; const H=c.horaEntrada+"–"+c.horaSaida; const eu=(a)=>String(a.pid)===String(c.id)&&a.tipo==="clt";
+    const dif=(a)=> a.turno==="folga" ? false : (a.h!==H || a.turno!==turnoDaHora(c.horaEntrada));
+    if(Object.values(escala||{}).some(u=>Object.values(u||{}).some(arr=>(arr||[]).some(a=>eu(a)&&dif(a))))) return true;
+    const hj=hojeStr(); return Object.values(escalaOv||{}).some(u=>Object.entries(u||{}).some(([ds,arr])=>ds>=hj && (arr||[]).some(a=>eu(a)&&dif(a)))); };
   const horarioMudou=(ant,c)=> !!(c.horaEntrada && c.horaSaida) && (!ant || ant.horaEntrada!==c.horaEntrada || ant.horaSaida!==c.horaSaida);
   const salvarClt=(c)=>{
     if(ehAuto(c.id)){ const ant=cadAuto.find(x=>x.id===c.id); cadOps.update(c._docId||docIdDe(c.id), semDocsInline(c)); subirDocsInline("clt",c);
       const regen=ant && ((ant.grupoFolga||"")!==(c.grupoFolga||"") || String(ant.folgaDias||"")!==String(c.folgaDias||"") || String(ant.folgaDia??"")!==String(c.folgaDia??"") || (ant.escala||"")!==(c.escala||"") || padraoDivergente(c)) && c.unidade!=null && c.admissao;
       if(regen){ const tu=c.horaEntrada?turnoDaHora(c.horaEntrada):(GRUPO_FOLGA.turno[chaveVig("clt",c.id)]||null); gerarEscalaFixa(c.id, c.escala||"6x1", c.unidade, false, folgaRefDe(c), "clt", tu); if((ant.grupoFolga||"")!==(c.grupoFolga||"")) liberarRodizioFuturo(c.id,"clt"); }
-      if(c.horaEntrada && c.horaSaida && (regen || horarioMudou(ant,c))) aplicarHorarioEscala(c.id,"clt",c.horaEntrada,c.horaSaida); return; }
+      if(c.horaEntrada && c.horaSaida && (regen || horarioMudou(ant,c) || horarioDivergente(c))) aplicarHorarioEscala(c.id,"clt",c.horaEntrada,c.horaSaida,true); return; }
     if(c.id){ const ant=cltsBase.find(x=>x.id===c.id); setClts(prev=>prev.map(x=>x.id===c.id?{...x,...semDocsInline(c)}:x)); subirDocsInline("clt",c);
       const regen=ant && ((ant.grupoFolga||"")!==(c.grupoFolga||"") || String(ant.folgaDias||"")!==String(c.folgaDias||"") || String(ant.folgaDia??"")!==String(c.folgaDia??"") || (ant.escala||"")!==(c.escala||"") || padraoDivergente(c)) && c.vinculo!=="confianca" && c.unidade!=null;
       if(regen){ const tu=c.horaEntrada?turnoDaHora(c.horaEntrada):(GRUPO_FOLGA.turno[chaveVig("clt",c.id)]||null); gerarEscalaFixa(c.id, c.escala||"6x1", c.unidade, false, folgaRefDe(c), "clt", tu); if((ant.grupoFolga||"")!==(c.grupoFolga||"")) liberarRodizioFuturo(c.id,"clt"); }
-      if(c.vinculo!=="confianca" && c.horaEntrada && c.horaSaida && (regen || horarioMudou(ant,c))) aplicarHorarioEscala(c.id,"clt",c.horaEntrada,c.horaSaida); }
+      if(c.vinculo!=="confianca" && c.horaEntrada && c.horaSaida && (regen || horarioMudou(ant,c) || horarioDivergente(c))) aplicarHorarioEscala(c.id,"clt",c.horaEntrada,c.horaSaida,true); }
     else { const base={...c,extras:"0h00",atrasos:"0h00",docs:c.docs||{},status:"ativo"};   // "banco" é o NOME do banco (não o banco de horas)
       let novoId;
       if(window.__WPDB) novoId=novoCadastroIndividual("clt",base);
@@ -1618,7 +1669,8 @@ function StoreProvider({children}) {
 
   // Dossiê (faltas/atestados + feedbacks + anexos adicionais)
   const getDossie=(key)=> dossie[key] || {faltas:[],feedbacks:[],anexos:[]};
-  const addFalta=(key,f)=>setDossie(p=>({...p,[key]:{...getDossie(key),faltas:[{...f,id:Math.random().toString(36).slice(2)},...getDossie(key).faltas]}}));
+  const addFalta=(key,f)=>setDossie(p=>{ const cur=(p&&p[key])||{faltas:[],feedbacks:[],anexos:[]}; if(f.data && (cur.faltas||[]).some(x=>x.data===f.data && x.tipo===f.tipo && (x.obs||"")===(f.obs||""))) return p;   // mesma marcação: não duplica
+    return {...p,[key]:{...cur,faltas:[{...f,id:Math.random().toString(36).slice(2)},...(cur.faltas||[])]}}; });   // usa o estado mais novo: várias faltas seguidas não se perdem
   const addFeedback=(key,fb)=>setDossie(p=>({...p,[key]:{...getDossie(key),feedbacks:[{...fb,id:Math.random().toString(36).slice(2)},...getDossie(key).feedbacks]}}));
   const addAnexo=(key,ax)=>setDossie(p=>({...p,[key]:{...getDossie(key),anexos:[{...ax,id:Math.random().toString(36).slice(2)},...(getDossie(key).anexos||[])]}}));
 
@@ -1645,6 +1697,7 @@ function StoreProvider({children}) {
   useEffect(()=>{ if(!faltaDesdePronto) return; if(!faltaDescontoDesde) setFaltaDescontoDesde(hojeStr()); },[faltaDesdePronto]); // eslint-disable-line
   // Dia do mês em que o Vale Transporte é pago (global para todos os CLTs). Padrão: dia 5.
   const [vtDiaPagamento,setVtDiaPagamento]=usePersist("vtDiaPagamento",5);
+  const [cmoConfig,setCmoConfig]=usePersist("cmoConfig",{});   // CMO: regime/encargos, quem é sem registro, faturamento por mês
   // Pagamentos de CLT e cargos de confiança (parcelados/adiantamentos), chaveados pelo id do colaborador na lista de CLTs.
   const [pagamentosCLT,setPagCLT]=usePersist("pagamentosCLT",{});
   const addPagamentoCLT=(id,obj)=>setPagCLT(prev=>{ const arr=prev[String(id)]||[]; return {...prev,[String(id)]:[{...obj,id:Math.random().toString(36).slice(2)},...arr]}; });
@@ -1782,7 +1835,7 @@ function StoreProvider({children}) {
   const registrosVis = casaRestrita!=null ? registros.filter(r=>_nomesVis.has(r.nome)) : registros;
 
   const value={ unidades:unidadesVis,salvarUnidade,excluirUnidade, clts:cltsVis,freelas:freelasVis,freelasComPagamentos:freelasPagVis,salvarClt,salvarFreela,excluirColab,cadastrarPublico, anexarDoc,
-    escala,setEscala, escalaOv,setEscalaOv, registros:registrosVis,addRegistro, garantirRegistros, pontoHist, freelancerEscaladoHoje, valorFreela, setFreelaAjuste, cltExtraAjuste,setCltExtra, gorjetasCLT,setGorjetaCLT, pagamentosFreela,addPagamentoFreela,removePagamentoFreela, pagamentosCLT,addPagamentoCLT,removePagamentoCLT, faltaDescontoDesde,setFaltaDescontoDesde, feriadosExtras,setFeriadosExtras, vtDiaPagamento,setVtDiaPagamento,
+    escala,setEscala, escalaOv,setEscalaOv, registros:registrosVis,addRegistro, garantirRegistros, pontoHist, freelancerEscaladoHoje, valorFreela, setFreelaAjuste, cltExtraAjuste,setCltExtra, gorjetasCLT,setGorjetaCLT, pagamentosFreela,addPagamentoFreela,removePagamentoFreela, pagamentosCLT,addPagamentoCLT,removePagamentoCLT, faltaDescontoDesde,setFaltaDescontoDesde, feriadosExtras,setFeriadosExtras, vtDiaPagamento,setVtDiaPagamento, cmoConfig,setCmoConfig,
     cargosFreela,salvarCargoFreela,excluirCargoFreela, atestados,enviarAtestado, ajustes,enviarAjuste,resolverAjuste,
     dossie,getDossie,addFalta,addFeedback,addAnexo, perfil,setPerfil, perms,setPerms, can, envContab,setEnvContab, apontContab,setApontContab, contabCfg,setContabCfg, finCfg,setFinCfg, pcmso,setPcmso, cadastrosRS, cadOpsRS:cadOps, criarFreela, escalarNaData, tirarDaData,
     clientes,clienteAtivo,tenantAtual,criarCliente,trocarCliente,
@@ -1952,15 +2005,166 @@ function DetalheRescisao({r, saldo, vtDesconto, abateVT, titulo}){
   if(!r) return null; const L=(rot,calc,v,cor,k)=><div key={k} className="py-1.5 flex justify-between gap-3 border-b border-slate-100 last:border-0"><div className="min-w-0"><div className="text-slate-700">{rot}</div>{calc && <div className="text-[11px] text-slate-400">{calc}</div>}</div><div className={cx("tabular-nums whitespace-nowrap font-semibold",cor)}>{v}</div></div>;
   const total=Math.round(((saldo?saldo.valor:0)+r.total-(vtDesconto||0)-(abateVT||0))*100)/100;
   return <div className="text-sm" aria-label="Cálculo da rescisão">
-    <div className="text-[11px] font-bold text-rose-600 uppercase mb-1">{titulo||"Rescisão"} · {TIPOS_DEMISSAO[r.tipo]||""}{r.aviso&&AVISO_DEMISSAO[r.aviso]?" · "+AVISO_DEMISSAO[r.aviso]:""} · último dia {fmtDataBR(r.data)}</div>
+    <div className="text-[11px] font-bold text-rose-600 uppercase mb-1">{titulo||"Rescisão"} · {r.simples?"Só dias trabalhados + VT":(TIPOS_DEMISSAO[r.tipo]||"")}{r.aviso&&AVISO_DEMISSAO[r.aviso]?" · "+AVISO_DEMISSAO[r.aviso]:""} · último dia {fmtDataBR(r.data)}</div>
     <div className="text-[11px] text-slate-500 mb-1">Salário base {fmtBRL(r.salarioMes)} · admissão {fmtDataBR(r.adm)} · {r.anosServ} ano(s) completo(s){r.fimDet?" · contrato por prazo até "+fmtDataBR(r.fimDet):""}</div>
     {saldo && L("Saldo de salário",saldo.calc,"+"+fmtBRL(saldo.valor),"text-emerald-600","saldo")}
-    {r.itens.map(x=>L(x.rot+(x.ref?" ("+x.ref+")":""),x.calc,"+"+fmtBRL(x.valor),"text-emerald-600",x.k))}
+    {r.itens.map(x=>L(x.rot+(x.ref?" ("+x.ref+")":"")+(x.editado?" ✎":""),x.editado?("ajustado à mão (calculado "+fmtBRL(x.valorCalc)+")"):x.calc,"+"+fmtBRL(x.valor),"text-emerald-600",x.k))}
     {vtDesconto>0 && L("Desconto VT 6%","6% do saldo de salário, limitado ao VT do mês","-"+fmtBRL(vtDesconto),"text-rose-600","vt")}
-    {r.descontos.map(x=>L(x.rot+(x.ref?" ("+x.ref+")":""),x.calc,"-"+fmtBRL(x.valor),"text-rose-600",x.k))}
+    {r.descontos.map(x=>L(x.rot+(x.ref?" ("+x.ref+")":"")+(x.editado?" ✎":""),x.editado?("ajustado à mão (calculado "+fmtBRL(x.valorCalc)+")"):x.calc,"-"+fmtBRL(x.valor),"text-rose-600",x.k))}
     {abateVT>0 && L("VT pago a mais (adiantado para dias depois da saída)","","-"+fmtBRL(abateVT),"text-rose-600","abvt")}
     {saldo && <div className="flex justify-between font-bold pt-1.5 text-slate-900"><span>Total a pagar ao colaborador</span><span className="tabular-nums">{fmtBRL(total)}</span></div>}
     <div className="text-[11px] text-slate-400 mt-1">Pagar até {fmtDataBR(r.prazo)} (10 dias, art. 477).{r.multaFGTS?" Multa de 40% do FGTS: recolher em guia (GRRF), fora deste valor.":""} Avos: mês com 15 dias ou mais conta 1/12. Valores brutos — INSS/IRRF com a contabilidade.</div>
+  </div>; }
+// ===== CMO — Custo de Mão de Obra do mês: todos os colaboradores (CLT com encargos diluídos, Freela Fixo, PJ, freelancers) =====
+const CMO_PADRAO={ regime:"simples", fgts:8, inss:20, rat:2, terceiros:5.8, multaFGTS:false, freelas:true };
+const CMO_REGIMES={ simples:"Simples Nacional (INSS patronal dentro do DAS)", presumido:"Lucro Presumido / Real (INSS patronal na folha)" };
+function cmoCfgDe(cfg){ const c={...CMO_PADRAO, ...(cfg||{})}; const n=(v,d)=>{ const x=Number(v); return isNaN(x)?d:x; };
+  return { ...c, fgts:n(c.fgts,8), inss:n(c.inss,20), rat:n(c.rat,2), terceiros:n(c.terceiros,5.8), patronal: c.regime==="presumido" ? n(c.inss,20)+n(c.rat,2)+n(c.terceiros,5.8) : 0 }; }
+// custo de um CLT registrado no mês a partir da remuneração: provisões de 13º e férias + 1/3 e encargos sobre tudo
+function cmoEncargos(rem, cfg){ const r2=(x)=>Math.round((Number(x)||0)*100)/100; rem=Math.max(0,Number(rem)||0);
+  const d13=rem/12, fer=rem/12, ter=fer/3, base=rem+d13+fer+ter; const fgts=base*cfg.fgts/100, inss=base*cfg.patronal/100, multa=cfg.multaFGTS?fgts*0.4:0;
+  return { rem:r2(rem), d13:r2(d13), ferias:r2(fer+ter), fgts:r2(fgts), inss:r2(inss), multa:r2(multa), encargos:r2(d13+fer+ter+fgts+inss+multa) }; }
+function CMOPage(){
+  const { clts, pjs, freelasComPagamentos, unidades, registros, pontoHist, getDossie, cltExtraAjuste, gorjetasCLT, escala, escalaOv, atestados, faltaDescontoDesde, feriadosExtras, acesso, cmoConfig, setCmoConfig, empresaContratante, envContab, salvarClt } = useStore();
+  const toast=useContext(ToastCtx); const podeSigilo=!acesso||acesso.podeSigilo; const r2=(x)=>Math.round((Number(x)||0)*100)/100;
+  const [ym,setYm]=useState(hojeStr().slice(0,7)); const [uni,setUni]=useState("todas"); const [verCfg,setVerCfg]=useState(false); const [filtro,setFiltro]=useState("todos");
+  const [y,m]=ym.split("-").map(Number); const [ini,fim]=mesDe(y,m); const nd=(d)=>!!d&&d>=ini&&d<=fim;
+  useRegistrosPeriodo(ini,fim);
+  const cfgRaw=cmoConfig||{}; const cfg=cmoCfgDe(cfgRaw.enc);
+  const setCfg=(k,v)=>setCmoConfig(p=>({...(p||{}), enc:{...((p||{}).enc||{}), [k]:v}}));
+  // CLT+ (registro da contabilidade e contrato assinado) entra com todos os encargos; CLT normal e Freela Fixo só salário + VT
+  const ehSemReg=(c)=> !ehCltMais(c, envContab);
+  const togReg=(c)=>{ const v=ehSemReg(c); salvarClt({...c, registrado:v}); toast(c.nome.split(" ")[0]+(v?" agora é CLT+ (com encargos)":" voltou para CLT (só salário + VT)")); };
+  const fatKey=ym+"|"+uni; const fat=Number(((cfgRaw.fat)||{})[fatKey])||0;
+  const setFat=(v)=>setCmoConfig(p=>({...(p||{}), fat:{...((p||{}).fat||{}), [fatKey]:v===""?null:Number(v)}}));
+  const naCasa=(u)=> uni==="todas" || Number(u)===Number(uni);
+  const casaDe=(u)=> u!=null&&u!=="todas"&&unidades.some(x=>x.id===Number(u)) ? unidadeNome(Number(u),unidades) : "—";
+  const linhas=useMemo(()=>{ const out=[]; const regs=[...(pontoHist||[]),...(registros||[])];
+    const ctx={ apurCLT:apurarHoras(regs).filter(x=>x.tipo==="clt"&&x.completo&&nd(x.dia)), cltExtraAjuste:cltExtraAjuste||{}, gorjetasCLT:gorjetasCLT||{}, ymRef:ym, getDossie, naData:nd,
+      faltasCtx:{escala,escalaOv,registros:regs,atestados,ini,fim,hoje:hojeStr(),nowMin:0,desde:faltaDescontoDesde}, feriados:feriadosExtras };
+    (clts||[]).filter(c=>!c.admissaoCancelada && c.status!=="inativo" && naCasa(c.unidade))
+      .filter(c=>!((c.fimContrato && c.fimContrato<ini) || (c.admissao && c.admissao>fim) || (c.demissao&&c.demissao.data&&c.demissao.data<ini)))
+      .forEach(c=>{
+        if(c.vinculo==="confianca"){ if(c.sigiloso && !podeSigilo) return; const pc=previstoConf(c,ini,fim); const rem=r2(pc.salario); if(rem<=0) return;
+          const sr=ehSemReg(c); const e=sr?{rem,d13:0,ferias:0,fgts:0,inss:0,multa:0,encargos:0}:cmoEncargos(rem,cfg);
+          out.push({k:"conf-"+c.id, c, tipo:"conf", rot:sr?"Gerência":"Gerência CLT+", nome:c.nome, cargo:c.cargo, casa:casaDe(c.unidade), semReg:sr, podeReg:true, ...e, vt:0, total:r2(e.rem+e.encargos), obs:pc.dias<30?pc.dias+"/30 dias":""}); return; }
+        const l=calcFolhaLinha(c,ctx); const fixo=c.vinculo==="fixo";
+        const rem=r2(l.salario+(l.extrasVal||0)+(l.notVal||0)+(l.dsrReflexo||0)+(l.reposicao||0)-(l.descFaltas||0)-(l.descDSR||0)-(l.descAtrasos||0));
+        const sr=fixo||ehSemReg(c); const vtBruto=r2(l.vtLiquido!=null?l.vtLiquido:l.vt||0); const vt=r2(Math.max(0,vtBruto-(sr?0:(l.vtDesconto||0))));
+        if(rem<=0 && vt<=0) return;
+        const e=sr?{rem,d13:0,ferias:0,fgts:0,inss:0,multa:0,encargos:0}:cmoEncargos(rem,cfg);
+        const obs=[l.porDia?l.porDia.dias+" dia(s) trabalhado(s)":l.diasContrato<30?l.diasContrato+"/30 dias":"", c.demissao&&c.demissao.data&&nd(c.demissao.data)?"saiu "+fmtDataBR(c.demissao.data):"", (l.extrasVal||0)>0?"extras "+fmtBRL(l.extrasVal):"", (l.descFaltas||0)>0?"faltas −"+fmtBRL(l.descFaltas):""].filter(Boolean).join(" · ");
+        out.push({k:(fixo?"fixo-":"clt-")+c.id, c, tipo:fixo?"fixo":"clt", rot:fixo?"Freela Fixo":sr?"CLT":"CLT+", nome:c.nome, cargo:c.cargo, casa:casaDe(c.unidade), semReg:sr, podeReg:!fixo, ...e, vt, vtDesc:sr?0:r2(l.vtDesconto||0), total:r2(e.rem+e.encargos+vt), obs}); });
+    (pjs||[]).filter(pj=>pjAtivoNoPeriodo(pj,ini,fim) && naCasa(pj.unidade)).forEach(pj=>{ const pv=pjValorNoPeriodo(pj,ini,fim); const v=r2(pv.total); if(v<=0) return; const d=pv.det.find(x=>!x.cheio);
+      out.push({k:"pj-"+pj.id, tipo:"pj", rot:"PJ", nome:pj.nome, cargo:pj.servico||"Prestação de serviço", casa:casaDe(pj.unidade), semReg:true, podeReg:false, rem:v, d13:0, ferias:0, fgts:0, inss:0, multa:0, encargos:0, vt:0, total:v, obs:d?d.dias+" dia(s) do mês":""}); });
+    if(cfg.freelas) (freelasComPagamentos||[]).forEach(f=>{ const js=(f.jornadasHist||[]).filter(j=>nd(j.data) && naCasa(j.unidade)); if(!js.length) return; const v=r2(js.reduce((s,j)=>s+(Number(j.valor)||0),0)); if(v<=0) return;
+      out.push({k:"free-"+f.id, tipo:"free", rot:"Freelancer", nome:f.nome, cargo:f.cargo||"Freelancer", casa:[...new Set(js.map(j=>casaDe(j.unidade)))].join(", "), semReg:true, podeReg:false, rem:v, d13:0, ferias:0, fgts:0, inss:0, multa:0, encargos:0, vt:0, total:v, obs:js.length+" diária(s)"}); });
+    const ord={clt:0,conf:1,fixo:2,pj:3,free:4}; return out.sort((a,b)=>(ord[a.tipo]-ord[b.tipo])||b.total-a.total);
+  },[clts,pjs,freelasComPagamentos,registros,pontoHist,ym,uni,cmoConfig,envContab,escala,escalaOv,atestados,cltExtraAjuste,gorjetasCLT,faltaDescontoDesde,feriadosExtras,podeSigilo]); // eslint-disable-line
+  const soma=(arr,k)=>r2(arr.reduce((s,x)=>s+(Number(x[k])||0),0));
+  const GRUPOS=[["clt","CLT+ e CLT"],["conf","Gerência & Diretoria"],["fixo","Freela Fixo"],["pj","Prestadores PJ"],["free","Freelancers (diárias)"]];
+  const tot=soma(linhas,"total"), totEnc=soma(linhas,"encargos"), totRem=soma(linhas,"rem"), totVT=soma(linhas,"vt");
+  const porTipo=Object.fromEntries(GRUPOS.map(([k])=>[k,soma(linhas.filter(x=>x.tipo===k),"total")]));
+  const casas=[...new Set(linhas.flatMap(x=>String(x.casa).split(", ")))];
+  const porCasa=uni!=="todas"?[]:unidades.map(u=>{ const nome=u.nome; const ls=linhas.filter(x=>x.casa===nome); return {nome, n:ls.length, total:soma(ls,"total"), enc:soma(ls,"encargos")}; }).filter(x=>x.n>0);
+  const semCasa=uni!=="todas"?null:(()=>{ const ls=linhas.filter(x=>!unidades.some(u=>u.nome===x.casa)); return ls.length?{nome:"Sem casa / várias casas", n:ls.length, total:soma(ls,"total"), enc:soma(ls,"encargos")}:null; })();
+  const vis=filtro==="todos"?linhas:linhas.filter(x=>x.tipo===filtro);
+  const pct=(v)=> fat>0 ? (Math.round(v/fat*1000)/10).toLocaleString("pt-BR")+"%" : "—";
+  const uNome=uni==="todas"?"Todas as casas":unidadeNome(Number(uni),unidades);
+  const regTxt=cfg.regime==="presumido"?`INSS patronal ${(cfg.patronal).toLocaleString("pt-BR")}% (${cfg.inss}% + RAT ${cfg.rat}% + terceiros ${cfg.terceiros}%)`:"Simples Nacional: INSS patronal no DAS (0% na folha)";
+  const explic=`CLT+ (registro da contabilidade e contrato assinado): remuneração do mês (salário proporcional + extras, noturno e DSR − faltas) + 13º (1/12) + férias (1/12) + 1/3 de férias + FGTS ${cfg.fgts}%${cfg.patronal?" + INSS patronal "+cfg.patronal.toLocaleString("pt-BR")+"%":""} sobre tudo${cfg.multaFGTS?" + provisão da multa de 40% do FGTS":""} + VT (já sem os 6% descontados do colaborador). CLT sem o registro da contabilidade e Freela Fixo: só salário/dias + VT. PJ: valor do contrato no mês. Freelancers: diárias lançadas no mês.`;
+  // ---- exportar ----
+  const colsX=[["Colaborador","nome"],["Vínculo","rot"],["Cargo","cargo"],["Casa","casa"],["Registro","reg"],["Remuneração","rem"],["13º (1/12)","d13"],["Férias + 1/3","ferias"],["FGTS","fgts"],["INSS patronal","inss"],["Prov. multa FGTS","multa"],["VT (empresa)","vt"],["Custo total","total"],["Observação","obs"]];
+  const exportarExcel=async()=>{ if(!linhas.length){ toast("Nada no mês"); return; } if(!window.ExcelJS){ toast("Biblioteca Excel não carregada — tente de novo"); return; }
+    const wb=new ExcelJS.Workbook(); const ws=wb.addWorksheet("CMO "+ym); ws.addRow(["CMO — Custo de Mão de Obra · "+fmtCompetencia(ym)+" · "+uNome]).font={bold:true,size:13}; ws.addRow([regTxt]); ws.addRow([]);
+    const h=ws.addRow(colsX.map(c=>c[0])); h.font={bold:true}; h.eachCell(c=>{ c.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFE8F1E6"}}; });
+    linhas.forEach(x=>ws.addRow(colsX.map(([,k])=>k==="reg"?(x.tipo==="clt"||x.tipo==="conf"?(x.semReg?"CLT (sem encargos)":"CLT+ (com encargos)"):"—"):x[k]??"")));
+    const t=ws.addRow(["TOTAL","","","","",totRem,soma(linhas,"d13"),soma(linhas,"ferias"),soma(linhas,"fgts"),soma(linhas,"inss"),soma(linhas,"multa"),totVT,tot,fat?"Faturamento "+fmtBRL(fat)+" · CMO "+pct(tot):""]); t.font={bold:true};
+    for(let i=6;i<=13;i++) ws.getColumn(i).numFmt='"R$" #,##0.00'; ws.columns.forEach((c,i)=>{ c.width=i===0?30:i===13?40:i<5?16:14; });
+    ws.addRow([]); ws.addRow(["Resumo por vínculo"]).font={bold:true}; GRUPOS.forEach(([k,l])=>{ if(porTipo[k]) ws.addRow([l,"","","","","","","","","","","",porTipo[k]]); });
+    if(porCasa.length){ ws.addRow([]); ws.addRow(["Resumo por casa"]).font={bold:true}; [...porCasa,...(semCasa?[semCasa]:[])].forEach(c=>ws.addRow([c.nome,c.n+" pessoa(s)","","","","","","","","","","",c.total])); }
+    ws.addRow([]); ws.addRow([explic]);
+    const buf=await wb.xlsx.writeBuffer(); baixarBlob(new Blob([buf],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}),"CMO "+ym+" - "+uNome+".xlsx"); toast("Excel do CMO gerado"); };
+  const exportarPdf=async()=>{ if(!linhas.length){ toast("Nada no mês"); return; }
+    try{ const L=await carregarPdfLib(); const doc=await L.PDFDocument.create(); const f=await doc.embedFont(L.StandardFonts.Helvetica), b=await doc.embedFont(L.StandardFonts.HelveticaBold);
+      const limpo=(t)=>String(t??"").replace(/[—–−]/g,"-").replace(/[^\x20-\x7E -ÿ]/g,"");
+      const C={esc:L.rgb(0.09,0.27,0.13),claro:L.rgb(0.94,0.97,0.93),cinza:L.rgb(0.42,0.42,0.42),txt:L.rgb(0.12,0.12,0.12),branco:L.rgb(1,1,1),linha:L.rgb(0.88,0.9,0.88)};
+      const W=842,H=595,M=28; let pg,yy; const txt=(t,x,yv,o={})=>pg.drawText(limpo(t),{x,y:yv,size:o.size||7.5,font:o.bold?b:f,color:o.cor||C.txt});
+      const dir=(t,xr,yv,o={})=>{ const fn=o.bold?b:f; txt(t,xr-fn.widthOfTextAtSize(limpo(t),o.size||7.5),yv,o); };
+      const quebra=(t,w,sz)=>{ const out=[]; let cur=""; limpo(t).split(" ").forEach(p=>{ const tt=cur?cur+" "+p:p; if(f.widthOfTextAtSize(tt,sz)>w&&cur){ out.push(cur); cur=p; } else cur=tt; }); if(cur) out.push(cur); return out; };
+      const XR=[0,0,0,330,385,440,495,550,600,650,700,W-M-4]; // direita das colunas de valor
+      const cab=["Colaborador","Vínculo / casa","","Remuneração","13º","Férias+1/3","FGTS","INSS pat.","Prov. multa","VT","",""];
+      const nova=()=>{ pg=doc.addPage([W,H]); pg.drawRectangle({x:0,y:H-52,width:W,height:52,color:C.esc}); txt("CMO - CUSTO DE MÃO DE OBRA",M,H-26,{bold:true,size:14,cor:C.branco}); txt((empresaEfetiva(empresaContratante).razao||"")+" · "+uNome,M,H-41,{size:8,cor:C.branco});
+        dir("Competência "+fmtCompetencia(ym),W-M,H-26,{bold:true,size:11,cor:C.branco}); dir(regTxt,W-M,H-41,{size:7.5,cor:C.branco}); yy=H-70; };
+      const cabec=()=>{ pg.drawRectangle({x:M,y:yy-4,width:W-2*M,height:14,color:C.claro}); txt("Colaborador",M+4,yy,{bold:true,size:7,cor:C.cinza}); txt("Vínculo · casa",M+170,yy,{bold:true,size:7,cor:C.cinza});
+        ["Remuneração","13º","Férias+1/3","FGTS","INSS pat.","Prov. multa","VT"].forEach((t,i)=>dir(t,XR[3+i],yy,{bold:true,size:7,cor:C.cinza})); dir("Custo total",W-M-4,yy,{bold:true,size:7,cor:C.cinza}); yy-=15; };
+      nova();
+      // resumo
+      pg.drawRectangle({x:M,y:yy-40,width:W-2*M,height:50,color:C.claro}); txt("CUSTO TOTAL DO MÊS",M+10,yy-2,{bold:true,size:8,cor:C.cinza}); txt(fmtBRL(tot),M+10,yy-22,{bold:true,size:18,cor:C.esc});
+      let xs=M+190; GRUPOS.forEach(([k,l])=>{ if(!porTipo[k]) return; txt(l,xs,yy-2,{size:7,cor:C.cinza}); txt(fmtBRL(porTipo[k]),xs,yy-16,{bold:true,size:10}); xs+=120; });
+      txt(linhas.length+" pessoa(s) · encargos e provisões "+fmtBRL(totEnc)+(fat?" · faturamento "+fmtBRL(fat)+" · CMO "+pct(tot):""),M+190,yy-32,{size:7.5,cor:C.cinza}); yy-=58;
+      if(porCasa.length>1||semCasa){ txt("POR CASA",M,yy,{bold:true,size:7.5,cor:C.cinza}); yy-=11; [...porCasa,...(semCasa?[semCasa]:[])].forEach(c=>{ txt(c.nome+" ("+c.n+")",M+4,yy,{size:8}); dir(fmtBRL(c.total),M+260,yy,{bold:true,size:8}); yy-=11; }); yy-=6; }
+      GRUPOS.forEach(([k,l])=>{ const ls=linhas.filter(x=>x.tipo===k); if(!ls.length) return; if(yy<90) nova(); txt(l.toUpperCase(),M,yy,{bold:true,size:8.5,cor:C.esc}); yy-=12; cabec();
+        ls.forEach(x=>{ if(yy<40){ nova(); cabec(); } txt(x.nome.slice(0,34),M+4,yy,{bold:true,size:7.5}); txt((x.rot+" · "+x.casa).slice(0,40),M+170,yy,{size:7,cor:C.cinza});
+          [x.rem,x.d13,x.ferias,x.fgts,x.inss,x.multa,x.vt].forEach((v,i)=>dir(v?fmtBRL(v):"-",XR[3+i],yy,{size:7.5})); dir(fmtBRL(x.total),W-M-4,yy,{bold:true,size:7.5});
+          if(x.obs){ yy-=8.5; txt(x.obs.slice(0,120),M+12,yy,{size:6.3,cor:C.cinza}); } pg.drawLine({start:{x:M,y:yy-3},end:{x:W-M,y:yy-3},thickness:0.3,color:C.linha}); yy-=11; });
+        if(yy<40) nova(); dir("Subtotal "+l+": "+fmtBRL(porTipo[k]),W-M-4,yy,{bold:true,size:8}); yy-=16; });
+      if(yy<70) nova(); pg.drawRectangle({x:M,y:yy-8,width:W-2*M,height:20,color:C.esc}); txt("TOTAL",M+6,yy-1,{bold:true,size:9,cor:C.branco});
+      [totRem,soma(linhas,"d13"),soma(linhas,"ferias"),soma(linhas,"fgts"),soma(linhas,"inss"),soma(linhas,"multa"),totVT].forEach((v,i)=>dir(fmtBRL(v),XR[3+i],yy-1,{bold:true,size:7.5,cor:C.branco})); dir(fmtBRL(tot),W-M-4,yy-1,{bold:true,size:9,cor:C.branco}); yy-=24;
+      quebra(explic,W-2*M,6.8).forEach(l=>{ if(yy<30) nova(); txt(l,M,yy,{size:6.8,cor:C.cinza}); yy-=9; });
+      doc.getPages().forEach((p,i,a)=>p.drawText(limpo("Wilami Ponto & RH · gerado em "+new Date().toLocaleString("pt-BR")+" · página "+(i+1)+" de "+a.length),{x:M,y:14,size:6.5,font:f,color:C.cinza}));
+      const blob=new Blob([await doc.save()],{type:"application/pdf"}); const nome="CMO "+ym+" - "+uNome.replace(/[\\/:*?"<>|]/g,"")+".pdf"; let comp=false;
+      try{ const file=new File([blob],nome.normalize("NFD").replace(/[̀-ͯ]/g,""),{type:"application/pdf"}); if(navigator.canShare&&navigator.canShare({files:[file]})&&/Mobi|Android|iPhone|iPad/i.test(navigator.userAgent||"")){ await navigator.share({files:[file],title:"CMO "+fmtCompetencia(ym)}); comp=true; } }catch(e){ if(e&&e.name==="AbortError") comp=true; }
+      if(!comp) baixarBlob(blob,nome); toast("PDF do CMO gerado");
+    }catch(e){ console.error(e); toast("Não foi possível gerar o PDF: "+e.message); } };
+  const th="px-3 py-2 font-semibold text-right whitespace-nowrap", td="px-3 py-2 tabular-nums text-right whitespace-nowrap";
+  return <div className="fade-in">
+    <PageHeader title="CMO — Custo de Mão de Obra" sub="Quanto a operação custa no mês: CLT com encargos diluídos (13º, férias, FGTS, INSS), Freela Fixo, PJ e freelancers">
+      <Btn variant="ghost" icon={I.download} onClick={exportarExcel}>Excel</Btn><Btn icon={I.download} onClick={exportarPdf}>PDF para a Diretoria</Btn></PageHeader>
+    <Card className="p-4 mb-4"><div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 items-end">
+      <Field label="Competência"><Input type="month" value={ym} onChange={e=>e.target.value&&setYm(e.target.value)} aria-label="Competência do CMO"/></Field>
+      <Field label="Casa"><Select value={uni} onChange={e=>setUni(e.target.value)} aria-label="Casa do CMO"><option value="todas">Todas as casas</option>{unidades.map(u=><option key={u.id} value={u.id}>{u.nome}</option>)}</Select></Field>
+      <Field label="Faturamento do mês (opcional, para o % de CMO)"><Input type="number" step="0.01" placeholder="R$" value={fat||""} onChange={e=>setFat(e.target.value)} aria-label="Faturamento do mês"/></Field>
+      <div><Btn variant="soft" icon={I.gear} onClick={()=>setVerCfg(v=>!v)} className="w-full">{verCfg?"Fechar encargos":"Encargos e regime"}</Btn></div></div>
+      {verCfg && <div className="mt-4 pt-4 border-t border-slate-100 grid sm:grid-cols-2 lg:grid-cols-4 gap-3 items-end" aria-label="Configuração de encargos">
+        <div className="sm:col-span-2"><Field label="Regime tributário da empresa"><Select value={cfg.regime} onChange={e=>setCfg("regime",e.target.value)} aria-label="Regime tributário">{Object.entries(CMO_REGIMES).map(([k,l])=><option key={k} value={k}>{l}</option>)}</Select></Field></div>
+        <Field label="FGTS (%)"><Input type="number" step="0.1" value={cfg.fgts} onChange={e=>setCfg("fgts",e.target.value)} aria-label="FGTS %"/></Field>
+        <label className="flex items-center gap-2 text-sm text-slate-700 pb-2"><Toggle on={!!cfg.multaFGTS} onChange={v=>setCfg("multaFGTS",v)}/> Provisionar multa de 40% do FGTS</label>
+        {cfg.regime==="presumido" && <>
+          <Field label="INSS patronal (%)"><Input type="number" step="0.1" value={cfg.inss} onChange={e=>setCfg("inss",e.target.value)} aria-label="INSS patronal %"/></Field>
+          <Field label="RAT/FAP (%)"><Input type="number" step="0.1" value={cfg.rat} onChange={e=>setCfg("rat",e.target.value)} aria-label="RAT %"/></Field>
+          <Field label="Terceiros / Sistema S (%)"><Input type="number" step="0.1" value={cfg.terceiros} onChange={e=>setCfg("terceiros",e.target.value)} aria-label="Terceiros %"/></Field></>}
+        <label className="flex items-center gap-2 text-sm text-slate-700 pb-2"><Toggle on={!!cfg.freelas} onChange={v=>setCfg("freelas",v)}/> Incluir freelancers (diárias)</label>
+        <p className="sm:col-span-2 lg:col-span-4 text-[11px] text-slate-500">Confirme os percentuais com a contabilidade. No Simples Nacional (Anexos I a III) o INSS patronal já está no DAS; no Lucro Presumido/Real ele entra na folha (20% + RAT + terceiros).</p></div>}
+    </Card>
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+      <StatCard icon={I.wallet} label={"Custo total · "+fmtCompetencia(ym)} value={fmtBRL(tot)}/>
+      <StatCard icon={I.chart} label={fat?"CMO sobre o faturamento":"Encargos e provisões"} value={fat?pct(tot):fmtBRL(totEnc)} tone="green"/>
+      <StatCard icon={I.team} label="Pessoas no mês" value={String(linhas.length)} tone="slate"/>
+      <StatCard icon={I.user} label="Custo médio por pessoa" value={fmtBRL(linhas.length?r2(tot/linhas.length):0)} tone="slate"/></div>
+    <div className="grid lg:grid-cols-3 gap-4 mb-4">
+      <Card className="p-4 lg:col-span-2" aria-label="CMO por vínculo"><div className="text-sm font-bold text-slate-700 mb-2">Por vínculo</div>
+        {GRUPOS.filter(([k])=>porTipo[k]).map(([k,l])=>{ const v=porTipo[k]; return <div key={k} className="mb-2"><div className="flex justify-between text-sm"><span className="text-slate-600">{l} <span className="text-xs text-slate-400">({linhas.filter(x=>x.tipo===k).length})</span></span><span className="font-semibold tabular-nums">{fmtBRL(v)} <span className="text-xs text-slate-400">{tot?Math.round(v/tot*100):0}%{fat?" · "+pct(v)+" do fat.":""}</span></span></div>
+          <div className="h-2 rounded-full bg-slate-100 mt-1"><div className="h-2 rounded-full grad-brand" style={{width:(tot?v/tot*100:0)+"%"}}/></div></div>; })}
+        {!linhas.length && <div className="text-sm text-slate-400">Ninguém com custo neste mês.</div>}</Card>
+      <Card className="p-4" aria-label="CMO por casa"><div className="text-sm font-bold text-slate-700 mb-2">{uni==="todas"?"Por casa":uNome}</div>
+        {uni==="todas" ? [...porCasa,...(semCasa?[semCasa]:[])].map(c=><div key={c.nome} className="flex justify-between text-sm py-1 border-b border-slate-50 last:border-0"><span className="text-slate-600">{c.nome} <span className="text-xs text-slate-400">({c.n})</span></span><span className="font-semibold tabular-nums">{fmtBRL(c.total)}</span></div>)
+          : <div className="text-sm text-slate-600 space-y-1"><div className="flex justify-between"><span>Remunerações</span><span className="tabular-nums">{fmtBRL(totRem)}</span></div><div className="flex justify-between"><span>Encargos e provisões</span><span className="tabular-nums">{fmtBRL(totEnc)}</span></div><div className="flex justify-between"><span>VT</span><span className="tabular-nums">{fmtBRL(totVT)}</span></div></div>}
+      </Card></div>
+    <Card className="overflow-hidden">
+      <div className="p-3 flex flex-wrap gap-2 border-b border-slate-100">{[["todos","Todos"],...GRUPOS.filter(([k])=>porTipo[k]).map(([k,l])=>[k,l])].map(([k,l])=><button key={k} onClick={()=>setFiltro(k)} className={cx("px-3 py-1.5 rounded-lg text-xs font-semibold border", filtro===k?"grad-brand text-white border-transparent":"bg-white border-slate-200 text-slate-600")}>{l}</button>)}</div>
+      <RolagemX><table className="w-full text-sm" aria-label="Tabela CMO"><thead className="bg-slate-50 text-xs text-slate-500"><tr>
+        <th className="px-3 py-2 font-semibold text-left">Colaborador</th><th className="px-3 py-2 font-semibold text-left">Vínculo</th><th className={th}>Remuneração</th><th className={th}>13º (1/12)</th><th className={th}>Férias + 1/3</th><th className={th}>FGTS</th><th className={th}>INSS patronal</th>{cfg.multaFGTS&&<th className={th}>Prov. multa</th>}<th className={th}>VT</th><th className={th}>Custo total</th></tr></thead>
+        <tbody className="divide-y divide-slate-100">{vis.map(x=><tr key={x.k} aria-label={"CMO "+x.nome}>
+          <td className="px-3 py-2"><div className="font-semibold text-slate-800">{x.nome}</div><div className="text-[11px] text-slate-400">{[x.cargo,x.casa,x.obs].filter(Boolean).join(" · ")}</div></td>
+          <td className="px-3 py-2 whitespace-nowrap"><Badge tone={x.tipo==="clt"||x.tipo==="conf"?(x.semReg?"slate":"green"):x.tipo==="fixo"?"free":x.tipo==="pj"?"blue":"slate"}>{x.rot}</Badge>
+            {x.podeReg && <button onClick={()=>togReg(x.c)} className="block text-[11px] text-brand-700 hover:underline mt-1" aria-label={"Registro "+x.nome}>{x.semReg?"marcar CLT+":"tirar CLT+"}</button>}</td>
+          <td className={td}>{fmtBRL(x.rem)}</td><td className={td}>{x.d13?fmtBRL(x.d13):"—"}</td><td className={td}>{x.ferias?fmtBRL(x.ferias):"—"}</td><td className={td}>{x.fgts?fmtBRL(x.fgts):"—"}</td><td className={td}>{x.inss?fmtBRL(x.inss):"—"}</td>{cfg.multaFGTS&&<td className={td}>{x.multa?fmtBRL(x.multa):"—"}</td>}<td className={td}>{x.vt?fmtBRL(x.vt):"—"}</td>
+          <td className={cx(td,"font-bold text-slate-900")} aria-label={"Custo "+x.nome}>{fmtBRL(x.total)}</td></tr>)}
+          {!vis.length && <tr><td colSpan={10} className="px-3 py-8 text-center text-slate-400">Ninguém com custo neste mês.</td></tr>}</tbody>
+        {vis.length>0 && <tfoot className="bg-slate-50 font-bold text-slate-800"><tr><td className="px-3 py-2" colSpan={2}>Total {filtro==="todos"?"":"("+vis.length+")"}</td><td className={td}>{fmtBRL(soma(vis,"rem"))}</td><td className={td}>{fmtBRL(soma(vis,"d13"))}</td><td className={td}>{fmtBRL(soma(vis,"ferias"))}</td><td className={td}>{fmtBRL(soma(vis,"fgts"))}</td><td className={td}>{fmtBRL(soma(vis,"inss"))}</td>{cfg.multaFGTS&&<td className={td}>{fmtBRL(soma(vis,"multa"))}</td>}<td className={td}>{fmtBRL(soma(vis,"vt"))}</td><td className={td} aria-label="Total CMO">{fmtBRL(soma(vis,"total"))}</td></tr></tfoot>}
+      </table></RolagemX></Card>
+    <p className="text-[11px] text-slate-500 mt-3">{explic} Gorjetas não entram (são repassadas dos clientes). Rescisões pagas no mês saem das provisões de 13º e férias já diluídas. Marque <b>CLT+</b> quem já tem o registro feito pela contabilidade e o contrato assinado (aqui ou em Colaboradores) — só esses entram com encargos.</p>
   </div>; }
 function SimuladorRescisao({go}){
   const { clts } = useStore();
@@ -2030,7 +2234,7 @@ function alertasRHDe(clts, pagamentosCLT){
   (clts||[]).forEach(c=>{ if(!c||c.admissaoCancelada||c.status==="inativo") return; const nome=c.nome||"";
     const saiu=!!(c.fimContrato && c.fimContrato<hoje);
     // 1) rescisão: pagar até 10 dias após o último dia (some quando marcada como paga ou há pagamento de salário depois do desligamento)
-    if(c.demissao && c.demissao.data && !c.demissao.pagoEm && c.vinculo!=="fixo"){
+    if(c.demissao && c.demissao.data && !c.demissao.pagoEm){
       const prazo=somaDiasStr(c.demissao.data,10);
       const pagou=((pagamentosCLT||{})[String(c.id)]||[]).some(p=>p.tipo!=="vt" && p.data && p.data>=c.demissao.data);
       if(!pagou && diasAte(prazo)>=-30) out.push({k:"resc-"+c.id, tipo:"rescisao", c, nome, data:prazo, dias:diasAte(prazo),
@@ -3311,7 +3515,7 @@ function ColabForm({ tipo, inicial, onSalvar, onClose, vinculo }) {
             <Input type="time" value={f.horaSaida||""} onChange={e=>set("horaSaida",e.target.value)} aria-label="Saída na escala" className="w-32"/>
             {["08:00","10:00","11:00","12:00","14:00","16:00","18:00"].map(h=><button key={h} type="button" onClick={()=>setF(p=>({...p,horaEntrada:h,horaSaida:somaHora(h,8*60+20)}))} className={cx("px-2 py-1 rounded-lg text-xs font-semibold border", f.horaEntrada===h?"grad-brand text-white border-transparent":"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>{h}</button>)}
           </div>
-          <span className="block text-[11px] text-slate-500 mt-1 normal-case font-normal tracking-normal">{f.horaEntrada&&f.horaSaida ? <>Na escala: turno da <b>{TURNOS[turnoDaHora(f.horaEntrada)].l}</b>, {f.horaEntrada} às {f.horaSaida}. Pode mudar quando quiser — dias ajustados à mão na grade continuam como estão.</> : "Defina para a pessoa já entrar no turno certo da escala (Manhã, Tarde ou Noite)."}</span>
+          <span className="block text-[11px] text-slate-500 mt-1 normal-case font-normal tracking-normal">{f.horaEntrada&&f.horaSaida ? <>Na escala: turno da <b>{TURNOS[turnoDaHora(f.horaEntrada)].l}</b>, {f.horaEntrada} às {f.horaSaida}. Ao salvar, este horário vale para todos os dias de hoje em diante (só as folgas marcadas à mão na grade continuam).</> : "Defina para a pessoa já entrar no turno certo da escala (Manhã, Tarde ou Noite)."}</span>
         </Field></div>
         <Field label="Admissão / início na escala"><Input type="date" value={f.admissao} onChange={e=>set("admissao",e.target.value)}/></Field>
         <Field label="Válido até (fim do contrato, opcional)"><Input type="date" value={f.fimContrato||""} onChange={e=>set("fimContrato",e.target.value)}/></Field>
@@ -3381,7 +3585,7 @@ function ColabForm({ tipo, inicial, onSalvar, onClose, vinculo }) {
 
 /* ============================ COLABORADORES CLT ============================ */
 function ColaboradoresCLT() {
-  const { clts, freelas, escala, escalaOv, salvarClt, excluirColab, unidades, registros, pontoHist, can, setEnvContab } = useStore();
+  const { clts, freelas, escala, escalaOv, salvarClt, excluirColab, unidades, registros, pontoHist, can, envContab, setEnvContab } = useStore();
   const toast=useContext(ToastCtx);
   // Diagnóstico: por que um CPF não consegue bater ponto?
   const testarCpfPonto=async()=>{ const c=window.prompt("CPF para testar no ponto:"); if(!c) return; const d=soDigitos(c); if(d.length!==11){ alert("Digite os 11 números do CPF."); return; }
@@ -3416,7 +3620,8 @@ function ColaboradoresCLT() {
   const ehConf=(c)=>c.vinculo==="confianca";
   const casaOk=(c)=> casa==="todas" || c.unidade===casa || (ehConf(c)&&(c.unidade==="todas"||c.unidade==null));
   const listTodos=clts.filter(c=>String(c.nome||"").toLowerCase().includes(q.toLowerCase()) && casaOk(c)
-    && (vinc==="todos" || (vinc==="confianca"?ehConf(c): vinc==="fixo"?ehFixo(c): (!ehFixo(c)&&!ehConf(c)))));
+    && (vinc==="todos" || (vinc==="cltmais"?(!ehFixo(c)&&ehCltMais(c,envContab)): vinc==="confianca"?ehConf(c): vinc==="fixo"?ehFixo(c): (!ehFixo(c)&&!ehConf(c)))));
+  const togCltMais=(c)=>{ const v=!ehCltMais(c,envContab); salvarClt({...c, registrado:v}); toast(c.nome.split(" ")[0]+(v?" agora é CLT+ (registro da contabilidade e contrato assinado)":" voltou para CLT (sem registro da contabilidade)")); };
   const list=listTodos.filter(c=>!desligadoDe(c));
   const desligados=listTodos.filter(desligadoDe);
   const podeDeslig=can("colaboradores");
@@ -3425,7 +3630,7 @@ function ColaboradoresCLT() {
     if(c.admissao && d.data<c.admissao){ toast("A data da demissão não pode ser antes da admissão ("+fmtDataBR(c.admissao)+")"); return; }
     if(precisaTipo && !d.tipo){ toast("Escolha o tipo: pedido de demissão, sem justa causa ou justa causa"); return; }
     if(!String(d.motivo||"").trim()){ toast("Explique o motivo da demissão"); return; }
-    const reg={ data:d.data, motivo:String(d.motivo).trim(), registradoEm:Date.now() }; if(precisaTipo){ reg.tipo=d.tipo;
+    const reg={ data:d.data, motivo:String(d.motivo).trim(), registradoEm:Date.now() }; if(d.modo==="simples") reg.modo="simples"; if(precisaTipo){ reg.tipo=d.tipo;
       if(d.tipo==="semjusta"||d.tipo==="pedido") reg.aviso=d.aviso||(d.tipo==="semjusta"?"indenizado":"dispensado"); reg.feriasVencidas=Math.max(0,Math.floor(Number(d.feriasVencidas)||0)); }
     salvarClt({...c, fimContrato:d.data, demissao:reg, fimAntesDemissao:c.fimContrato||""});
     setDemitir(null); setPasta(null); toast(c.nome.split(" ")[0]+" demitido(a) — último dia "+fmtDataBR(d.data)+". Os dias até essa data continuam na folha do mês."); };
@@ -3445,13 +3650,14 @@ function ColaboradoresCLT() {
     setPasta(null); toast("Admissão reativada"); };
   const linhaColab=(c)=>{ const _docs=c.docs||{}; const docsOk=Object.values(_docs).filter(Boolean).length; const docsTot=Object.keys(_docs).length; const desl=desligadoDe(c);
             return <tr key={c.id} className={cx("hover:bg-slate-50/70", desl&&"opacity-75")}>
-              <td className="px-4 py-3"><button onClick={()=>{setPasta(c);setTab("dados");}} title={rotuloDeslig(c)||undefined} className="flex items-center gap-3 text-left"><Avatar name={c.nome} src={c.foto} tone={ehConf(c)?"slate":ehFixo(c)?"free":"brand"}/><span className="font-semibold text-slate-800">{c.nome}</span><BadgeVigencia p={c} tipo="clt"/>{ehConf(c)&&<Badge tone="slate">Confiança</Badge>}{ehFixo(c)&&<Badge tone="free">Freela Fixo</Badge>}</button></td>
+              <td className="px-4 py-3"><button onClick={()=>{setPasta(c);setTab("dados");}} title={rotuloDeslig(c)||undefined} className="flex items-center gap-3 text-left"><Avatar name={c.nome} src={c.foto} tone={ehConf(c)?"slate":ehFixo(c)?"free":"brand"}/><span className="font-semibold text-slate-800">{c.nome}</span><BadgeVigencia p={c} tipo="clt"/>{ehConf(c)&&<Badge tone="slate">Confiança</Badge>}{ehFixo(c)&&<Badge tone="free">Freela Fixo</Badge>}{!ehFixo(c)&&ehCltMais(c,envContab)&&<Badge tone="green">CLT+</Badge>}</button></td>
               <td className="px-4 py-3 text-slate-600">{c.cargo}</td>
               <td className="px-4 py-3">{ehConf(c)?<Badge tone="slate">sem ponto</Badge>:<Badge tone="brand">{c.escala}</Badge>}</td>
               <td className="px-4 py-3 text-slate-600">{ehConf(c)&&(c.unidade==="todas"||c.unidade==null)?"Todas as casas":unidadeNome(c.unidade,unidades)}</td>
               <td className="px-4 py-3">{ehConf(c)?<span className="text-slate-400">—</span>:<span className={cx("font-semibold", (c.banco||"").startsWith("-")?"text-rose-600":"text-emerald-600")}>{c.banco}</span>}</td>
               <td className="px-4 py-3">{ehConf(c)?<span className="text-slate-400">—</span>:<Badge tone={docsOk===docsTot?"green":"amber"}>{docsOk}/{docsTot}</Badge>}</td>
               <td className="px-4 py-3"><div className="flex gap-1 justify-end">
+                {!ehFixo(c) && <button onClick={()=>togCltMais(c)} aria-label={"CLT+ "+c.nome} title={ehCltMais(c,envContab)?"CLT+ (registro da contabilidade e contrato assinado) — clique para tirar":"Marcar como CLT+ (já recebemos o contrato da contabilidade e assinamos)"} className={cx("h-8 px-2 rounded-lg text-[11px] font-bold border", ehCltMais(c,envContab)?"bg-emerald-50 border-emerald-200 text-emerald-700":"bg-white border-slate-200 text-slate-400 hover:text-emerald-700")}>{ehCltMais(c,envContab)?"CLT+":"+CLT+"}</button>}
                 <button title="Editar" onClick={()=>setForm({inicial:c})} className="w-8 h-8 rounded-lg hover:bg-slate-100 grid place-items-center text-slate-500"><Icon d={I.edit} className="w-4 h-4"/></button>
                 {podeDeslig && !desl && !c.demissao && <button title="Demitir" aria-label={"Demitir "+c.nome} onClick={()=>setDemitir({c,data:hojeStr(),tipo:"",motivo:""})} className="w-8 h-8 rounded-lg hover:bg-amber-50 grid place-items-center text-slate-400 hover:text-amber-600"><Icon d={I.logout} className="w-4 h-4"/></button>}
                 {podeDeslig && !desl && !c.demissao && !ehFixo(c) && <button title="Cancelar admissão" aria-label={"Cancelar admissão de "+c.nome} onClick={()=>setCancAdm({c,motivo:""})} className="w-8 h-8 rounded-lg hover:bg-slate-100 grid place-items-center text-slate-400 hover:text-slate-700"><Icon d={I.x} className="w-4 h-4"/></button>}
@@ -3467,7 +3673,7 @@ function ColaboradoresCLT() {
       <Btn variant="ghost" icon={I.shield} onClick={()=>setForm({vinculo:"confianca"})}>Cargo de confiança</Btn>
     </PageHeader>
     <div className="flex flex-wrap gap-2 mb-3">
-      {[["todos","Todos"],["clt","CLT"],["fixo","Freela Fixo"],["confianca","Confiança"]].map(([k,l])=><button key={k} onClick={()=>setVinc(k)} className={cx("px-3 py-1.5 rounded-lg text-xs font-semibold border transition", vinc===k?"grad-brand text-white border-transparent":"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>{l}</button>)}
+      {[["todos","Todos"],["clt","CLT"],["cltmais","CLT+ (registrados)"],["fixo","Freela Fixo"],["confianca","Confiança"]].map(([k,l])=><button key={k} onClick={()=>setVinc(k)} className={cx("px-3 py-1.5 rounded-lg text-xs font-semibold border transition", vinc===k?"grad-brand text-white border-transparent":"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>{l}</button>)}
     </div>
     <Card className="p-2 mb-3"><div className="flex items-center gap-2 px-3 py-2">
       <Icon d={I.search} className="w-4 h-4 text-slate-400"/>
@@ -3505,13 +3711,14 @@ function ColaboradoresCLT() {
             {(demitir.tipo==="semjusta"?["indenizado","trabalhado"]:["dispensado","trabalhado","descontar"]).map(k=><option key={k} value={k}>{AVISO_DEMISSAO[k]}</option>)}</Select></Field>}
           {!fixo && demitir.tipo && (()=>{ const anos=c.admissao&&demitir.data?avosFerias(c.admissao,demitir.data).anos:0; return <Field label="Férias vencidas ainda não tiradas (períodos)"><Input type="number" min="0" max="3" aria-label="Férias vencidas" value={demitir.feriasVencidas||0} onChange={e=>setDemitir({...demitir,feriasVencidas:Math.max(0,Math.floor(Number(e.target.value)||0))})}/>
             <div className="text-[11px] text-slate-400 mt-1">{anos>0?anos+" ano(s) completo(s) de casa. Informe quantos períodos de férias ele ainda não tirou.":"Menos de 1 ano de casa: normalmente 0."}</div></Field>; })()}
-          {!fixo && demitir.tipo && Number(c.salario)>0 && demitir.data && (()=>{ const r=calcRescisao({...c,demissao:{data:demitir.data,tipo:demitir.tipo,aviso:demitir.aviso,feriasVencidas:demitir.feriasVencidas}},Number(c.salario)); if(!r) return null;
+          {!fixo && demitir.tipo && Number(c.salario)>0 && demitir.data && (()=>{ const r=calcRescisao({...c,demissao:{data:demitir.data,tipo:demitir.tipo,aviso:demitir.aviso,feriasVencidas:demitir.feriasVencidas,modo:demitir.modo}},Number(c.salario)); if(!r) return null;
             return <div className="p-3 rounded-xl bg-slate-50 border border-slate-100 text-xs" aria-label="Prévia da rescisão"><div className="font-bold text-slate-700 mb-1">Prévia da rescisão (além do saldo de salário do mês)</div>
               {r.itens.map(x=><div key={x.k} className="flex justify-between gap-2"><span className="text-slate-500">{x.rot}{x.ref?" ("+x.ref+")":""}</span><span className="tabular-nums">{fmtBRL(x.valor)}</span></div>)}
               {r.descontos.map(x=><div key={x.k} className="flex justify-between gap-2 text-rose-600"><span>{x.rot}</span><span className="tabular-nums">-{fmtBRL(x.valor)}</span></div>)}
               {!r.itens.length&&!r.descontos.length && <div className="text-slate-500">Só o saldo de salário.</div>}
               <div className="flex justify-between font-bold border-t border-slate-200 mt-1 pt-1"><span>Verbas rescisórias</span><span className="tabular-nums">{fmtBRL(r.total)}</span></div>
               <div className="text-slate-400 mt-1">Pagar até {fmtDataBR(r.prazo)} (10 dias).{r.multaFGTS?" Multa de 40% do FGTS: recolher em guia (GRRF), fora deste valor.":""}</div></div>; })()}
+          {!fixo && <label className="flex items-start gap-2 text-sm text-slate-700"><input type="checkbox" className="mt-1" aria-label="Só dias trabalhados e VT" checked={demitir.modo==="simples"} onChange={e=>setDemitir({...demitir,modo:e.target.checked?"simples":""})}/><span><b>Pagar só os dias trabalhados + VT</b> <span className="text-slate-500">(sem aviso, 13º, férias e 1/3 — pode mudar depois em Pagamentos → Rescisões)</span></span></label>}
           <Field label="Motivo"><textarea value={demitir.motivo} onChange={e=>setDemitir({...demitir,motivo:e.target.value})} rows={3} aria-label="Motivo da demissão" placeholder={fixo?"Ex.: encerramos a parceria, mudança de escala…":"Explique o que aconteceu"} className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 outline-none focus:ring-2 focus:ring-brand-400 text-sm"/></Field>
         </div>
         <div className="flex gap-2 mt-5"><Btn variant="ghost" className="flex-1" onClick={()=>setDemitir(null)}>Voltar</Btn>
@@ -3941,6 +4148,22 @@ function calcExcessoFonte(k, de, env){ try{
   let prev=previstoConta(pref==="conf"?previstoConf(c,a,b).total:L.liquido,ajDe[k]).previsto; if(vtExc>0.009 && !(ajDe[kv]||{}).creditoPara) prev=Math.max(0,prev-vtExc);
   return r2(soma(pag.filter(p=>p.tipo!=="vt"&&pagoNaCompetencia(p,de,nd)))-prev);
 } catch(e){ return null; } }
+// Rescisão: o que foi pago A MAIS no mês anterior (VT adiantado / salário) e ainda não foi descontado.
+// Contas do mês: VT pago a mais sem "descontar no próximo mês" abate o salário do MESMO mês; se esse salário já foi pago cheio,
+// a diferença fica como salário pago a mais. Na rescisão não há mês seguinte: entra aqui como desconto.
+// O que já foi jogado para este mês ("Descontar no próximo mês") vem como crédito gravado (credVT / credSal).
+function pagoAMaisAnterior(c, ym, env){ try{
+  const r2=(x)=>Math.round((Number(x)||0)*100)/100; const [y,m]=String(ym).split("-").map(Number); const prev=m===1?(y-1)+"-12":y+"-"+String(m-1).padStart(2,"0");
+  const salKey=(c.vinculo==="fixo"?"fixo":c.vinculo==="confianca"?"conf":"clt")+"-"+c.id, vtKey="vt-"+c.id;
+  const ajP=(((env.relFin||{})[prev]||{}).aj)||{}, ajC=(((env.relFin||{})[ym]||{}).aj)||{};
+  const vtExc=r2(calcExcessoFonte(vtKey,prev,env)||0), salExc=r2(calcExcessoFonte(salKey,prev,env)||0);
+  const vtCP=(ajP[vtKey]||{}).creditoPara, salCP=(ajP[salKey]||{}).creditoPara;
+  const auto = (!salCP && salExc>0.009) ? salExc : 0;   // ainda não descontado em lugar nenhum
+  const cv=ajC[vtKey]||{}, cs=ajC[salKey]||{};
+  const credVT = (cv.valor==null||cv.valor==="") && cv.credito && Number(cv.credito.valor)>0 ? r2(Math.min(Number(cv.credito.valor), Math.max(0,vtExc))) : 0;
+  const credSal = (cs.valor==null||cs.valor==="") && cs.credito && Number(cs.credito.valor)>0 ? r2(Math.min(Number(cs.credito.valor), Math.max(0,salExc))) : 0;
+  return { de:prev, auto, autoVT: auto>0 && vtExc>0.009 && !vtCP ? Math.min(auto,vtExc) : 0, credVT, credSal, vtExc, salExc };
+} catch(e){ return { de:"", auto:0, autoVT:0, credVT:0, credSal:0, vtExc:0, salExc:0 }; } }
 const TIPOS_CONTA=[["clt","CLT"],["fixo","Freela Fixo"],["pj","PJ"],["vt","Vale-transporte"],["free","Freelancers"],["conf","Gerência & Diretoria"],["manual","Manuais"]];
 const TIPOS_MANUAL=["Vale-transporte","Adiantamento","Complemento de salário","Bônus / gratificação","Reembolso","Outro"];
 const FORMAS_PAG=["Dinheiro","Pix","Transferência","Cartão / VT eletrônico","Cartão Caju","Outro"];
@@ -4017,18 +4240,24 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
       const desc = l.desc + (pc.cred>0 && !pc.editado ? " · − "+fmtBRL(pc.cred)+" pago a mais em "+fmtCompetencia(pc.credDe) : "")
         + (pc.editado && mc ? (mc.vt ? " · MANUAL: "+mc.dias+" dia(s) × "+fmtBRL(mc.vtDia)+" de VT"
           : " · MANUAL: "+mc.dias+" dia(s) × "+fmtBRL(mc.salario)+" ÷ 30"+(Number(mc.acresc)>0?" + "+fmtBRL(mc.acresc):"")+(Number(mc.desconto)>0?" − "+fmtBRL(mc.desconto):"")+(Number(mc.desc6)>0?" − "+fmtBRL(mc.desc6)+" (6% VT)":"")+(mc.obs?" ("+mc.obs+")":"")) : "");
-      return {...l, desc, credAnulado:pc.credAnulado, credGrav:pc.credGrav, manualCalc:pc.editado?mc:null, previsto, venc, pagos, pago, saldo, aMais, cred:pc.cred, credDe:pc.credDe, creditoPara:pc.creditoPara, creditoValor:pc.creditoValor, ultimo, status, inc:a.inc!=null?a.inc:true, obs:a.obs!=null?a.obs:"", editado:!!pc.editado, previstoOrig:r2(l.previsto)}; });
+      const credSobra = (l.tipo==="vt" && !pc.editado && pc.cred>0) ? r2(Math.max(0, pc.cred-r2(l.previsto))) : 0;   // desconto de VT maior que o VT do mês: o resto sai do salário
+      return {...l, desc, credSobra, credAnulado:pc.credAnulado, credGrav:pc.credGrav, manualCalc:pc.editado?mc:null, previsto, venc, pagos, pago, saldo, aMais, cred:pc.cred, credDe:pc.credDe, creditoPara:pc.creditoPara, creditoValor:pc.creditoValor, ultimo, status, inc:a.inc!=null?a.inc:true, obs:a.obs!=null?a.obs:"", editado:!!pc.editado, previstoOrig:r2(l.previsto)}; });
   // VT pago a mais abate o SALÁRIO da mesma pessoa no mesmo mês (o Financeiro paga um valor só, já líquido).
   // Se o gestor preferiu jogar a diferença para o mês seguinte ("Descontar no próximo mês"), não abate aqui (não desconta duas vezes).
   const SAL_TIPOS=["clt","fixo","conf"];
   const _temSal=new Set(linhas0.filter(l=>SAL_TIPOS.includes(l.tipo)).map(l=>String(l.pid)));
-  const _vtExc={}; linhas0.forEach(l=>{ if(l.tipo==="vt" && l.aMais>0 && !l.creditoPara && _temSal.has(String(l.pid))) _vtExc[String(l.pid)]=l.aMais; });
-  const linhas=linhas0.map(l=>{ const x=_vtExc[String(l.pid)]; if(!x) return l;
-    if(l.tipo==="vt") return {...l, abatidoSal:true};
+  const _vtExc={}, _vtSobra={}; linhas0.forEach(l=>{ if(l.tipo==="vt" && l.aMais>0 && !l.creditoPara && _temSal.has(String(l.pid))) _vtExc[String(l.pid)]=l.aMais;
+    if(l.tipo==="vt" && l.credSobra>0 && _temSal.has(String(l.pid))) _vtSobra[String(l.pid)]=l.credSobra; });
+  // desligado no mês: o que foi pago a mais no mês anterior e não foi descontado entra na rescisão (não há mês seguinte)
+  const _ant={}; linhas0.forEach(l=>{ if(!SAL_TIPOS.includes(l.tipo)||l.editado||!l.ref||!l.ref.demissao||!l.ref.demissao.data||l.ref.demissao.data.slice(0,7)!==ymRef) return;
+    const pa=pagoAMaisAnterior(l.ref, ymRef, envExc); if(pa.auto>0) _ant[String(l.pid)]=pa; });
+  const linhas=linhas0.map(l=>{ const x=_vtExc[String(l.pid)]||0, sob=_vtSobra[String(l.pid)]||0, pa=_ant[String(l.pid)]; if(!x && !sob && !pa) return l;
+    if(l.tipo==="vt") return x ? {...l, abatidoSal:true} : l;
     if(!SAL_TIPOS.includes(l.tipo)) return l;
-    const previsto=r2(Math.max(0,l.previsto-x)), saldo=r2(previsto-l.pago), aMais=l.pago>0&&saldo< -0.009?r2(-saldo):0;
+    const ant=pa&&!l.editado?pa.auto:0; const tot=x+(l.editado?0:sob)+ant; if(!tot) return l;
+    const previsto=r2(Math.max(0,l.previsto-tot)), saldo=r2(previsto-l.pago), aMais=l.pago>0&&saldo< -0.009?r2(-saldo):0;
     const status= aMais>0 ? "amais" : previsto>0 && saldo<=0.009 ? "pago" : (previsto<=0 && l.pago<=0) ? "pago" : l.pago>0 ? "parcial" : (l.venc && l.venc<hoje ? "vencido" : "apagar");
-    return {...l, previsto, saldo, aMais, status, abateVT:x, desc:l.desc+" · − "+fmtBRL(x)+" de VT pago a mais"}; });
+    return {...l, previsto, saldo, aMais, status, abateVT:r2(x+(l.editado?0:sob)), abateAnt:ant, abateAntDe:pa?pa.de:"", desc:l.desc+(x?" · − "+fmtBRL(x)+" de VT pago a mais":"")+(sob&&!l.editado?" · − "+fmtBRL(sob)+" de VT pago a mais (resto do desconto do VT)":"")+(ant?" · − "+fmtBRL(ant)+" pago a mais em "+fmtCompetencia(pa.de)+(pa.autoVT>0?" (VT adiantado)":""):"")}; });
   // Desconto "pago a mais" já lançado no mês seguinte, mas a conta deste mês mudou (ex.: VT recalculado): ajusta ou cancela sozinho.
   const _fixCred=linhas.filter(l=>!l.manual && l.creditoPara).map(l=>{ const real=l.aMais>0?l.aMais:0; return Math.abs(real-(Number(l.creditoValor)||0))>0.009 ? [l.k,real] : null; }).filter(Boolean);
   const _fixKey=JSON.stringify(_fixCred);
@@ -4226,7 +4455,7 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
           const rc=(d&&!mc&&d.rescisao)||(!d&&!mc&&l.rescisao)||null;
           if(rc){ rc.itens.forEach(x=>prov.push([x.rot,x.ref||"",x.valor])); rc.descontos.forEach(x=>desc.push([x.rot,x.ref||"",x.valor])); }
           if(l.cred>0 && !l.editado) desc.push(["Pago a mais em "+fmtCompetencia(l.credDe),"",l.cred]);
-          if(l.abateVT>0) desc.push(["VT pago a mais (abatido)","",l.abateVT]);
+          if(l.abateVT>0) desc.push(["VT pago a mais (abatido)","",l.abateVT]); if(l.abateAnt>0) desc.push(["Pago a mais em "+fmtCompetencia(l.abateAntDe),"",l.abateAnt]);
           const tProv=r2(prov.reduce((s,x)=>s+(Number(x[2])||0),0)), tDesc=r2(desc.reduce((s,x)=>s+(Number(x[2])||0),0));
           const nL=Math.max(prov.length,desc.length,1); const h=46+nL*12+58;
           precisa(h);
@@ -4282,7 +4511,7 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
       <td className="px-2 py-2 w-8"><input type="checkbox" checked={!!l.inc} onChange={e=>setAj(l.k,"inc",e.target.checked)} aria-label={"Incluir "+l.k} title="Incluir no relatório"/></td>
       <td className="px-2 py-2"><div className="font-semibold text-slate-800 leading-tight">{l.nome}</div><div className="text-[11px] text-slate-400">{l.desc}</div></td>
       <td className="px-2 py-2"><Badge tone={l.tipo==="pj"?"blue":l.tipo==="vt"?"amber":l.tipo==="fixo"||l.tipo==="free"?"free":l.tipo==="manual"?"slate":"brand"}>{rotTipo(l.tipo)}</Badge></td>
-      <td className="px-2 py-2"><input type="number" step="0.01" className={cx(inp,"w-28 text-right tabular-nums",l.editado&&"border-amber-300 bg-amber-50")} value={(aj[l.k]||{}).valor!=null?(aj[l.k]||{}).valor:r2(l.previsto+(l.abateVT||0))} onChange={e=>setAj(l.k,"valor",e.target.value)} aria-label={"Previsto "+l.k} title={l.editado?"Valor ajustado à mão (calculado: "+fmtBRL(l.previstoOrig)+")":l.cred>0?"Calculado "+fmtBRL(l.previstoOrig)+" − "+fmtBRL(l.cred)+" pago a mais no mês anterior":"Valor calculado"}/>{l.abateVT>0&&<div className="text-[10px] text-violet-700 mt-0.5 leading-tight whitespace-nowrap" aria-label={"Final "+l.k}>− {fmtBRL(l.abateVT)} VT = <b>{fmtBRL(l.previsto)}</b></div>}</td>
+      <td className="px-2 py-2"><input type="number" step="0.01" className={cx(inp,"w-28 text-right tabular-nums",l.editado&&"border-amber-300 bg-amber-50")} value={(aj[l.k]||{}).valor!=null?(aj[l.k]||{}).valor:r2(l.previsto+(l.abateVT||0)+(l.abateAnt||0))} onChange={e=>setAj(l.k,"valor",e.target.value)} aria-label={"Previsto "+l.k} title={l.editado?"Valor ajustado à mão (calculado: "+fmtBRL(l.previstoOrig)+")":l.cred>0?"Calculado "+fmtBRL(l.previstoOrig)+" − "+fmtBRL(l.cred)+" pago a mais no mês anterior":"Valor calculado"}/>{l.abateVT>0&&<div className="text-[10px] text-violet-700 mt-0.5 leading-tight whitespace-nowrap" aria-label={"Final "+l.k}>− {fmtBRL(l.abateVT)} VT = <b>{fmtBRL(l.previsto)}</b></div>}</td>
       <td className="px-2 py-2"><input type="date" className={inp} value={l.venc||""} onChange={e=>setAj(l.k,"pagar",e.target.value)} aria-label={"Vencimento "+l.k}/></td>
       <td className="px-2 py-2"><Badge tone={tonSt[l.status]}>{stTxt(l)}</Badge>{l.status==="parcial"&&<div className="text-[11px] font-semibold text-amber-700 mt-0.5">falta {fmtBRL(l.saldo)}</div>}{l.status==="amais"&&<div className="text-[11px] font-semibold text-violet-700 mt-0.5">{l.abatidoSal?"abatido no salário deste mês":l.creditoPara?"desconto de "+fmtBRL(l.creditoValor||l.aMais)+" lançado em "+fmtCompetencia(l.creditoPara):"descontar no próximo mês"}</div>}{l.pagos.length>0&&<div className="text-[10px] text-slate-400 mt-0.5 leading-tight">{l.pagos.map(p=>fmtBRL(Number(p.valor)||0)+" "+fmtDataBR(p.data)+(p.forma?" "+p.forma.toLowerCase():"")).join(" · ")}</div>}</td>
       <td className="px-2 py-2 text-right whitespace-nowrap">
@@ -4582,6 +4811,224 @@ function RelatorioFinanceiro({ ini, fim, uni, modo }){
     {modalBaixa}
   </>;
 }
+// ===== Aba Rescisões: todos os desligados, cálculo de cada verba e valores editáveis =====
+function AbaRescisoes({uni, irContas}){
+  const { clts, registros, pontoHist, getDossie, cltExtraAjuste, gorjetasCLT, escala, escalaOv, atestados, pagamentosCLT, faltaDescontoDesde, feriadosExtras, salvarClt, acesso, pjs, pagamentosPJ, relFin, setRelFin, unidades, empresaContratante } = useStore();
+  const toast=useContext(ToastCtx); const podeSigilo=!acesso||acesso.podeSigilo;
+  const setModo=(c,modo)=>{ salvarClt({...c, demissao:{...c.demissao, modo:modo||null}}); toast(modo==="simples"?"Rescisão de "+c.nome.split(" ")[0]+": só dias trabalhados + VT":"Rescisão de "+c.nome.split(" ")[0]+": cálculo completo"); };
+  const [ver,setVer]=useState("pendentes"); const [aberto,setAberto]=useState(null); const [ed,setEd]=useState(null);   // ed: {itens:{}, extras:[], obs}
+  const r2=(v)=>Math.round((Number(v)||0)*100)/100;
+  const desligados=(clts||[]).filter(c=>c.demissao&&c.demissao.data && !c.admissaoCancelada && (uni==="todas"||Number(c.unidade)===Number(uni)||c.unidade==null||c.unidade==="todas"))
+    .filter(c=>!(c.vinculo==="confianca"&&c.sigiloso&&!podeSigilo)).sort((a,b)=>String(b.demissao.data).localeCompare(String(a.demissao.data)));
+  const meses=[...new Set(desligados.map(c=>c.demissao.data.slice(0,7)))].sort(); const [y0,m0]=(meses[0]||hojeStr().slice(0,7)).split("-").map(Number); const [y1,m1]=(meses[meses.length-1]||hojeStr().slice(0,7)).split("-").map(Number);
+  useRegistrosPeriodo(mesDe(m0===1?y0-1:y0, m0===1?12:m0-1)[0], mesDe(y1,m1)[1]);   // inclui o mês anterior (pago a mais / faltas do VT)
+  const envExcR={ clts, pjs, relFin, pagamentosCLT, pagamentosPJ, registros, pontoHist, escala, escalaOv, atestados, cltExtraAjuste, gorjetasCLT, getDossie, faltaDescontoDesde, feriadosExtras };
+  const linhaDe=(c)=>{ const ym=c.demissao.data.slice(0,7); const [y,m]=ym.split("-").map(Number); const [a,b]=mesDe(y,m); const nd=(d)=>!!d&&d>=a&&d<=b;
+    const sal=Number(c.salario||0); let liquido, r, saldo, vtInfo=null, porDia=null;
+    if(c.vinculo==="confianca"){ const pc=previstoConf(c,a,b); r=pc.rescisao; saldo=pc.salario; liquido=pc.total; }
+    else { const regs=[...(pontoHist||[]),...(registros||[])];
+      const l=calcFolhaLinha(c,{ apurCLT:apurarHoras(regs).filter(x=>x.tipo==="clt"&&x.completo&&nd(x.dia)), cltExtraAjuste:cltExtraAjuste||{}, gorjetasCLT:gorjetasCLT||{}, ymRef:ym, getDossie,
+        naData:nd, faltasCtx:{escala,escalaOv,registros:regs,atestados,ini:a,fim:b,hoje:hojeStr(),nowMin:0,desde:faltaDescontoDesde}, feriados:feriadosExtras });
+      r=l.rescisao; saldo=l.salario; liquido=l.liquido; porDia=l.porDia; vtInfo={dias:l.vtDias, dia:l.vtDia, bruto:Math.round(Number(l.vt||0)*100)/100, faltasAnt:l.vtFaltasAnt||0, mesAnt:l.vtMesAnt, faltasValor:l.vtFaltasValor||0, faltasExced:l.vtFaltasExced||0, prev:Math.round(Number(l.vtLiquido!=null?l.vtLiquido:l.vt||0)*100)/100}; }
+    const pa=pagoAMaisAnterior(c, ym, envExcR);
+    const pagos=(pagamentosCLT[String(c.id)]||[]).filter(p=>p.tipo!=="vt" && (p.comp===ym || (!p.comp && p.data&&p.data>=c.demissao.data))); /* salário do mês anterior pago depois da saída não é pagamento da rescisão */ const pago=r2(pagos.reduce((s,p)=>s+(Number(p.valor)||0),0));
+    const prazo=somaDiasStr(c.demissao.data,10);
+    // desconto do que foi pago a mais no mês anterior: salário/VT não descontado (auto) + "descontar no próximo mês" já lançado para este mês
+    const descAnt=r2((pa.auto||0)+(pa.credSal||0));
+    if(vtInfo){ const ajVT=((((relFin||{})[ym]||{}).aj||{})["vt-"+c.id]||{}).valor; const vtEd=ajVT!=null&&ajVT!==""; if(vtEd) vtInfo.prev=r2(ajVT);
+      vtInfo.cred=vtEd?0:(pa.credVT||0); vtInfo.credDe=pa.de;
+      vtInfo.pago=r2((pagamentosCLT[String(c.id)]||[]).filter(p=>p.tipo==="vt"&&p.comp===ym).reduce((s2,p)=>s2+(Number(p.valor)||0),0)); vtInfo.saldo=r2(vtInfo.prev-vtInfo.cred-vtInfo.pago); }
+    const liqAj=r2(liquido-descAnt);
+    const quitado=!!c.demissao.pagoEm || (pago>0 && pago>=liqAj-0.009);
+    return { c, ym, r, saldo, porDia, liquido:r2(liquido), liqAj, pa, descAnt, pago, prazo, quitado, sal, vtInfo, acerto:Math.max(0,r2(liqAj+(vtInfo?vtInfo.saldo:0))) }; };
+  const linhas=desligados.map(linhaDe).filter(x=> ver==="todas" || !x.quitado);
+  // Prestadores PJ com contrato encerrado: valor proporcional aos dias do último mês, pago e saldo (o valor pode ser trocado: vale em Contas do mês)
+  const [edPJ,setEdPJ]=useState({});
+  const pjsEnc=(pjs||[]).filter(pj=>!pjAtivoHoje(pj) && (pj.fim||pj.encerradoEm) && (uni==="todas"||String(pj.unidade)===String(uni)||pj.unidade==null||pj.unidade==="todas")).map(pj=>{
+    const fimP=pj.fim||pj.encerradoEm; const ym=fimP.slice(0,7); const [y,m]=ym.split("-").map(Number); const [a,b]=mesDe(y,m); const nd=(d)=>!!d&&d>=a&&d<=b;
+    const pv=pjValorNoPeriodo(pj,a,b); const det=pv.det[0]||{dias:0,cheio:false,valor:0}; const parc=pjParcelasNoMes(pj,ym,pv.total);
+    const aj=((((relFin||{})[ym]||{}).aj||{})["pj-"+pj.id]||{}); const prev=(aj.valor!=null&&aj.valor!=="")?r2(aj.valor):pv.total;
+    const pago=r2(((pagamentosPJ||{})[String(pj.id)]||[]).filter(p=>pagoNaCompetencia(p,ym,nd)).reduce((s2,p)=>s2+(Number(p.valor)||0),0));
+    return { pj, ym, fimP, det, total:pv.total, prev, editado:aj.valor!=null&&aj.valor!=="", parcelas:parc.length, pago, saldo:r2(prev-pago), prazo:(parc[parc.length-1]||{}).venc||"" }; })
+    .filter(x=> ver==="todas" || x.saldo>0.009).sort((a,b)=>String(b.fimP).localeCompare(String(a.fimP)));
+  const salvarPJ=(x,valor)=>{ const v=valor===""||valor==null?null:r2(valor); setRelFin(prev=>{ const P=prev||{}; const cur=P[x.ym]||{}; const aj=cur.aj||{}; const k="pj-"+x.pj.id; const o={...(aj[k]||{})}; if(v==null) delete o.valor; else o.valor=v;
+      return {...P,[x.ym]:{...cur, aj:{...aj,[k]:o}, manuais:cur.manuais||[]}}; }); toast(v==null?"Valor do PJ voltou ao cálculo":"Valor do PJ salvo — já vale em Contas do mês"); setEdPJ(e=>{ const n={...e}; delete n[x.pj.id]; return n; }); };
+  const abrir=(x)=>{ if(aberto===x.c.id){ setAberto(null); setEd(null); return; } setAberto(x.c.id); const aj=x.c.demissao.ajustes||{}; setEd({itens:{...(aj.itens||{})}, extras:(aj.extras||[]).map(e=>({...e})), obs:aj.obs||"", diasTrab:aj.diasTrab!=null?aj.diasTrab:"", valorDia:aj.valorDia!=null?aj.valorDia:"", vtDias:aj.vtDias!=null?aj.vtDias:""}); };
+  const salvarAj=(x)=>{ const itens={}; Object.entries(ed.itens||{}).forEach(([k,v])=>{ if(v!==""&&v!=null&&!isNaN(Number(v))) itens[k]=r2(v); });
+    const extras=(ed.extras||[]).filter(e=>String(e.rot||"").trim()&&Number(e.valor)>0).map(e=>({id:e.id, rot:String(e.rot).trim(), valor:r2(e.valor), tipo:e.tipo==="desc"?"desc":"prov", obs:e.obs||""}));
+    const num=(v)=> v===""||v==null||isNaN(Number(v)) ? null : Number(v);
+    salvarClt({...x.c, demissao:{...x.c.demissao, ajustes:{itens, extras, obs:ed.obs||"", diasTrab:num(ed.diasTrab), valorDia:num(ed.valorDia), vtDias:num(ed.vtDias), em:Date.now()}}}); toast("Valores da rescisão de "+x.c.nome.split(" ")[0]+" salvos — já valem em Contas do mês"); };
+  const limpar=(x)=>{ if(!confirm("Voltar todos os valores da rescisão de "+x.c.nome+" para o cálculo do sistema?")) return; salvarClt({...x.c, demissao:{...x.c.demissao, ajustes:null}}); setEd({itens:{},extras:[],obs:"",diasTrab:"",valorDia:"",vtDias:""}); toast("Valores voltaram ao cálculo do sistema"); };
+  const marcarPago=(x,v)=>{ salvarClt({...x.c, demissao:{...x.c.demissao, pagoEm:v?hojeStr():null}}); toast(v?"Rescisão marcada como paga":"Rescisão voltou para pendente"); };
+  // prévia com os valores digitados (antes de salvar)
+  const previa=(x)=> ed ? calcRescisao({...x.c, demissao:{...x.c.demissao, ajustes:{itens:ed.itens, extras:(ed.extras||[]).map(e=>({...e,valor:Number(e.valor)||0}))}}}, x.sal) : x.r;
+  const inp="px-2 py-1.5 rounded-lg border border-slate-200 text-sm text-right tabular-nums w-28 outline-none focus:ring-2 focus:ring-brand-400";
+  // ===== PDF para a Diretoria: rescisões da lista (filtro atual), com o cálculo de cada uma e o total a pagar =====
+  const exportarPdf=async()=>{ if(!linhas.length && !pjsEnc.length){ toast("Nenhuma rescisão na lista"); return; }
+    try{ const L=await carregarPdfLib(); const doc=await L.PDFDocument.create(); const f=await doc.embedFont(L.StandardFonts.Helvetica), b=await doc.embedFont(L.StandardFonts.HelveticaBold);
+      const limpo=(t)=>String(t??"").replace(/[—–−]/g,"-").replace(/[→⇒]/g,"=>").replace(/[“”]/g,'"').replace(/[^\x20-\x7E\u00A0-\u00FF]/g,"");
+      const C={esc:L.rgb(0.09,0.27,0.13),claro:L.rgb(0.94,0.97,0.93),cinza:L.rgb(0.42,0.42,0.42),linha:L.rgb(0.86,0.88,0.86),txt:L.rgb(0.12,0.12,0.12),verm:L.rgb(0.72,0.1,0.1),verde:L.rgb(0.05,0.45,0.2),branco:L.rgb(1,1,1),roxo:L.rgb(0.4,0.2,0.6),ambar:L.rgb(0.6,0.4,0.05)};
+      const W=595,H=842,M=36; let pg,y; const uNome=uni==="todas"?"Todas as casas":unidadeNome(Number(uni),unidades); const emp=empresaEfetiva(empresaContratante);
+      const txt=(t,x,yy,o={})=>pg.drawText(limpo(t),{x,y:yy,size:o.size||8.5,font:o.bold?b:f,color:o.cor||C.txt});
+      const dir=(t,xr,yy,o={})=>{ const fn=o.bold?b:f; txt(t,xr-fn.widthOfTextAtSize(limpo(t),o.size||8.5),yy,o); };
+      const quebra=(t,w,sz,bold)=>{ const fn=bold?b:f; const out=[]; let cur=""; limpo(t).split(" ").forEach(p=>{ const tt=cur?cur+" "+p:p; if(fn.widthOfTextAtSize(tt,sz)>w&&cur){ out.push(cur); cur=p; } else cur=tt; }); if(cur) out.push(cur); return out; };
+      const nova=()=>{ pg=doc.addPage([W,H]); pg.drawRectangle({x:0,y:H-58,width:W,height:58,color:C.esc});
+        txt("RESCISÕES A PAGAR",M,H-28,{bold:true,size:15,cor:C.branco}); txt((emp.razao||"")+" · "+uNome,M,H-44,{size:8.5,cor:C.branco});
+        dir(ver==="todas"?"Todos os desligados":"Somente pendentes",W-M,H-28,{bold:true,size:9,cor:C.branco}); dir("Emitido em "+fmtDataBR(hojeStr()),W-M,H-44,{size:8.5,cor:C.branco}); y=H-78; };
+      const precisa=(h)=>{ if(y-h<46) nova(); };
+      const lin=(rot,val,o={})=>{ const ls=quebra(rot,W-2*M-120,o.size||8.5,o.bold); precisa(ls.length*11+2); ls.forEach((l,i)=>{ txt(l,M+(o.ind||10),y,{size:o.size||8.5,bold:o.bold,cor:o.corRot||C.txt}); if(i===0&&val!=null) dir(val,W-M-6,y,{size:o.size||8.5,bold:o.bold,cor:o.cor||C.txt}); y-=11; }); };
+      const nota=(t)=>{ quebra(t,W-2*M-40,7).forEach(l=>{ precisa(9); txt(l,M+22,y,{size:7,cor:C.cinza}); y-=9; }); };
+      const dd=(d)=>d.slice(8)+"/"+d.slice(5,7);
+      nova();
+      // resumo
+      const aPagar=(x)=>r2(Math.max(0,x.acerto-x.pago)); const totAc=r2(linhas.reduce((s2,x)=>s2+x.acerto,0)), totPago=r2(linhas.reduce((s2,x)=>s2+x.pago,0)), totRest=r2(linhas.reduce((s2,x)=>s2+aPagar(x),0));
+      const totPJ=r2(pjsEnc.reduce((s2,x)=>s2+Math.max(0,x.saldo),0)); const venc=linhas.filter(x=>!x.quitado&&x.prazo<hojeStr()).length;
+      pg.drawRectangle({x:M,y:y-46,width:W-2*M,height:56,color:C.claro});
+      txt("RESUMO",M+10,y-2,{bold:true,size:8,cor:C.cinza});
+      txt(linhas.length+" colaborador(es)"+(pjsEnc.length?" · "+pjsEnc.length+" PJ encerrado(s)":"")+(venc?" · "+venc+" com prazo vencido":""),M+10,y-16,{size:9,cor:venc?C.verm:C.txt});
+      txt("Total das rescisões "+fmtBRL(totAc)+" · já pago "+fmtBRL(totPago)+(totPJ?" · PJ a pagar "+fmtBRL(totPJ):""),M+10,y-30,{size:9});
+      dir("A PAGAR "+fmtBRL(r2(totRest+totPJ)),W-M-10,y-16,{bold:true,size:14,cor:C.esc}); y-=68;
+      linhas.forEach(x=>{ const c=x.c; const r=x.r; const vinc=c.vinculo==="fixo"?"Freela Fixo":c.vinculo==="confianca"?"Gerência":"CLT"; const atras=!x.quitado&&x.prazo<hojeStr();
+        precisa(90); pg.drawRectangle({x:M,y:y-6,width:W-2*M,height:20,color:C.esc});
+        txt(c.nome,M+8,y,{bold:true,size:10.5,cor:C.branco}); dir(x.quitado?"PAGO":atras?"VENCIDO":"A PAGAR",W-M-8,y,{bold:true,size:9,cor:C.branco}); y-=20;
+        const casa=c.unidade!=null&&c.unidade!=="todas"?unidadeNome(Number(c.unidade),unidades):"";
+        quebra([vinc,c.cargo,casa].filter(Boolean).join(" · ")+" · admissão "+fmtDataBR(c.admissao)+" · último dia "+fmtDataBR(c.demissao.data)+(TIPOS_DEMISSAO[c.demissao.tipo]?" · "+TIPOS_DEMISSAO[c.demissao.tipo]:"")+((c.vinculo==="fixo"||c.demissao.modo==="simples")?" · só dias trabalhados + VT":"")+" · pagar até "+fmtDataBR(x.prazo)+(c.demissao.motivo?" · motivo: "+c.demissao.motivo:""),W-2*M-20,7.5).forEach(l=>{ txt(l,M+10,y,{size:7.5,cor:C.cinza}); y-=10; }); y-=3;
+        if(!r && !x.porDia){ lin("Sem salário cadastrado: valores lançados em Contas do mês.",null,{corRot:C.cinza}); }
+        // salário do mês
+        if(x.porDia){ const pd=x.porDia;
+          if(pd.faltas.length) lin(`Diárias do período: ${pd.dias} trabalhada(s)${pd.dobras?` (${pd.dobras} dobra)`:""} + ${pd.faltas.length} falta(s) × ${fmtBRL(pd.valorDia)}`,fmtBRL(r2(pd.valorDias+pd.descFaltas)));
+          else lin(`Dias trabalhados: ${pd.dias} × ${fmtBRL(pd.valorDia)}${pd.dobras?` (${pd.dobras} dobra)`:""}`,fmtBRL(pd.valorDias));
+          if(pd.fonte==="ponto"&&pd.datas.length) nota("Dias com ponto: "+pd.datas.map(dd).join(", "));
+          if(pd.faltas.length){ lin(`(-) Desconto de faltas: ${pd.faltas.length} × ${fmtBRL(pd.valorDia)} (${pd.faltas.map(dd).join(", ")})`,"-"+fmtBRL(pd.descFaltas),{cor:C.verm,corRot:C.verm}); lin("= Saldo dos dias trabalhados",fmtBRL(pd.valorDias),{bold:true}); }
+          if(pd.atestados.length) nota("Atestado ("+pd.atestados.map(dd).join(", ")+"): dia não trabalhado, não pago e sem desconto.");
+          const outros=r2(x.liquido-(r?r.total:0)-(pd.valorDias||0)); if(Math.abs(outros)>0.009) lin(outros<0?"(-) Outros descontos do mês (VT de faltas do mês anterior que passam do VT, etc.)":"Outros valores do mês",(outros<0?"-":"")+fmtBRL(Math.abs(outros)),{cor:outros<0?C.verm:C.txt});
+        } else lin("Saldo de salário do mês (dias até a saída, com faltas, extras e descontos)",fmtBRL(r2(x.liquido-(r?r.total:0))));
+        if(r && !r.simples){ r.itens.forEach(i=>lin(i.rot+(i.ref?" ("+i.ref+")":"")+(i.editado?" - ajustado":""),"+"+fmtBRL(i.valor))); r.descontos.forEach(i=>lin("(-) "+i.rot+(i.ref?" ("+i.ref+")":""),"-"+fmtBRL(i.valor),{cor:C.verm,corRot:C.verm})); }
+        else if(r && r.simples){ r.itens.filter(i=>i.valor).forEach(i=>lin(i.rot,"+"+fmtBRL(i.valor))); r.descontos.filter(i=>i.valor).forEach(i=>lin("(-) "+i.rot,"-"+fmtBRL(i.valor),{cor:C.verm,corRot:C.verm})); }
+        if(x.descAnt>0) lin("(-) Pago a mais em "+fmtCompetencia(x.pa.de)+(x.pa.autoVT>0?" (VT adiantado)":""),"-"+fmtBRL(x.descAnt),{cor:C.roxo,corRot:C.roxo});
+        if(x.vtInfo && (x.vtInfo.prev>0||x.vtInfo.pago>0||x.vtInfo.cred>0)){ const v=x.vtInfo;
+          if(v.saldo>0.009) lin(`Vale-transporte a pagar (${v.dias||0} dia(s) × ${fmtBRL(v.dia||0)}${v.cred>0?` - ${fmtBRL(v.cred)} pago a mais`:""}${v.pago>0?` - ${fmtBRL(v.pago)} já pago`:""})`,"+"+fmtBRL(v.saldo));
+          else if(v.saldo< -0.009) lin("(-) VT pago a mais (devolvido no acerto)","-"+fmtBRL(-v.saldo),{cor:C.roxo,corRot:C.roxo}); }
+        if(c.demissao.ajustes&&c.demissao.ajustes.obs) nota("Obs.: "+c.demissao.ajustes.obs);
+        precisa(44); y-=3; pg.drawLine({start:{x:M+10,y:y+10},end:{x:W-M-6,y:y+10},thickness:0.6,color:C.linha});
+        lin("Total da rescisão",fmtBRL(x.acerto),{bold:true,size:9.5}); if(x.pago>0) lin("Já pago",fmtBRL(x.pago),{corRot:C.cinza,cor:C.cinza});
+        lin("A pagar",fmtBRL(aPagar(x)),{bold:true,size:10,cor:aPagar(x)>0?C.esc:C.verde});
+        if(c.pix) nota("PIX: "+c.pix); if(r&&r.multaFGTS) nota("Multa de 40% do FGTS: recolher em guia (GRRF), fora deste valor.");
+        y-=10; });
+      if(pjsEnc.length){ precisa(40); txt("PRESTADORES PJ ENCERRADOS",M,y,{bold:true,size:9,cor:C.cinza}); y-=14;
+        pjsEnc.forEach(x=>{ precisa(30); lin(x.pj.nome+" · encerrado em "+fmtDataBR(x.fimP)+" · "+(x.det.cheio?"mês inteiro":x.det.dias+" dia(s) do mês")+(x.pago>0?" · já pago "+fmtBRL(x.pago):""),fmtBRL(Math.max(0,x.saldo)),{bold:true}); y-=2; }); }
+      nota("Valores brutos. INSS/IRRF com a contabilidade. Prazo de pagamento: 10 dias após o último dia (art. 477 da CLT).");
+      doc.getPages().forEach((p,i,a)=>p.drawText(limpo("Wilami Ponto & RH · gerado em "+new Date().toLocaleString("pt-BR")+" · página "+(i+1)+" de "+a.length),{x:M,y:20,size:6.5,font:f,color:C.cinza}));
+      const bytes=await doc.save(); const nome="Rescisoes a pagar "+hojeStr()+" - "+uNome.replace(/[\\/:*?"<>|]/g,"")+".pdf";
+      const blob=new Blob([bytes],{type:"application/pdf"}); let compartilhou=false;
+      try{ const file=new File([blob],nome.normalize("NFD").replace(/[\u0300-\u036f]/g,""),{type:"application/pdf"}); if(navigator.canShare && navigator.canShare({files:[file]}) && /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent||"")){ await navigator.share({files:[file], title:"Rescisões a pagar"}); compartilhou=true; } }catch(e){ if(e&&e.name==="AbortError") compartilhou=true; }
+      if(!compartilhou) baixarBlob(blob,nome); toast("PDF das rescisões gerado ("+linhas.length+" colaborador(es))");
+    }catch(e){ console.error(e); toast("Não foi possível gerar o PDF: "+e.message); } };
+  return <div>
+    <div className="mb-3 p-3 rounded-xl bg-rose-50 text-rose-900 text-xs">Aqui ficam todos os <b>desligados</b>: o cálculo de cada verba, o total a pagar e o prazo (10 dias). Você pode <b>trocar qualquer valor</b> ou <b>lançar uma linha a mais</b> (provento ou desconto) — o valor salvo passa a valer em Contas do mês, na folha e no PDF. Freela Fixo não tem verbas rescisórias.</div>
+    <div className="flex flex-wrap items-center gap-2 mb-3">{[["pendentes","A pagar"],["todas","Todas"]].map(([k,l])=><button key={k} onClick={()=>setVer(k)} className={cx("px-3 py-1.5 rounded-lg text-xs font-semibold border", ver===k?"grad-brand text-white border-transparent":"bg-white border-slate-200 text-slate-600")}>{l}</button>)}
+      <div className="flex-1"/><Btn size="sm" icon={I.download||I.receipt} onClick={exportarPdf}>Exportar PDF para a Diretoria</Btn></div>
+    {linhas.length===0 && <Card className="p-8 text-center text-slate-400 text-sm">{ver==="pendentes"?"Nenhuma rescisão a pagar.":"Ninguém desligado ainda."} Para desligar alguém use <b>Demitir</b> em Colaboradores.</Card>}
+    <div className="space-y-3">{linhas.map(x0=>{ const ab=aberto===x0.c.id;
+      const x = (ab && ed && (x0.c.vinculo==="fixo"||x0.c.demissao.modo==="simples")) ? (()=>{ const xp=linhaDe({...x0.c, demissao:{...x0.c.demissao, ajustes:{...(x0.c.demissao.ajustes||{}), diasTrab:ed.diasTrab===""?null:ed.diasTrab, valorDia:ed.valorDia===""?null:ed.valorDia, vtDias:ed.vtDias===""?null:ed.vtDias}}}); const dr=(x0.r?x0.r.total:0)-(xp.r?xp.r.total:0); return {...xp, r:x0.r, liquido:r2(xp.liquido+dr), liqAj:r2(xp.liqAj+dr), acerto:Math.max(0,r2(xp.acerto+dr)), quitado:x0.quitado, pago:x0.pago}; })() : x0;
+      const c=x.c; const r=ab?previa(x):x.r; const atras=!x.quitado&&x.prazo<hojeStr();
+      return <Card key={c.id} className="overflow-hidden" aria-label={"Rescisão "+c.nome}>
+        <button onClick={()=>abrir(x)} className="w-full text-left p-4 flex flex-wrap items-center gap-3 hover:bg-slate-50/70">
+          <Avatar name={c.nome} src={c.foto} tone={c.vinculo==="fixo"?"free":"brand"}/>
+          <div className="flex-1 min-w-[180px]"><div className="font-bold text-slate-900">{c.nome} <span className="text-xs font-normal text-slate-500">{c.vinculo==="fixo"?"Freela Fixo":c.vinculo==="confianca"?"Gerência":"CLT"} · {c.cargo||""}</span></div>
+            <div className="text-xs text-slate-500">Último dia {fmtDataBR(c.demissao.data)}{TIPOS_DEMISSAO[c.demissao.tipo]?" · "+TIPOS_DEMISSAO[c.demissao.tipo]:""}{(c.vinculo==="fixo"||c.demissao.modo==="simples")?" · só dias trabalhados + VT":""} · pagar até {fmtDataBR(x.prazo)}{c.demissao.ajustes?" · ✎ valores ajustados":""}</div></div>
+          <div className="text-right"><div className="text-[11px] text-slate-400">{x.vtInfo&&x.vtInfo.saldo>0.009?"Salário + VT a pagar":x.vtInfo&&x.vtInfo.saldo< -0.009?"Salário − VT pago a mais":"Total do mês da saída"}</div><div className="text-lg font-extrabold text-slate-900 tabular-nums" aria-label={"Total rescisão "+c.nome}>{fmtBRL(x.acerto)}</div>
+            <div className="text-[11px] text-slate-500">{x.pago>0?"pago "+fmtBRL(x.pago):""}</div></div>
+          <Badge tone={x.quitado?"green":atras?"red":"amber"}>{x.quitado?"Pago":atras?"Vencido":"A pagar"}</Badge>
+          <Icon d={ab?I.x:I.plus} className="w-4 h-4 text-slate-400"/>
+        </button>
+        {ab && <div className="px-4 pb-4 border-t border-slate-100 pt-3">
+          {c.vinculo!=="fixo" && <div className="flex flex-wrap items-center gap-2 mb-3"><span className="text-xs font-bold text-slate-500 uppercase">Cálculo</span>
+            {[["","Completo (CLT: aviso, 13º, férias…)"],["simples","Só dias trabalhados + VT"]].map(([k,l])=><button key={k||"c"} aria-pressed={(c.demissao.modo||"")===k} onClick={()=>setModo(c,k)} className={cx("px-3 py-1.5 rounded-lg text-xs font-semibold border", (c.demissao.modo||"")===k?"grad-brand text-white border-transparent":"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>{l}</button>)}</div>}
+          {(c.vinculo==="fixo"||c.demissao.modo==="simples") && <>
+            <p className="text-xs text-slate-500 mb-2">Sem registro: sem 13º, férias, 1/3, aviso nem desconto de 6% do VT. Use “Lançar outra linha” para qualquer acerto.</p>
+            <div className="flex flex-wrap items-center gap-2 mb-2"><span className="text-xs font-bold text-slate-500 uppercase">Pagar</span>
+              {[["","Por dia trabalhado"],["mes","Proporcional do mês (÷ 30 dias corridos)"]].map(([k,l])=><button key={k||"d"} aria-pressed={(c.demissao.base||"")===k} onClick={()=>{ salvarClt({...c, demissao:{...c.demissao, base:k||null}}); }} className={cx("px-3 py-1.5 rounded-lg text-xs font-semibold border", (c.demissao.base||"")===k?"grad-brand text-white border-transparent":"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>{l}</button>)}</div>
+            {x.porDia && <div className="p-3 rounded-xl border border-emerald-100 bg-emerald-50/50 text-sm mb-2" aria-label={"Por dia "+c.nome}>
+              <div className="flex flex-wrap items-end gap-2">
+                <Field label="Dias trabalhados"><input type="number" min="0" aria-label={"Dias trabalhados "+c.nome} value={ed&&ed.diasTrab!==""?ed.diasTrab:x0.porDia?x0.porDia.dias:0} onChange={e=>setEd(v=>({...v,diasTrab:e.target.value}))} className="px-2 py-1.5 rounded-lg border border-slate-200 text-sm text-right w-20"/></Field>
+                <span className="pb-2 text-slate-500">×</span>
+                <Field label="Valor do dia (R$)"><input type="number" step="0.01" aria-label={"Valor do dia "+c.nome} value={ed&&ed.valorDia!==""?ed.valorDia:x0.porDia?x0.porDia.valorDia:0} onChange={e=>setEd(v=>({...v,valorDia:e.target.value}))} className="px-2 py-1.5 rounded-lg border border-slate-200 text-sm text-right w-28"/></Field>
+                <span className="pb-2 text-slate-500">=</span><span className="pb-2 font-bold tabular-nums">{fmtBRL(x.porDia.valorDias||0)}</span>
+                <div className="ml-auto"><Field label="Dias de VT"><input type="number" min="0" aria-label={"Dias de VT "+c.nome} value={ed&&ed.vtDias!==""?ed.vtDias:x0.porDia?x0.porDia.vtDias:0} onChange={e=>setEd(v=>({...v,vtDias:e.target.value}))} className="px-2 py-1.5 rounded-lg border border-slate-200 text-sm text-right w-20"/></Field></div></div>
+              <div className="text-[11px] text-slate-500 mt-1">Dobra conta 2 dias trabalhados e 1 dia de VT (mesma ida e volta).</div>
+              {(x.porDia.faltas.length>0||x.porDia.atestados.length>0) && <div className="mt-2 rounded-lg bg-white border border-slate-200 text-xs divide-y divide-slate-100" aria-label={"Faltas rescisão "+c.nome}>
+                {x.porDia.faltas.length>0 && <>
+                  <div className="flex justify-between gap-2 px-2 py-1.5"><span className="text-slate-600">Diárias do período: {x.porDia.dias} trabalhada(s) + {x.porDia.faltas.length} falta(s) × {fmtBRL(x.porDia.valorDia)}</span><span className="tabular-nums">{fmtBRL(x.saldo||0)}</span></div>
+                  <div className="flex justify-between gap-2 px-2 py-1.5 text-rose-700 font-semibold"><span>(−) Desconto de faltas: {x.porDia.faltas.length} × {fmtBRL(x.porDia.valorDia)} <span className="font-normal">({x.porDia.faltas.map(d=>d.slice(8)+"/"+d.slice(5,7)).join(", ")})</span></span><span className="tabular-nums">−{fmtBRL(x.porDia.descFaltas)}</span></div>
+                  <div className="flex justify-between gap-2 px-2 py-1.5 font-bold"><span>= Saldo dos dias trabalhados</span><span className="tabular-nums">{fmtBRL(r2((x.saldo||0)-x.porDia.descFaltas))}</span></div></>}
+                {x.porDia.atestados.length>0 && <div className="px-2 py-1.5 text-slate-500">Atestado ({x.porDia.atestados.map(d=>d.slice(8)+"/"+d.slice(5,7)).join(", ")}): dia não trabalhado, não entra no pagamento e não gera desconto.</div>}</div>}
+              {(x0.porDia && (x0.porDia.fonte==="manual"||x0.porDia.vtDiasManual) && x0.porDia.diasPonto>0) && <div className="mt-2 p-2 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-900 flex flex-wrap items-center gap-2"><span>Os dias estão <b>digitados à mão</b>. Pelo ponto lançado seriam <b>{x0.porDia.diasAuto} diária(s)</b> e <b>{x0.porDia.vtDiasAuto} dia(s) de VT</b>.</span>
+                <Btn size="sm" onClick={()=>{ salvarClt({...c, demissao:{...c.demissao, ajustes:{...(c.demissao.ajustes||{}), diasTrab:null, vtDias:null}}}); setEd(v=>({...v,diasTrab:"",vtDias:""})); toast("Usando os dias do ponto"); }}>Usar os dias do ponto</Btn></div>}
+              <div className="text-[11px] text-slate-500 mt-1">{x.porDia.fonte==="ponto"?`Dias com ponto até ${fmtDataBR(c.demissao.data)}: ${x.porDia.datas.map(d=>d.slice(8)+"/"+d.slice(5,7)).join(", ")}${x.porDia.dobras?` (${x.porDia.dobras} dobra = +${x.porDia.dobras} diária)`:""}`:x.porDia.fonte==="escala"?`Sem ponto: dias da escala até ${fmtDataBR(c.demissao.data)} (${x.porDia.datas.length})`:`Dias digitados à mão (pelo ponto seriam ${x.porDia.diasAuto}${x.porDia.dobras?` com ${x.porDia.dobras} dobra`:""})`} · valor do dia sugerido = salário ÷ 30 ({fmtBRL(x.sal/30)})</div></div>}
+          </>}
+          {!r ? <p className="text-sm text-slate-500">Sem salário cadastrado: não dá para calcular. Lance os valores em Contas do mês.</p> : <>
+          <div className="text-[11px] text-slate-500 mb-2">Salário base {fmtBRL(x.sal)} · admissão {fmtDataBR(c.admissao)} · {r.anosServ} ano(s) completo(s){r.fimDet?" · contrato por prazo até "+fmtDataBR(r.fimDet):""}{r.aviso&&AVISO_DEMISSAO[r.aviso]?" · "+AVISO_DEMISSAO[r.aviso]:""}</div>
+          <table className="w-full text-sm"><tbody className="divide-y divide-slate-100">
+            <tr><td className="py-1.5 pr-2"><div className="text-slate-700">Saldo de salário do mês</div><div className="text-[11px] text-slate-400">dias trabalhados até o último dia (com faltas, extras e descontos de VT — veja em Pagamentos → CLT)</div></td><td className="py-1.5 text-right tabular-nums text-slate-700 whitespace-nowrap" colSpan={2}>{fmtBRL(r2(x.liquido-x.r.total))}</td></tr>
+            {[...r.itens.filter(i=>!i.extra).map(i=>({...i,neg:false})), ...r.descontos.filter(i=>!i.extra).map(i=>({...i,neg:true}))].map(i=>{ const base=(x.r.itens.concat(x.r.descontos).find(z=>z.k===i.k)||i); const calc=base.valorCalc!=null?base.valorCalc:base.valor;
+              return <tr key={i.k}><td className="py-1.5 pr-2"><div className={cx(i.neg?"text-rose-700":"text-slate-700")}>{i.neg?"(−) ":""}{i.rot}{i.ref?" ("+i.ref+")":""}</div><div className="text-[11px] text-slate-400">{i.calc||base.calc} · calculado {fmtBRL(calc)}</div></td>
+                <td className="py-1.5 text-right"><input type="number" step="0.01" className={cx(inp, (ed.itens[i.k]!=null&&ed.itens[i.k]!=="")&&"border-amber-300 bg-amber-50")} aria-label={"Valor "+i.rot+" "+c.nome} value={ed.itens[i.k]!=null?ed.itens[i.k]:calc} onChange={e=>setEd(v=>({...v,itens:{...v.itens,[i.k]:e.target.value}}))}/></td>
+                <td className="py-1.5 pl-1 w-8">{(ed.itens[i.k]!=null&&ed.itens[i.k]!=="") && <button title="Voltar ao calculado" onClick={()=>setEd(v=>{ const n={...v.itens}; delete n[i.k]; return {...v,itens:n}; })} className="text-xs text-slate-400 hover:text-slate-700">↺</button>}</td></tr>; })}
+            {(ed.extras||[]).map((e,j)=><tr key={e.id}><td className="py-1.5 pr-2"><div className="flex gap-1.5"><select value={e.tipo||"prov"} aria-label={"Tipo linha "+(j+1)} onChange={ev=>setEd(v=>({...v,extras:v.extras.map((z,q)=>q===j?{...z,tipo:ev.target.value}:z)}))} className="px-2 py-1.5 rounded-lg border border-slate-200 text-xs"><option value="prov">+ Provento</option><option value="desc">− Desconto</option></select>
+                <input value={e.rot} placeholder="Descrição (ex.: bônus, adiantamento)" aria-label={"Descrição linha "+(j+1)} onChange={ev=>setEd(v=>({...v,extras:v.extras.map((z,q)=>q===j?{...z,rot:ev.target.value}:z)}))} className="flex-1 px-2 py-1.5 rounded-lg border border-slate-200 text-sm"/></div></td>
+              <td className="py-1.5 text-right"><input type="number" step="0.01" className={inp} aria-label={"Valor linha "+(j+1)} value={e.valor} onChange={ev=>setEd(v=>({...v,extras:v.extras.map((z,q)=>q===j?{...z,valor:ev.target.value}:z)}))}/></td>
+              <td className="py-1.5 pl-1"><button title="Remover linha" onClick={()=>setEd(v=>({...v,extras:v.extras.filter((_,q)=>q!==j)}))} className="text-slate-400 hover:text-rose-500"><Icon d={I.trash} className="w-4 h-4"/></button></td></tr>)}
+          </tbody></table>
+          <button onClick={()=>setEd(v=>({...v,extras:[...(v.extras||[]),{id:Math.random().toString(36).slice(2,8),rot:"",valor:"",tipo:"prov"}]}))} className="mt-2 text-sm font-semibold text-brand-700 hover:underline">+ Lançar outra linha (provento ou desconto)</button>
+          <div className="mt-2"><Input value={ed.obs} onChange={e=>setEd(v=>({...v,obs:e.target.value}))} placeholder="Observação (ex.: combinado com o colaborador, conferido com a contabilidade)" aria-label={"Observação rescisão "+c.nome}/></div>
+          {x.descAnt>0 && <div className="mt-3 p-3 rounded-xl border border-violet-200 bg-violet-50/60 text-sm" aria-label={"Pago a mais anterior "+c.nome}>
+            <div className="text-[11px] font-bold text-violet-800 uppercase mb-1">Pago a mais em {fmtCompetencia(x.pa.de)} — descontado agora</div>
+            {x.pa.auto>0 && <div className="flex justify-between"><span className="text-slate-600">{x.pa.autoVT>0?`VT de ${fmtCompetencia(x.pa.de)} pago a mais (${fmtBRL(x.pa.vtExc)}) e não descontado do salário daquele mês`:`Salário de ${fmtCompetencia(x.pa.de)} pago a mais`}</span><span className="tabular-nums text-violet-700">−{fmtBRL(x.pa.auto)}</span></div>}
+            {x.pa.credSal>0 && <div className="flex justify-between"><span className="text-slate-600">Lançado em “Descontar no próximo mês”</span><span className="tabular-nums text-violet-700">−{fmtBRL(x.pa.credSal)}</span></div>}
+            <div className="text-[11px] text-slate-500 mt-1">Na rescisão não existe mês seguinte: o valor sai do acerto final. O mesmo desconto aparece em Contas do mês.</div></div>}
+          {x.vtInfo && (x.vtInfo.prev>0||x.vtInfo.pago>0||x.vtInfo.cred>0||x.vtInfo.faltasAnt>0) && <div className="mt-3 p-3 rounded-xl border border-amber-100 bg-amber-50/50 text-sm" aria-label={"VT rescisão "+c.nome}>
+            <div className="text-[11px] font-bold text-amber-800 uppercase mb-1">Vale-transporte do mês da saída</div>
+            {x.vtInfo.faltasAnt>0 ? <>
+              <div className="flex justify-between"><span className="text-slate-600">VT dos dias{x.vtInfo.dias?` (${x.vtInfo.dias} dia(s) até ${fmtDataBR(c.demissao.data)} × ${fmtBRL(x.vtInfo.dia)})`:""}</span><span className="tabular-nums">{fmtBRL(x.vtInfo.bruto)}</span></div>
+              <div className="flex justify-between text-rose-700"><span>(−) VT de {x.vtInfo.faltasAnt} falta(s) de {fmtCompetencia(x.vtInfo.mesAnt)} (pago adiantado){x.vtInfo.faltasExced>0?` — ${fmtBRL(x.vtInfo.faltasExced)} passam do VT e saem do salário`:""}</span><span className="tabular-nums">−{fmtBRL(r2(x.vtInfo.faltasValor+x.vtInfo.faltasExced))}</span></div>
+              <div className="flex justify-between"><span className="text-slate-600">VT devido</span><span className="tabular-nums">{fmtBRL(x.vtInfo.prev)}</span></div></>
+            : <div className="flex justify-between"><span className="text-slate-600">VT devido{x.vtInfo.dias?` (${x.vtInfo.dias} dia(s) de escala até ${fmtDataBR(c.demissao.data)} × ${fmtBRL(x.vtInfo.dia)})`:""}</span><span className="tabular-nums">{fmtBRL(x.vtInfo.prev)}</span></div>}
+            {x.vtInfo.cred>0 && <div className="flex justify-between text-rose-700"><span>(−) VT pago a mais em {fmtCompetencia(x.vtInfo.credDe)}</span><span className="tabular-nums">−{fmtBRL(x.vtInfo.cred)}</span></div>}
+            <div className="flex justify-between"><span className="text-slate-600">VT já pago</span><span className="tabular-nums">{fmtBRL(x.vtInfo.pago)}</span></div>
+            <div className="flex justify-between font-semibold"><span>{x.vtInfo.saldo>0.009?"VT a pagar":x.vtInfo.saldo< -0.009?"VT pago a mais (já descontado do salário)":"VT quitado"}</span><span className={cx("tabular-nums",x.vtInfo.saldo< -0.009?"text-violet-700":"")}>{fmtBRL(Math.abs(x.vtInfo.saldo))}</span></div></div>}
+          {(()=>{ const totNovo=r2(x.liqAj - x.r.total + r.total); const vtP=x.vtInfo?x.vtInfo.saldo:0; return <div className="mt-3 p-3 rounded-xl bg-slate-50 flex flex-wrap items-center gap-3">
+            <div className="text-sm text-slate-600">{r.simples?"Lançamentos à mão":"Verbas rescisórias"} <b className="tabular-nums">{fmtBRL(r.total)}</b> · <span className="text-slate-900 font-bold">Salário do mês {fmtBRL(totNovo)}{vtP>0.009?" + VT "+fmtBRL(vtP)+" = "+fmtBRL(r2(totNovo+vtP)):vtP< -0.009?" − VT pago a mais "+fmtBRL(-vtP)+" = "+fmtBRL(Math.max(0,r2(totNovo+vtP))):""}</span>{r.multaFGTS && <span className="text-[11px] text-slate-400"> · multa 40% do FGTS em guia, fora deste valor</span>}</div>
+            <div className="flex-1"/>
+            {c.demissao.ajustes && <Btn size="sm" variant="ghost" onClick={()=>limpar(x)}>Voltar ao calculado</Btn>}
+            <Btn size="sm" icon={I.check} onClick={()=>salvarAj(x)}>Salvar valores</Btn></div>; })()}
+          </>}
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Btn size="sm" variant="soft" icon={I.wallet} onClick={()=>irContas&&irContas(x.ym)}>Dar baixa em Contas do mês ({fmtCompetencia(x.ym)})</Btn>
+            {c.vinculo!=="confianca" && <Btn size="sm" variant="soft" icon={I.edit} onClick={()=>{ window.__wpLancar={pid:c.id, ym:x.ym}; window.dispatchEvent(new CustomEvent("wp-ir-para",{detail:"ajustes"})); }}>Lançar ponto / faltas / dobras</Btn>}
+            {!c.demissao.pagoEm ? <Btn size="sm" variant="ghost" icon={I.check} onClick={()=>marcarPago(x,true)}>Marcar como paga</Btn> : <Btn size="sm" variant="ghost" onClick={()=>marcarPago(x,false)}>Voltar para pendente</Btn>}
+          </div>
+        </div>}
+      </Card>; })}</div>
+    {pjsEnc.length>0 && <div className="mt-6">
+      <div className="text-sm font-bold text-slate-700 mb-2">Prestadores PJ encerrados <span className="text-xs font-normal text-slate-500">· valor proporcional aos dias do último mês (sem verbas trabalhistas)</span></div>
+      <div className="space-y-3">{pjsEnc.map(x=>{ const v=edPJ[x.pj.id]; return <Card key={x.pj.id} className="p-4" aria-label={"Encerramento PJ "+x.pj.nome}>
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="w-10 h-10 rounded-xl grad-brand grid place-items-center text-white"><Icon d={I.briefcase} className="w-5 h-5"/></div>
+          <div className="flex-1 min-w-[180px]"><div className="font-bold text-slate-900">{x.pj.nome} <span className="text-xs font-normal text-slate-500">PJ · {x.pj.servico||"Prestação de serviço"}</span></div>
+            <div className="text-xs text-slate-500">Encerrado em {fmtDataBR(x.fimP)}{x.pj.motivoEncerramento?" · "+x.pj.motivoEncerramento:""}</div></div>
+          <Badge tone={x.saldo<=0.009?"green":"amber"}>{x.saldo<=0.009?"Pago":"A pagar"}</Badge></div>
+        <div className="mt-3 text-sm space-y-1">
+          <div className="flex justify-between gap-3"><span className="text-slate-600">Valor do mês {fmtCompetencia(x.ym)}<div className="text-[11px] text-slate-400">{x.det.cheio?"mês inteiro":fmtBRL(Number(x.pj.valor||0))+" ÷ 30 × "+x.det.dias+" dia(s) até "+fmtDataBR(x.fimP)} · calculado {fmtBRL(x.total)}</div></span>
+            {x.parcelas>1 ? <span className="tabular-nums">{fmtBRL(x.prev)}</span>
+            : <span className="flex items-center gap-1"><input type="number" step="0.01" aria-label={"Valor PJ "+x.pj.nome} value={v!=null?v:x.prev} onChange={e=>setEdPJ(o=>({...o,[x.pj.id]:e.target.value}))} className={cx("px-2 py-1.5 rounded-lg border text-sm text-right tabular-nums w-28", x.editado?"border-amber-300 bg-amber-50":"border-slate-200")}/>
+              {v!=null && <Btn size="sm" icon={I.check} onClick={()=>salvarPJ(x,v)}>Salvar</Btn>}{x.editado && v==null && <button title="Voltar ao calculado" onClick={()=>salvarPJ(x,null)} className="text-xs text-slate-400 hover:text-slate-700">↺</button>}</span>}</div>
+          {x.parcelas>1 && <div className="text-[11px] text-slate-400">Pago em {x.parcelas} parcelas — para mudar o valor de cada parcela use Contas do mês.</div>}
+          <div className="flex justify-between"><span className="text-slate-600">Já pago</span><span className="tabular-nums">{fmtBRL(x.pago)}</span></div>
+          <div className="flex justify-between font-semibold"><span>{x.saldo< -0.009?"Pago a mais":"A pagar"}</span><span className={cx("tabular-nums",x.saldo< -0.009&&"text-violet-700")}>{fmtBRL(Math.abs(x.saldo))}</span></div></div>
+        <div className="mt-3"><Btn size="sm" variant="soft" icon={I.wallet} onClick={()=>irContas&&irContas(x.ym)}>Dar baixa em Contas do mês ({fmtCompetencia(x.ym)})</Btn></div>
+      </Card>; })}</div></div>}
+  </div>; }
 function PagamentoSalariados({ modo, ini, fim, uni }){
   const { clts, pjs, unidades, registros, pontoHist, getDossie, cltExtraAjuste, gorjetasCLT, escala, escalaOv, atestados, acesso, pagamentosCLT, addPagamentoCLT, removePagamentoCLT, pagamentosPJ, addPagamentoPJ, removePagamentoPJ, faltaDescontoDesde, feriadosExtras, relFin, setRelFin } = useStore();
   const ehPJ = modo==="pj";
@@ -4608,7 +5055,7 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
     const pc=previstoConta(auto,a,(a.credito&&a.credito.de)?calcExcessoFonte("vt-"+id,a.credito.de,envExcPS):null); const previsto=pc.previsto, editado=pc.editado;
     const pagos=(pagamentosCLT[String(id)]||[]).filter(p=>p.tipo==="vt" && p.comp===ymRef);
     const pago=Math.round(pagos.reduce((s,p)=>s+Number(p.valor||0),0)*100)/100;
-    return { auto, previsto, editado, pagos, pago, falta:Math.round((previsto-pago)*100)/100, dias:det&&det.vtDias, dia:det&&det.vtDia, faltasValor:(det&&det.vtFaltasValor)||0, faltasQtd:(det&&det.vtFaltasAnt)||0, cred:pc.cred, credDe:pc.credDe, creditoPara:pc.creditoPara, creditoValor:pc.creditoValor }; };
+    return { auto, previsto, editado, pagos, pago, falta:Math.round((previsto-pago)*100)/100, dias:det&&det.vtDias, dia:det&&det.vtDia, faltasValor:(det&&det.vtFaltasValor)||0, faltasQtd:(det&&det.vtFaltasAnt)||0, cred:pc.cred, credSobra:(!editado&&pc.cred>0)?Math.round(Math.max(0,pc.cred-auto)*100)/100:0, credDe:pc.credDe, creditoPara:pc.creditoPara, creditoValor:pc.creditoValor }; };
   const prefixoConta = ehPJ?"pj-":modo==="confianca"?"conf-":modo==="fixo"?"fixo-":"clt-";
   const descontarProx=(k,valor,nome)=>{ const nx=relFinLancarCredito(setRelFin,ymRef,chaveLeg,k,valor); toast("Desconto de "+fmtBRL(valor)+" lançado em "+fmtCompetencia(nx)+(nome?" ("+nome+")":"")); };
   const cancelarDesc=(k,valor,para)=>{ if(!confirm("Cancelar o desconto de "+fmtBRL(valor)+" em "+fmtCompetencia(para)+"?")) return; relFinDesfazerCredito(setRelFin,ymRef,chaveLeg,k); toast("Desconto cancelado"); };
@@ -4642,11 +5089,14 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
     const pagos=pagosDe(c.id); const pago=Math.round(pagos.reduce((s,p)=>s+Number(p.valor||0),0)*100)/100;
     const vt = comVT ? vtDe(c.id,det) : null;
     // VT pago a mais abate o salário do mês (igual a Contas do mês), salvo se a diferença foi jogada para o mês seguinte
-    const abateVT = vt && vt.falta< -0.009 && !vt.creditoPara ? Math.round(-vt.falta*100)/100 : 0;
+    const abateVT = vt ? Math.round(((vt.falta< -0.009 && !vt.creditoPara) ? -vt.falta : 0)*100)/100 + (pc.editado?0:(vt.credSobra||0)) : 0;
     if(abateVT) total=Math.round(Math.max(0,total-abateVT)*100)/100;
+    // desligado no mês: pago a mais no mês anterior ainda não descontado (igual a Contas do mês)
+    const pa=(!ehPJ && !pc.editado && c.demissao && c.demissao.data && c.demissao.data.slice(0,7)===ymRef) ? pagoAMaisAnterior(c,ymRef,envExcPS) : null; const abateAnt=pa&&pa.auto>0?pa.auto:0;
+    if(abateAnt) total=Math.round(Math.max(0,total-abateAnt)*100)/100;
     const saldo=Math.round((total-pago)*100)/100;
     return { id:c.id, k, nome:c.nome, foto:c.foto, pix:c.pix, cargo:ehPJ?(c.servico||"Prestador PJ"):c.cargo, sigiloso:!!c.sigiloso, oculto, total, totalCalc, cred:pc.cred, credDe:pc.credDe, editadoContas:pc.editado, manualCalc:pc.editado?(ajMes[k]||{}).manualCalc:null, creditoPara:pc.creditoPara, creditoValor:pc.creditoValor,
-      pago, saldo, aMais: pago>0&&saldo< -0.009 ? -saldo : 0, abateVT, pagos, det, vt, diasTrab: det&&det.dias?det.dias.length:null };
+      pago, saldo, aMais: pago>0&&saldo< -0.009 ? -saldo : 0, abateVT, abateAnt, abateAntDe:pa?pa.de:"", pagos, det, vt, diasTrab: det&&det.dias?det.dias.length:null };
   }).sort((a,b)=>b.total-a.total);
   const vis=linhas.filter(l=>!l.oculto);
   const totalGeral=vis.reduce((s,l)=>s+l.total,0);
@@ -4726,6 +5176,7 @@ function PagamentoSalariados({ modo, ini, fim, uni }){
                       : <div className="flex justify-between"><span className="text-slate-500">Vencimento</span><span>{l.det.venc?fmtDataBR(l.det.venc):"—"} · {l.det.forma}</span></div>}
                     {l.det.cnpj && <div className="flex justify-between"><span className="text-slate-500">CNPJ</span><span className="font-mono text-xs">{l.det.cnpj}</span></div>}
                   </>}
+                  {l.abateAnt>0 && <div className="flex justify-between"><span className="text-slate-500">Desconto: pago a mais em {fmtCompetencia(l.abateAntDe)}</span><span className="tabular-nums text-violet-700">-{fmtBRL(l.abateAnt)}</span></div>}
                   {l.abateVT>0 && <div className="flex justify-between"><span className="text-slate-500">Desconto: VT pago a mais neste mês</span><span className="tabular-nums text-violet-700" aria-label={"Abate VT "+l.nome}>-{fmtBRL(l.abateVT)}</span></div>}
                   {l.cred>0 && !l.editadoContas && <div className="flex justify-between"><span className="text-slate-500">Desconto: pago a mais em {fmtCompetencia(l.credDe)}</span><span className="tabular-nums text-violet-700" aria-label={"Desconto pago a mais "+l.nome}>-{fmtBRL(l.cred)}</span></div>}
                   {l.editadoContas && (l.manualCalc
@@ -4855,14 +5306,14 @@ function Pagamentos() {
     </PageHeader>
 
     <div className="flex flex-wrap gap-2 mb-3">
-      {[["contas","Contas do mês"],["vt","Vale-transporte"],["freela","Freelancers (semanal)"],["clt","CLT"],["fixo","Freela Fixo"],["confianca","Gerência & Diretoria"],["pj","Prestadores PJ"]].map(([k,l])=>
+      {[["contas","Contas do mês"],["vt","Vale-transporte"],["rescisoes","Rescisões"],["freela","Freelancers (semanal)"],["clt","CLT"],["fixo","Freela Fixo"],["confianca","Gerência & Diretoria"],["pj","Prestadores PJ"]].map(([k,l])=>
         <button key={k} onClick={()=>{setAbaP(k);setAberto(null); if(k==="contas"||k==="vt"){ const [y,m]=(ini||hojeStr()).slice(0,7).split("-").map(Number); const [a,b]=mesDe(y,m); setIni(a); setFim(b); } }} className={cx("px-4 py-2 rounded-xl text-sm font-semibold border transition", abaP===k?"grad-brand text-white border-transparent shadow-glow":"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>{l}</button>)}
     </div>
 
     <Card className="p-4 mb-4">
       <div className="flex flex-wrap items-end gap-3">
         <div className="flex items-center gap-2 text-slate-400"><Icon d={I.filter} className="w-4 h-4"/><span className="text-xs font-bold uppercase">Filtros</span></div>
-        {(abaP==="contas"||abaP==="vt") ? <Field label="Competência (dia 01 ao último dia do mês)"><Input type="month" value={(ini||hojeStr()).slice(0,7)} onChange={e=>{ const v=e.target.value; if(!v) return; const [y,m]=v.split("-").map(Number); const [a,b]=mesDe(y,m); setIni(a); setFim(b); }} aria-label="Competência"/></Field> : <>
+        {abaP==="rescisoes" ? null : (abaP==="contas"||abaP==="vt") ? <Field label="Competência (dia 01 ao último dia do mês)"><Input type="month" value={(ini||hojeStr()).slice(0,7)} onChange={e=>{ const v=e.target.value; if(!v) return; const [y,m]=v.split("-").map(Number); const [a,b]=mesDe(y,m); setIni(a); setFim(b); }} aria-label="Competência"/></Field> : <>
         <Field label="De"><Input type="date" value={ini} onChange={e=>setIni(e.target.value)}/></Field>
         <Field label="Até"><Input type="date" value={fim} onChange={e=>setFim(e.target.value)}/></Field></>}
         <Field label="Casa (unidade)"><Select value={uni} onChange={e=>setUni(e.target.value)}>
@@ -4871,7 +5322,7 @@ function Pagamentos() {
       </div>
     </Card>
 
-    {abaP==="contas" ? <RelatorioFinanceiro ini={ini} fim={fim} uni={uni} modo="pagamentos"/> : abaP==="vt" ? <RelatorioFinanceiro ini={ini} fim={fim} uni={uni} modo="vt"/> : abaP!=="freela" ? <PagamentoSalariados modo={abaP} ini={ini} fim={fim} uni={uni}/> : <>
+    {abaP==="rescisoes" ? <AbaRescisoes uni={uni} irContas={(ym)=>{ const [y,m]=ym.split("-").map(Number); const [a,b]=mesDe(y,m); setIni(a); setFim(b); setAbaP("contas"); }}/> : abaP==="contas" ? <RelatorioFinanceiro ini={ini} fim={fim} uni={uni} modo="pagamentos"/> : abaP==="vt" ? <RelatorioFinanceiro ini={ini} fim={fim} uni={uni} modo="vt"/> : abaP!=="freela" ? <PagamentoSalariados modo={abaP} ini={ini} fim={fim} uni={uni}/> : <>
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
       <StatCard icon={I.wallet} label="Total a pagar (mês)" value={fmtBRL(totalGeral)} tone="free"/>
       <StatCard icon={I.check} label="Já pago" value={fmtBRL(totalPago)} tone="green"/>
@@ -6373,9 +6824,12 @@ function ArquivosPage(){
 }
 
 /* ============================ HOLERITES (upload da contabilidade → app do colaborador) ============================ */
-function HoleritesPage(){
-  const { clts, freelas, arquivos, acessosColab, can } = useStore();
+function HoleritesPage({embed}={}){
+  const { clts, freelas, arquivos, acessosColab, can, acesso, contabCfg } = useStore();
   const toast=useContext(ToastCtx);
+  // Contabilidade (login próprio) também sobe os holerites; sem "publicar direto" ligado, ficam aguardando o RH liberar no app
+  const souContab = !!(acesso && !acesso.ehDono && acesso.papelKey==="contabilidade");
+  const precisaLiberar = souContab && !(contabCfg && contabCfg.holeriteDireto);
   const hoje=new Date(); const mesPassado=new Date(hoje.getFullYear(),hoje.getMonth()-1,1);
   const [comp,setComp]=useState(mesPassado.getFullYear()+"-"+String(mesPassado.getMonth()+1).padStart(2,"0"));
   const [tipoHol,setTipoHol]=useState("mensal");
@@ -6383,7 +6837,7 @@ function HoleritesPage(){
   const [proc,setProc]=useState("");          // mensagem de processamento
   const [pub,setPub]=useState(null);          // {feito,total}
   const [drag,setDrag]=useState(false);
-  const editavel=can("documentos"), podeExcluir=can("excluir");
+  const editavel=souContab||can("documentos"); const podeExcluirArq=(a)=> souContab ? !!a.aguardandoLiberacao : can("excluir");
   const pessoas=[...clts.map(p=>({...p,_tipo:"clt"})), ...freelas.map(p=>({...p,_tipo:"free"}))];
   const keyDe=(p)=>donoKeyDe(p._tipo,p.id);
   const pessoaPorKey=(k)=>pessoas.find(p=>keyDe(p)===k);
@@ -6432,18 +6886,37 @@ function HoleritesPage(){
         const b=await bytesDoItem(it);
         const ext=/pdf/i.test(it.mime)?".pdf":(String(it.origem).match(/\.[a-z0-9]+$/i)||[""])[0];
         await arqSalvar({ nome:"Holerite "+tipoLabel+" "+fmtCompetencia(comp)+" - "+p.nome+ext, donoKey:it.k, donoTipo:p._tipo, donoId:String(p.id), donoNome:p.nome, cpf:soDigitos(p.cpf),
-          pasta:"Holerites", categoria:"holerite", competencia:comp, holeriteTipo:tipoHol, visivelColab:true, origem:it.origem }, bytesParaDataUrl(b,it.mime));
+          pasta:"Holerites", categoria:"holerite", competencia:comp, holeriteTipo:tipoHol, visivelColab:!precisaLiberar, origem:it.origem,
+          ...(souContab?{enviadoPor:"contabilidade"}:{}), ...(precisaLiberar?{aguardandoLiberacao:true}:{}) }, bytesParaDataUrl(b,it.mime));
         feitos++; setPub({feito:feitos,total:ok.length});
       }catch(e){ restantes.push(it); toast("Falha em "+p.nome+": "+erroBanco(e)); }
     }
     setItens(restantes); setPub(null);
-    if(feitos) toast(feitos+" holerite(s) publicados no app dos colaboradores");
+    if(feitos) toast(precisaLiberar ? feitos+" holerite(s) enviados — o RH libera no app dos colaboradores" : feitos+" holerite(s) publicados no app dos colaboradores");
   };
+  // holerites enviados pela contabilidade aguardando o RH liberar no app
+  const pendentes=arquivos.filter(a=>a.categoria==="holerite" && a.aguardandoLiberacao).sort((a,b)=>String(a.competencia).localeCompare(String(b.competencia))||String(a.donoNome).localeCompare(String(b.donoNome)));
+  const [liberando,setLiberando]=useState(false);
+  const liberar=async(lista)=>{ setLiberando(true); let n=0; for(const a of lista){ try{ await arqAtualizar(a.id,{visivelColab:true, aguardandoLiberacao:false, liberadoEm:Date.now(), liberadoPor:(acesso&&acesso.email)||""}); n++; }catch(e){ toast("Falha em "+a.donoNome+": "+erroBanco(e)); } }
+    setLiberando(false); if(n) toast(n+" holerite(s) liberados no app dos colaboradores"); };
   const semPin=[...new Set(itens.filter(it=>it.k&&!acessosColab[it.k]).map(it=>it.k))];
   const semHolerite=clts.filter(c=>!publicados.some(a=>a.donoKey===donoKeyDe("clt",c.id)));
 
   return <div className="fade-in">
-    <PageHeader title="Holerites" sub="Suba os holerites da contabilidade — o sistema identifica cada colaborador e libera no app dele"/>
+    {!embed && <PageHeader title="Holerites" sub="Suba os holerites da contabilidade — o sistema identifica cada colaborador e libera no app dele"/>}
+    {pendentes.length>0 && <Card className="p-5 mb-4 border-amber-200" aria-label="Holerites aguardando liberação">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+        <h3 className="font-bold text-slate-900">{souContab?"Enviados — aguardando o RH liberar no app":"Holerites enviados pela contabilidade — aguardando liberação"} <span className="text-slate-400 font-normal">· {pendentes.length}</span></h3>
+        {!souContab && <Btn size="sm" icon={I.check} disabled={liberando} onClick={()=>liberar(pendentes)}>{liberando?"Liberando…":"Liberar todos no app"}</Btn>}</div>
+      <p className="text-xs text-slate-500 mb-2">{souContab?"O RH confere e libera para os colaboradores. Enquanto não for liberado você pode excluir e mandar de novo.":"Confira e libere: só depois disso o colaborador vê o holerite no app. Para publicar direto, ligue a opção na aba Contabilidade → Folha e holerites."}</p>
+      <div className="divide-y divide-slate-100">{pendentes.map(a=><div key={a.id} className="py-2 flex flex-wrap items-center gap-2 text-sm" aria-label={"Pendente "+a.donoNome}>
+        <span className="font-semibold text-slate-800 flex-1 min-w-[160px]">{a.donoNome}</span>
+        <span className="text-slate-500">{(HOLERITE_TIPOS.find(t=>t[0]===(a.holeriteTipo||"mensal"))||[])[1]} · {fmtCompetencia(a.competencia)}</span>
+        <span className="text-xs text-slate-400">enviado {new Date(a.ts||0).toLocaleDateString("pt-BR")}</span>
+        <button title="Visualizar" onClick={()=>arqAbrir(a).catch(e=>toast(e.message))} className="w-8 h-8 rounded-lg inline-grid place-items-center text-slate-500 hover:bg-slate-100"><Icon d={I.eye} className="w-4 h-4"/></button>
+        {!souContab && <Btn size="sm" variant="soft" disabled={liberando} onClick={()=>liberar([a])}>Liberar</Btn>}
+        {podeExcluirArq(a) && <button title="Excluir" onClick={()=>{ if(confirm("Excluir este holerite?")) arqRemover(a).then(()=>toast("Holerite excluído")).catch(e=>toast(e.message)); }} className="w-8 h-8 rounded-lg inline-grid place-items-center text-slate-400 hover:text-rose-500 hover:bg-rose-50"><Icon d={I.trash} className="w-4 h-4"/></button>}
+      </div>)}</div></Card>}
     {editavel && <Card className="p-5 mb-4">
       <div className="grid sm:grid-cols-3 gap-3 mb-4">
         <Field label="Competência"><Input type="month" value={comp} onChange={e=>setComp(e.target.value)}/></Field>
@@ -6467,7 +6940,7 @@ function HoleritesPage(){
         <h3 className="font-bold text-slate-900">Conferência antes de publicar · {tipoLabel} {fmtCompetencia(comp)}</h3>
         <div className="flex gap-2">
           <Btn size="sm" variant="ghost" onClick={()=>setItens([])}>Descartar</Btn>
-          <Btn size="sm" icon={pub?null:I.check} disabled={!!pub||!itens.some(i=>i.k)} onClick={publicar}>{pub?("Publicando "+pub.feito+"/"+pub.total+"…"):("Publicar "+itens.filter(i=>i.k).length+" no app")}</Btn>
+          <Btn size="sm" icon={pub?null:I.check} disabled={!!pub||!itens.some(i=>i.k)} onClick={publicar}>{pub?((precisaLiberar?"Enviando ":"Publicando ")+pub.feito+"/"+pub.total+"…"):(precisaLiberar?"Enviar "+itens.filter(i=>i.k).length+" para o RH liberar":"Publicar "+itens.filter(i=>i.k).length+" no app")}</Btn>
         </div>
       </div>
       {semPin.length>0 && <div className="mb-3 p-3 rounded-xl bg-amber-50 text-amber-800 text-sm flex items-start gap-2"><Icon d={I.key} className="w-4 h-4 mt-0.5 shrink-0"/>
@@ -6504,10 +6977,10 @@ function HoleritesPage(){
           <td className="py-2.5 pr-3 font-semibold text-slate-800">{a.donoNome}</td>
           <td className="py-2.5 pr-3 text-slate-500">{(HOLERITE_TIPOS.find(t=>t[0]===(a.holeriteTipo||"mensal"))||[])[1]}</td>
           <td className="py-2.5 pr-3 text-slate-500">{new Date(a.ts||0).toLocaleDateString("pt-BR")}</td>
-          <td className="py-2.5 pr-3">{!a.visivelColab ? <Badge>Oculto</Badge> : a.vistoEm ? <Badge tone="green"><Icon d={I.check} className="w-3 h-3"/>Visto em {new Date(a.vistoEm).toLocaleDateString("pt-BR")}</Badge> : acessosColab[a.donoKey] ? <Badge tone="blue">Disponível · não visto</Badge> : <Badge tone="amber">Sem PIN de acesso</Badge>}</td>
+          <td className="py-2.5 pr-3">{a.aguardandoLiberacao ? <Badge tone="amber">Aguardando liberação</Badge> : !a.visivelColab ? <Badge>Oculto</Badge> : a.vistoEm ? <Badge tone="green"><Icon d={I.check} className="w-3 h-3"/>Visto em {new Date(a.vistoEm).toLocaleDateString("pt-BR")}</Badge> : acessosColab[a.donoKey] ? <Badge tone="blue">Disponível · não visto</Badge> : <Badge tone="amber">Sem PIN de acesso</Badge>}</td>
           <td className="py-2.5 text-right whitespace-nowrap">
             <button title="Visualizar" onClick={()=>arqAbrir(a).catch(e=>toast(e.message))} className="w-8 h-8 rounded-lg inline-grid place-items-center text-slate-500 hover:bg-slate-100"><Icon d={I.eye} className="w-4 h-4"/></button>
-            {podeExcluir && <button title="Excluir" onClick={()=>{ if(confirm("Excluir este holerite?")) arqRemover(a).then(()=>toast("Holerite excluído")).catch(e=>toast(e.message)); }} className="w-8 h-8 rounded-lg inline-grid place-items-center text-slate-400 hover:text-rose-500 hover:bg-rose-50"><Icon d={I.trash} className="w-4 h-4"/></button>}
+            {podeExcluirArq(a) && <button title="Excluir" onClick={()=>{ if(confirm("Excluir este holerite?")) arqRemover(a).then(()=>toast("Holerite excluído")).catch(e=>toast(e.message)); }} className="w-8 h-8 rounded-lg inline-grid place-items-center text-slate-400 hover:text-rose-500 hover:bg-rose-50"><Icon d={I.trash} className="w-4 h-4"/></button>}
           </td></tr>)}</tbody>
       </table></div>}
       {publicados.length>0 && semHolerite.length>0 && <p className="text-xs text-slate-400 mt-3">Sem holerite nesta competência: {semHolerite.map(c=>c.nome.split(" ")[0]).join(", ")}</p>}
@@ -8867,6 +9340,38 @@ function useFolhaPeriodo(ini, fim, uni){
     .map(c=>calcFolhaLinha(c,folhaCtx)).sort((a,b)=>String(a.nome).localeCompare(String(b.nome)));
 }
 const hhmm=(min)=> min? Math.floor(min/60)+":"+String(Math.round(min%60)).padStart(2,"0") : "";
+// O que a contabilidade pede no apontamento, tirado do que já está no sistema:
+//  • horas extras (ponto) • faltas com/sem justificativa (escala + dossiê) • atestados SÓ acima de 2 dias seguidos • atrasos (ponto × horário da escala + dossiê)
+const TOLERANCIA_ATRASO=10;   // CLT art. 58 §1º: até 10 min no dia não conta
+function apontamentoContabDe(c, l, ctx){
+  const {escala,escalaOv,atestados,getDossie,ini,fim}=ctx; const naM=(d)=>!!d&&d>=ini&&d<=fim;
+  const dos=(getDossie&&getDossie("clt-"+c.id))||{faltas:[]}; const fs=dos.faltas||[];
+  const cpf=soDigitos(c.cpf||""); const meuAt=(a)=> (a.pid!=null&&String(a.pid)===String(c.id)) || (cpf&&a.cpf&&soDigitos(a.cpf)===cpf);
+  // faltas
+  const faltasInj=[...(l.faltaDatas||[])].sort();
+  const inj=new Set(faltasInj);
+  const faltasJust=fs.filter(x=>x.tipo==="falta" && !x.descontar && naM(x.data) && !inj.has(x.data)).map(x=>({data:x.data, motivo:x.obs||""})).sort((a,b)=>a.data.localeCompare(b.data));
+  // atestados: junta dias seguidos (dossiê + enviados pelo app) e só manda os períodos com mais de 2 dias
+  const atDias={}; fs.filter(x=>x.tipo==="atestado"&&x.data).forEach(x=>{ atDias[x.data]=atDias[x.data]||x.obs||"atestado"; });
+  (atestados||[]).filter(a=>a.data&&meuAt(a)).forEach(a=>{ atDias[a.data]=atDias[a.data]||a.obs||"atestado"; });
+  const ds=Object.keys(atDias).sort(); const grupos=[]; ds.forEach(d=>{ const g=grupos[grupos.length-1]; if(g && somaDiasStr(g.fim,1)===d){ g.fim=d; g.dias++; if(!g.obs&&atDias[d]!=="atestado") g.obs=atDias[d]; } else grupos.push({ini:d,fim:d,dias:1,obs:atDias[d]!=="atestado"?atDias[d]:""}); });
+  const atestadosLongos=grupos.filter(g=>g.dias>2 && (naM(g.ini)||naM(g.fim)));
+  const atestadosCurtos=grupos.filter(g=>g.dias<=2 && (naM(g.ini)||naM(g.fim))).reduce((s2,g)=>s2+g.dias,0);
+  // atrasos: entrada batida × início do horário da escala (ou do cadastro), acima da tolerância
+  const minDe=(h)=>{ const m=/(\d{1,2}):(\d{2})/.exec(String(h||"")); return m?Number(m[1])*60+Number(m[2]):null; };
+  const atrasos=[]; const comAuto=new Set();
+  (l.dias||[]).forEach(d=>{ const e=(d.punches||[]).find(p=>p.acao==="Entrada"); if(!e||e.min==null) return;
+    const aloc=c.unidade!=null?diaEscala(escala,escalaOv,c.unidade,d.data,wdDe(d.data)).find(a=>String(a.pid)===String(c.id)&&a.tipo==="clt"):null;
+    if(aloc && aloc.turno==="folga") return;
+    const ini0=minDe(aloc&&aloc.h) ?? minDe(c.horaEntrada); if(ini0==null) return;
+    let dif=(((e.min%1440)+1440)%1440)-ini0; if(dif< -720) dif+=1440; if(dif>720) dif-=1440;
+    if(dif>TOLERANCIA_ATRASO){ atrasos.push({data:d.data, min:Math.round(dif), fonte:"ponto"}); comAuto.add(d.data); } });
+  fs.filter(x=>x.tipo==="atraso" && naM(x.data) && !comAuto.has(x.data)).forEach(x=>atrasos.push({data:x.data, min:Math.round((Number(x.horas)||0)*60), fonte:"dossiê", obs:x.obs||""}));
+  atrasos.sort((a,b)=>a.data.localeCompare(b.data));
+  return { he50:l.extrasMin||0, he100:l.extras100Min||0, heNot:(l.extNot50Min||0)+(l.extNot100Min||0), noturno:l.notMin||0, temHE:(l.extrasMin||0)+(l.extras100Min||0)>0,
+    faltasInj, faltasJust, atestadosLongos, atestadosCurtos, atrasos, atrasosMin:atrasos.reduce((s2,a)=>s2+a.min,0) };
+}
+const dm=(d)=>String(d||"").slice(8,10)+"/"+String(d||"").slice(5,7);
 // Planilha de apontamentos para a contabilidade (horas e ocorrências por colaborador + conferência de valores + diário)
 async function planilhaApontamentos(linhas, meta){
   const wb=new ExcelJS.Workbook(); const verde="FF2F6F2A";
@@ -8874,6 +9379,12 @@ async function planilhaApontamentos(linhas, meta){
     ws.mergeCells(1,1,1,cols.length); ws.getCell("A1").value=titulo; ws.getCell("A1").font={bold:true,size:14};
     ws.mergeCells(2,1,2,cols.length); ws.getCell("A2").value=`${meta.empresa||""} · ${meta.unidade} · competência ${fmtCompetencia(meta.comp)} (${fmtDataBR(meta.ini)} a ${fmtDataBR(meta.fim)})`; ws.getCell("A2").font={italic:true,color:{argb:"FF64748B"}};
     const h=ws.addRow(cols.map(([t])=>t)); h.eachCell(c=>{ c.font={bold:true,color:{argb:"FFFFFFFF"}}; c.fill={type:"pattern",pattern:"solid",fgColor:{argb:verde}}; c.alignment={horizontal:"center",vertical:"middle",wrapText:true}; }); h.height=30; };
+  if(meta.apont){ const wr=wb.addWorksheet("Resumo para a contabilidade");
+    cab(wr,"Apontamentos do mês",[["Colaborador",30],["CPF",16],["Cargo",20],["Horas extras",12],["HE 50% (h)",10],["HE 100% (h)",10],["Faltas sem justificativa",12],["Datas (sem justificativa)",28],["Faltas justificadas",12],["Datas e motivo (justificadas)",34],["Atestados acima de 2 dias",34],["Atrasos (qtd)",10],["Atrasos (total h:mm)",12],["Datas dos atrasos (min)",40]]);
+    linhas.forEach(l=>{ const a=meta.apont[l.id]; if(!a) return;
+      wr.addRow([l.nome,l.cpf,l.cargo,a.temHE?"Sim":"Não",hhmm(a.he50)||"",hhmm(a.he100)||"",a.faltasInj.length||"",a.faltasInj.map(dm).join(", "),a.faltasJust.length||"",a.faltasJust.map(f=>dm(f.data)+(f.motivo?" ("+f.motivo+")":"")).join("; "),
+        a.atestadosLongos.map(g=>fmtDataBR(g.ini)+" a "+fmtDataBR(g.fim)+" ("+g.dias+" dias)"+(g.obs?" - "+g.obs:"")).join("; "),a.atrasos.length||"",hhmm(a.atrasosMin)||"",a.atrasos.map(x=>dm(x.data)+" "+x.min+"min").join(", ")]).alignment={vertical:"top",wrapText:true}; });
+    wr.addRow([]); wr.addRow(["Horas no formato h:mm. Faltas sem justificativa = dias da escala sem ponto e sem atestado, ou lançadas com desconto. Faltas justificadas = lançadas sem desconto (abonadas). Atestados de até 2 dias não são enviados. Atrasos = entrada depois do horário da escala, acima de "+TOLERANCIA_ATRASO+" min no dia (art. 58 §1º CLT), mais os lançados no dossiê."]).getCell(1).font={italic:true,size:9,color:{argb:"FF64748B"}}; }
   const ws=wb.addWorksheet("Apontamentos");
   cab(ws,"Apontamentos da folha",[["Colaborador",30],["CPF",16],["Cargo",20],["Vínculo",12],["Admissão",12],["Salário base",14],["Dias trabalhados",11],["Faltas",8],["Datas das faltas",26],["DSR perdidos",9],["Atrasos (h)",10],["HE 50% (h)",10],["HE 100% (h)",10],["Adic. noturno (h)",11],["HE noturnas (h)",11],["Gorjetas",12],["VT do mês",12],["Desc. VT faltas mês ant.",13],["Observações",30]]);
   linhas.forEach(l=>{ const obs=[l.extSemanal>0?`inclui ${hhmm(l.extSemanal)} acima de 44h/sem`:"", l.extrasEditado?"valor de extras ajustado manualmente":"", l.reposicao>0?`reposição salário combinado ${fmtBRL(l.reposicao)}`:""].filter(Boolean).join("; ");
@@ -8894,12 +9405,16 @@ async function planilhaApontamentos(linhas, meta){
   const buf=await wb.xlsx.writeBuffer(); return new Uint8Array(buf);
 }
 function ApontamentosContab({souContab}){
-  const { unidades, arquivos, contabCfg, apontContab, setApontContab, empresaContratante, acesso } = useStore();
+  const { unidades, arquivos, contabCfg, apontContab, setApontContab, empresaContratante, acesso, clts, escala, escalaOv, atestados, getDossie } = useStore();
   const toast=useContext(ToastCtx);
   const h=new Date(); const [comp,setComp]=useState(compDe(new Date(h.getFullYear(),h.getMonth()-1,1)));
-  const [uni,setUni]=useState("todas"); const [gerando,setGerando]=useState(false);
+  const [uni,setUni]=useState("todas"); const [gerando,setGerando]=useState(false); const [verTodos,setVerTodos]=useState(false);
   const [y,m]=comp.split("-").map(Number); const ini=comp+"-01", fim=ymd(new Date(y,m,0));
   const linhas=useFolhaPeriodo(ini,fim,uni);
+  const apont={}; linhas.forEach(l=>{ const c=(clts||[]).find(x=>String(x.id)===String(l.id)); if(c) apont[l.id]=apontamentoContabDe(c,l,{escala,escalaOv,atestados,getDossie,ini,fim}); });
+  const temAlgo=(a)=> a && (a.temHE||a.faltasInj.length||a.faltasJust.length||a.atestadosLongos.length||a.atrasos.length);
+  const totA={ he:linhas.filter(l=>apont[l.id]&&apont[l.id].temHE).length, inj:linhas.reduce((s2,l)=>s2+(apont[l.id]?apont[l.id].faltasInj.length:0),0), just:linhas.reduce((s2,l)=>s2+(apont[l.id]?apont[l.id].faltasJust.length:0),0),
+    at:linhas.reduce((s2,l)=>s2+(apont[l.id]?apont[l.id].atestadosLongos.length:0),0), atr:linhas.reduce((s2,l)=>s2+(apont[l.id]?apont[l.id].atrasos.length:0),0), atrMin:linhas.reduce((s2,l)=>s2+(apont[l.id]?apont[l.id].atrasosMin:0),0) };
   const uniNome=uni==="todas"?"Todas as casas":unidadeNome(Number(uni),unidades);
   const envios=[...(apontContab||[])].sort((a,b)=>(b.em||0)-(a.em||0));
   const arq=(id)=>(arquivos||[]).find(a=>a.id===id);
@@ -8909,7 +9424,7 @@ function ApontamentosContab({souContab}){
     setGerando(true);
     // abre a aba do e-mail já no clique (depois do await o navegador bloquearia o pop-up)
     const aba=contabCfg && contabCfg.email ? window.open("about:blank","_blank") : null;
-    try{ const meta={ empresa:empresaEfetiva(empresaContratante).razao||"", unidade:uniNome, comp, ini, fim };
+    try{ const meta={ empresa:empresaEfetiva(empresaContratante).razao||"", unidade:uniNome, comp, ini, fim, apont };
       const xlsx=await planilhaApontamentos(linhas,meta);
       const z=new JSZip(); for(const l of linhas){ z.file("Folha "+comp+" - "+String(l.nome).replace(/[\\/:*?"<>|]/g,"").trim()+".pdf", await pdfDemonstrativoFolha(l,meta)); }
       const zip=await z.generateAsync({type:"uint8array"});
@@ -8918,10 +9433,17 @@ function ApontamentosContab({souContab}){
       const xlsxId=await arqSalvar({...base, nome:nomeBase+".xlsx"}, bytesParaDataUrl(xlsx,"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
       const zipId=await arqSalvar({...base, nome:"Demonstrativos "+comp+" - "+uniNome.replace(/[\\/:*?"<>|]/g,"")+".zip"}, bytesParaDataUrl(zip,"application/zip"));
       const rec={ id:Math.random().toString(36).slice(2), comp, ini, fim, unidade:uni, uniNome, em:Date.now(), por:(acesso&&acesso.email)||"", xlsxId, zipId, qtd:linhas.length,
-        resumo:{ faltas:tot("faltasQtd"), he50:tot("extrasMin"), he100:tot("extras100Min"), noturno:tot("notMin") }, status:"enviado" };
+        resumo:{ faltas:tot("faltasQtd"), he50:tot("extrasMin"), he100:tot("extras100Min"), noturno:tot("notMin"), faltasJust:totA.just, atestados:totA.at, atrasos:totA.atr, atrasosMin:totA.atrMin }, status:"enviado" };
       setApontContab(prev=>[rec,...(prev||[])]);
       toast("Apontamentos enviados para a contabilidade");
-      if(contabCfg && contabCfg.email){ const corpo=`Olá! Os apontamentos da folha de ${fmtCompetencia(comp)} (${uniNome}) estão na aba Contabilidade do Wilami:\n\n• ${linhas.length} colaborador(es)\n• Faltas: ${rec.resumo.faltas}\n• HE 50%: ${hhmm(rec.resumo.he50)||"0:00"} · HE 100%: ${hhmm(rec.resumo.he100)||"0:00"}\n• Adicional noturno: ${hhmm(rec.resumo.noturno)||"0:00"} (hora reduzida)\n\nPlanilha de apontamentos (Excel) e demonstrativos individuais (PDF):\n${comTenantUrl(location.origin+location.pathname,"")}`;
+      if(contabCfg && contabCfg.email){ const det=linhas.filter(l=>temAlgo(apont[l.id])).map(l=>{ const a=apont[l.id]; const p=[];
+          if(a.temHE) p.push("horas extras "+[a.he50?"50% "+hhmm(a.he50):"",a.he100?"100% "+hhmm(a.he100):""].filter(Boolean).join(" / "));
+          if(a.faltasInj.length) p.push(a.faltasInj.length+" falta(s) sem justificativa ("+a.faltasInj.map(dm).join(", ")+")");
+          if(a.faltasJust.length) p.push(a.faltasJust.length+" falta(s) justificada(s) ("+a.faltasJust.map(f=>dm(f.data)+(f.motivo?" - "+f.motivo:"")).join(", ")+")");
+          if(a.atestadosLongos.length) p.push("atestado "+a.atestadosLongos.map(g=>dm(g.ini)+" a "+dm(g.fim)+" ("+g.dias+" dias)").join(", "));
+          if(a.atrasos.length) p.push(a.atrasos.length+" atraso(s), total "+hhmm(a.atrasosMin));
+          return "• "+l.nome+": "+p.join("; "); });
+        const corpo=`Olá! Seguem os apontamentos da folha de ${fmtCompetencia(comp)} (${uniNome}):\n\n${det.length?det.join("\n"):"Sem horas extras, faltas, atestados acima de 2 dias ou atrasos no mês."}\n\nPlanilha (aba "Resumo para a contabilidade") e demonstrativos individuais na aba Contabilidade do Wilami:\n${comTenantUrl(location.origin+location.pathname,"")}`;
         const url="https://mail.google.com/mail/?view=cm&fs=1&to="+encodeURIComponent(contabCfg.email)+"&su="+encodeURIComponent("Apontamentos da folha — "+fmtCompetencia(comp))+"&body="+encodeURIComponent(corpo);
         if(aba) aba.location.href=url; else window.open(url,"_blank"); }
     }catch(e){ if(aba) aba.close(); toast("Não foi possível gerar: "+erroBanco(e)); }
@@ -8936,10 +9458,25 @@ function ApontamentosContab({souContab}){
         <Btn icon={gerando?null:I.arrow} disabled={gerando||!linhas.length} onClick={gerar}>{gerando?"Gerando…":"Enviar apontamentos para a contabilidade"}</Btn>
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mt-3 text-sm">
-        {[["Colaboradores",linhas.length],["Faltas (da escala)",tot("faltasQtd")],["HE 50%",hhmm(tot("extrasMin"))||"0:00"],["HE 100%",hhmm(tot("extras100Min"))||"0:00"],["Adic. noturno",hhmm(tot("notMin"))||"0:00"]].map(([l,v])=>
+        {[["Com horas extras",totA.he+" pessoa(s)"],["Faltas sem justificativa",totA.inj],["Faltas justificadas",totA.just],["Atestados > 2 dias",totA.at],["Atrasos",totA.atr+(totA.atrMin?" · "+hhmm(totA.atrMin):"")]].map(([l,v])=>
           <div key={l} className="p-2.5 rounded-xl bg-slate-50"><div className="text-[11px] font-bold uppercase text-slate-400">{l}</div><div className="font-extrabold text-slate-900">{v}</div></div>)}
       </div>
-      <p className="text-xs text-slate-500 mt-2">Envia a planilha de apontamentos (horas extras 50% e 100%, adicional noturno, faltas da escala, DSR perdido, atrasos, gorjetas e VT) e os demonstrativos individuais em PDF. {contabCfg&&contabCfg.email?"O e-mail da contabilidade abre já preenchido.":"Cadastre o e-mail da contabilidade na seção Admissões para avisar por e-mail."}</p>
+      <p className="text-xs text-slate-500 mt-2">O sistema busca sozinho: <b>horas extras</b> do ponto, <b>faltas</b> (sem justificativa = escala sem ponto ou lançada com desconto; justificada = lançada sem desconto no dossiê), <b>atestados só acima de 2 dias seguidos</b> e <b>atrasos</b> (entrada depois do horário da escala, acima de {TOLERANCIA_ATRASO} min, mais os lançados no dossiê). Confira abaixo e clique em enviar: vai a planilha (aba “Resumo para a contabilidade”) e os demonstrativos em PDF. {contabCfg&&contabCfg.email?"O e-mail da contabilidade abre já preenchido com o resumo.":"Cadastre o e-mail da contabilidade na seção Admissões para avisar por e-mail."}</p>
+    </Card>}
+    {!souContab && linhas.length>0 && <Card className="overflow-hidden" aria-label="Prévia dos apontamentos">
+      <div className="p-3 flex flex-wrap items-center gap-2 border-b border-slate-100"><span className="text-sm font-bold text-slate-700">Prévia do que vai para a contabilidade · {fmtCompetencia(comp)}</span><div className="flex-1"/>
+        <label className="text-xs text-slate-600 flex items-center gap-1.5"><input type="checkbox" checked={verTodos} onChange={e=>setVerTodos(e.target.checked)}/> mostrar também quem não tem nada</label></div>
+      <RolagemX><table className="w-full text-sm"><thead className="bg-slate-50 text-xs text-slate-500"><tr>{["Colaborador","Horas extras","Faltas sem justificativa","Faltas justificadas","Atestados (> 2 dias)","Atrasos"].map(t=><th key={t} className="px-3 py-2 text-left font-semibold whitespace-nowrap">{t}</th>)}</tr></thead>
+        <tbody className="divide-y divide-slate-100">{linhas.filter(l=>verTodos||temAlgo(apont[l.id])).map(l=>{ const a=apont[l.id]; if(!a) return null; const v=(x)=>x||<span className="text-slate-300">—</span>;
+          return <tr key={l.id} aria-label={"Apontamento "+l.nome} className="align-top">
+            <td className="px-3 py-2"><div className="font-semibold text-slate-800">{l.nome}</div><div className="text-[11px] text-slate-400">{l.cargo}</div></td>
+            <td className="px-3 py-2 whitespace-nowrap">{v(a.temHE && <><Badge tone="brand">Sim</Badge><div className="text-[11px] text-slate-500 mt-0.5">{[a.he50?"50%: "+hhmm(a.he50):"",a.he100?"100%: "+hhmm(a.he100):""].filter(Boolean).join(" · ")}</div></>)}</td>
+            <td className="px-3 py-2">{v(a.faltasInj.length>0 && <><b className="text-rose-700">{a.faltasInj.length}</b><div className="text-[11px] text-slate-500">{a.faltasInj.map(dm).join(", ")}</div></>)}</td>
+            <td className="px-3 py-2">{v(a.faltasJust.length>0 && <><b className="text-sky-700">{a.faltasJust.length}</b><div className="text-[11px] text-slate-500">{a.faltasJust.map(f=>dm(f.data)+(f.motivo?" ("+f.motivo+")":"")).join(", ")}</div></>)}</td>
+            <td className="px-3 py-2">{v(a.atestadosLongos.length>0 && <div className="text-[11px] text-slate-600">{a.atestadosLongos.map(g=><div key={g.ini}>{dm(g.ini)} a {dm(g.fim)} · <b>{g.dias} dias</b>{g.obs?" · "+g.obs:""}</div>)}</div>)}{a.atestadosCurtos>0 && <div className="text-[10px] text-slate-400">{a.atestadosCurtos} dia(s) de atestado curto (não vai)</div>}</td>
+            <td className="px-3 py-2">{v(a.atrasos.length>0 && <><b>{a.atrasos.length}</b> <span className="text-xs text-slate-500">· {hhmm(a.atrasosMin)}</span><div className="text-[11px] text-slate-500">{a.atrasos.map(x=>dm(x.data)+" "+x.min+"min").join(", ")}</div></>)}</td></tr>; })}
+          {!linhas.some(l=>temAlgo(apont[l.id])) && !verTodos && <tr><td colSpan={6} className="px-3 py-6 text-center text-slate-400">Nenhuma hora extra, falta, atestado acima de 2 dias ou atraso no mês.</td></tr>}</tbody></table></RolagemX>
+      <div className="p-3 border-t border-slate-100 flex justify-end"><Btn icon={gerando?null:I.arrow} disabled={gerando||!linhas.length} onClick={gerar}>{gerando?"Gerando…":"Enviar para a contabilidade"}</Btn></div>
     </Card>}
     <Card className="divide-y divide-slate-100">
       <div className="p-3 text-xs font-bold uppercase text-slate-400">Apontamentos enviados</div>
@@ -8947,7 +9484,7 @@ function ApontamentosContab({souContab}){
       {envios.map(r=><div key={r.id} className="p-3 flex flex-wrap items-center gap-3">
         <div className="w-10 h-10 rounded-xl grad-brand text-white grid place-items-center shrink-0"><Icon d={I.receipt} className="w-5 h-5"/></div>
         <div className="flex-1 min-w-[200px]"><div className="text-sm font-semibold text-slate-800">{fmtCompetencia(r.comp)} · {r.uniNome}</div>
-          <div className="text-xs text-slate-400">{r.qtd} colaborador(es) · {r.resumo?`${r.resumo.faltas} falta(s) · HE 50% ${hhmm(r.resumo.he50)||"0:00"} · HE 100% ${hhmm(r.resumo.he100)||"0:00"} · noturno ${hhmm(r.resumo.noturno)||"0:00"}`:""} · enviado em {new Date(r.em).toLocaleString("pt-BR")}</div></div>
+          <div className="text-xs text-slate-400">{r.qtd} colaborador(es) · {r.resumo?`${r.resumo.faltas} falta(s) sem justif.${r.resumo.faltasJust!=null?" · "+r.resumo.faltasJust+" justificada(s)":""}${r.resumo.atestados!=null?" · "+r.resumo.atestados+" atestado(s) > 2 dias":""}${r.resumo.atrasos!=null?" · "+r.resumo.atrasos+" atraso(s)":""} · HE 50% ${hhmm(r.resumo.he50)||"0:00"} · HE 100% ${hhmm(r.resumo.he100)||"0:00"}`:""} · enviado em {new Date(r.em).toLocaleString("pt-BR")}</div></div>
         <Badge tone={r.status==="recebido"?"green":"blue"}>{r.status==="recebido"?"Recebido pela contabilidade":"Enviado"}</Badge>
         <Btn size="sm" variant="soft" icon={I.download} onClick={()=>baixar(r.xlsxId)}>Planilha</Btn>
         <Btn size="sm" variant="ghost" icon={I.download} onClick={()=>baixar(r.zipId)}>PDFs</Btn>
@@ -8956,6 +9493,50 @@ function ApontamentosContab({souContab}){
     </Card>
   </div>;
 }
+// Folha de pagamento (PDF/Excel) que a contabilidade manda para o RH conferir — fica em arquivos (categoria "folha")
+function FolhaContab({souContab}){
+  const { arquivos, acesso } = useStore(); const toast=useContext(ToastCtx);
+  const h=new Date(); const [comp,setComp]=useState(compDe(new Date(h.getFullYear(),h.getMonth()-1,1)));
+  const [obs,setObs]=useState(""); const [env,setEnv]=useState(""); const [drag,setDrag]=useState(false);
+  const todas=arquivos.filter(a=>a.categoria==="folha");
+  const doMes=todas.filter(a=>a.competencia===comp).sort((a,b)=>(b.ts||0)-(a.ts||0));
+  const naoConf=todas.filter(a=>!a.conferidoEm && a.competencia!==comp);
+  const enviar=async(lista)=>{ const files=Array.from(lista||[]); if(!files.length) return; let n=0;
+    for(let i=0;i<files.length;i++){ const f=files[i]; setEnv("Enviando "+f.name+" ("+(i+1)+"/"+files.length+")…");
+      try{ if(f.size>ARQ_MAX_BYTES) throw new Error("arquivo maior que "+fmtBytes(ARQ_MAX_BYTES)); const du=await lerArquivoDataUrl(f);
+        await arqSalvar({ nome:f.name, donoKey:"contabilidade", donoTipo:"contabilidade", donoId:"folha", donoNome:"Contabilidade", pasta:"Folha de pagamento", categoria:"folha", competencia:comp,
+          visivelColab:false, origem:souContab?"contabilidade":"painel", enviadoPor:souContab?"contabilidade":"rh", obs:obs.trim() }, du); n++;
+      }catch(e){ toast("Falha em "+f.name+": "+(e.message||erroBanco(e))); } }
+    setEnv(""); if(n){ setObs(""); toast(n+" arquivo(s) da folha de "+fmtCompetencia(comp)+(souContab?" enviados para o RH":" guardados")); } };
+  const conferir=async(a,v)=>{ try{ await arqAtualizar(a.id, v?{conferidoEm:Date.now(), conferidoPor:(acesso&&acesso.email)||""}:{conferidoEm:null, conferidoPor:null}); toast(v?"Folha marcada como conferida":"Folha voltou para conferir"); }catch(e){ toast(erroBanco(e)); } };
+  const podeExcluir=(a)=> souContab ? (a.enviadoPor==="contabilidade" && !a.conferidoEm) : true;
+  const linha=(a)=><div key={a.id} className="py-2.5 flex flex-wrap items-center gap-2 text-sm" aria-label={"Folha "+a.nome}>
+    <div className="w-9 h-9 rounded-lg grid place-items-center bg-brand-50 text-brand-700 shrink-0"><Icon d={I.receipt} className="w-4 h-4"/></div>
+    <div className="flex-1 min-w-[200px]"><div className="font-semibold text-slate-800 break-all">{a.nome}</div>
+      <div className="text-xs text-slate-500">{fmtCompetencia(a.competencia)} · {a.enviadoPor==="contabilidade"?"enviado pela contabilidade":"guardado pelo RH"} em {new Date(a.ts||0).toLocaleDateString("pt-BR")} · {fmtBytes(a.tamanho||0)}{a.obs?" · “"+a.obs+"”":""}</div></div>
+    {a.conferidoEm ? <Badge tone="green"><Icon d={I.check} className="w-3 h-3"/>Conferida {new Date(a.conferidoEm).toLocaleDateString("pt-BR")}</Badge> : <Badge tone="amber">{souContab?"Aguardando o RH conferir":"A conferir"}</Badge>}
+    <button title="Visualizar" onClick={()=>arqAbrir(a).catch(e=>toast(e.message))} className="w-8 h-8 rounded-lg inline-grid place-items-center text-slate-500 hover:bg-slate-100"><Icon d={I.eye} className="w-4 h-4"/></button>
+    <button title="Baixar" onClick={()=>arqBaixar(a).catch(e=>toast(e.message))} className="w-8 h-8 rounded-lg inline-grid place-items-center text-slate-500 hover:bg-slate-100"><Icon d={I.download} className="w-4 h-4"/></button>
+    {!souContab && (a.conferidoEm ? <Btn size="sm" variant="ghost" onClick={()=>conferir(a,false)}>Desfazer</Btn> : <Btn size="sm" variant="soft" icon={I.check} onClick={()=>conferir(a,true)}>Marcar conferida</Btn>)}
+    {podeExcluir(a) && <button title="Excluir" onClick={()=>{ if(confirm("Excluir "+a.nome+"?")) arqRemover(a).then(()=>toast("Arquivo excluído")).catch(e=>toast(e.message)); }} className="w-8 h-8 rounded-lg inline-grid place-items-center text-slate-400 hover:text-rose-500 hover:bg-rose-50"><Icon d={I.trash} className="w-4 h-4"/></button>}
+  </div>;
+  return <Card className="p-5" aria-label="Folha de pagamento da contabilidade">
+    <h3 className="font-bold text-slate-900 mb-1">Folha de pagamento</h3>
+    <p className="text-xs text-slate-500 mb-3">{souContab?"Envie a folha do mês (PDF, Excel ou imagem). O RH recebe aqui, confere e marca como conferida.":"A folha que a contabilidade manda chega aqui. Confira e marque como conferida (ela vê o status)."}</p>
+    <div className="grid sm:grid-cols-3 gap-3 mb-3">
+      <Field label="Competência"><Input type="month" value={comp} onChange={e=>e.target.value&&setComp(e.target.value)} aria-label="Competência da folha"/></Field>
+      <div className="sm:col-span-2"><Field label="Recado (opcional)"><Input value={obs} onChange={e=>setObs(e.target.value)} placeholder="Ex.: folha de novembro com as extras do apontamento" aria-label="Recado da folha"/></Field></div></div>
+    <div onDragOver={e=>{e.preventDefault();setDrag(true);}} onDragLeave={()=>setDrag(false)} onDrop={e=>{e.preventDefault();setDrag(false);enviar(e.dataTransfer.files);}}
+      className={cx("p-5 rounded-2xl border-2 border-dashed text-center transition mb-3", drag?"drag-over border-brand-300":"border-slate-200")}>
+      {env ? <div className="text-brand-700 font-semibold text-sm flex items-center justify-center gap-2"><span className="w-4 h-4 rounded-full border-2 border-brand-200 border-t-brand-600 animate-spin"/>{env}</div>
+      : <label className="cursor-pointer block"><div className="font-semibold text-slate-800 text-sm">Arraste aqui a folha de {fmtCompetencia(comp)} ou <span className="text-brand-700 underline">clique para escolher</span></div>
+        <div className="text-xs text-slate-500 mt-1">PDF, Excel (.xlsx/.xls), CSV ou imagem · até {fmtBytes(ARQ_MAX_BYTES)} por arquivo</div>
+        <input type="file" multiple accept="application/pdf,.pdf,.xlsx,.xls,.csv,.ods,image/*" className="hidden" aria-label="Arquivo da folha" onChange={e=>{ enviar(e.target.files); e.target.value=""; }}/></label>}
+    </div>
+    <div className="text-sm font-semibold text-slate-700 mb-1">Folha de {fmtCompetencia(comp)} <span className="text-slate-400 font-normal">· {doMes.length}</span></div>
+    {doMes.length===0 ? <p className="text-sm text-slate-400 py-3">Nenhum arquivo da folha nesta competência.</p> : <div className="divide-y divide-slate-100">{doMes.map(linha)}</div>}
+    {!souContab && naoConf.length>0 && <><div className="text-sm font-semibold text-amber-700 mt-4 mb-1">Outras competências a conferir · {naoConf.length}</div><div className="divide-y divide-slate-100">{naoConf.map(linha)}</div></>}
+  </Card>; }
 function ContabilidadePage(){
   const { clts, unidades, arquivos, cargoInfo, empresaContratante, contabCfg, setContabCfg, envContab, setEnvContab, acesso, can } = useStore();
   const toast=useContext(ToastCtx);
@@ -8977,10 +9558,19 @@ function ContabilidadePage(){
   const docsResumo=(p)=>{ const d=docsDaPessoa(p,arquivos); return DOCS_ADMISSAO.map(x=>[x,d[x.k].length]); };
   const pAberto=sel && clts.find(p=>chave(p)===sel);
   const [secao,setSecao]=useState("admissoes");
+  const pendFolha=(arquivos||[]).filter(a=>(a.categoria==="folha"&&!a.conferidoEm&&a.enviadoPor==="contabilidade")||(a.categoria==="holerite"&&a.aguardandoLiberacao)).length;
   return <div className="space-y-4 fade-in">
-    <PageHeader title="Contabilidade" sub={secao==="apontamentos"?(souContab?"Apontamentos da folha enviados — baixe a planilha e os demonstrativos":"Envie os apontamentos da folha do mês para a contabilidade"):(souContab?"Novos funcionários enviados para admissão — baixe os dados e os documentos":"Envie os dados e documentos dos novos CLT para a contabilidade fazer a admissão")}/>
-    <div className="flex gap-2">{[["admissoes","Admissões"],["apontamentos","Apontamentos da folha"]].map(([k,l])=><button key={k} onClick={()=>setSecao(k)} className={cx("px-4 py-2 rounded-xl text-sm font-semibold border transition", secao===k?"grad-brand text-white border-transparent shadow-glow":"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>{l}</button>)}</div>
-    {secao==="apontamentos" ? <ApontamentosContab souContab={souContab}/> : <>
+    <PageHeader title="Contabilidade" sub={secao==="folha"?(souContab?"Envie a folha de pagamento e os holerites do mês":"Folha e holerites enviados pela contabilidade — confira e libere no app"):secao==="apontamentos"?(souContab?"Apontamentos da folha enviados — baixe a planilha e os demonstrativos":"Envie os apontamentos da folha do mês para a contabilidade"):(souContab?"Novos funcionários enviados para admissão — baixe os dados e os documentos":"Envie os dados e documentos dos novos CLT para a contabilidade fazer a admissão")}/>
+    <div className="flex flex-wrap gap-2">{[["admissoes","Admissões"],["apontamentos","Apontamentos da folha"],["folha","Folha e holerites"]].map(([k,l])=><button key={k} onClick={()=>setSecao(k)} className={cx("px-4 py-2 rounded-xl text-sm font-semibold border transition inline-flex items-center gap-2", secao===k?"grad-brand text-white border-transparent shadow-glow":"bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}>{l}
+      {k==="folha" && !souContab && pendFolha>0 && <span className={cx("min-w-[20px] h-5 px-1.5 rounded-full text-[11px] font-bold grid place-items-center", secao===k?"bg-white text-brand-700":"bg-amber-500 text-white")} aria-label="Pendências da contabilidade">{pendFolha}</span>}</button>)}</div>
+    {secao==="folha" ? <div className="space-y-4">
+      {!souContab && <Card className="p-4 flex flex-wrap items-center gap-3"><Toggle on={!!contabCfg.holeriteDireto} onChange={v=>{ setContabCfg({...contabCfg, holeriteDireto:v}); toast(v?"Holerites da contabilidade vão direto para o app":"Holerites da contabilidade aguardam sua liberação"); }}/>
+        <div className="flex-1 min-w-[220px] text-sm"><b>Holerites enviados pela contabilidade vão direto para o app</b><div className="text-xs text-slate-500">{contabCfg.holeriteDireto?"Ligado: o colaborador vê assim que a contabilidade envia.":"Desligado: ficam aguardando você conferir e clicar em “Liberar”."}</div></div></Card>}
+      <FolhaContab souContab={souContab}/>
+      <Card className="p-5"><h3 className="font-bold text-slate-900 mb-1">Holerites</h3>
+        <p className="text-xs text-slate-500 mb-3">{souContab?"Suba os holerites (um PDF por colaborador ou um PDF único com todos): o sistema identifica cada pessoa pelo CPF ou nome."+(contabCfg.holeriteDireto?" Eles vão direto para o app de cada colaborador.":" O RH confere e libera no app de cada colaborador."):"Os holerites que a contabilidade sobe aparecem aqui e em Documentos → Holerites."}</p>
+        <HoleritesPage embed/></Card>
+    </div> : secao==="apontamentos" ? <ApontamentosContab souContab={souContab}/> : <>
     {!souContab && <Card className="p-4 flex flex-wrap items-end gap-3">
       <div className="flex-1 min-w-[220px]"><Field label="E-mail da contabilidade (para avisar quando enviar)"><Input value={contabCfg.email||""} onChange={e=>setContabCfg({...contabCfg,email:e.target.value.trim()})} placeholder="contabilidade@escritorio.com.br"/></Field></div>
       <p className="text-xs text-slate-500 max-w-md">A contabilidade entra com login próprio e vê só esta aba: crie em <b>Gerentes & acessos</b> com o papel <b>Contabilidade</b>.</p>
@@ -9798,12 +10388,14 @@ class ErroTela extends React.Component{
    (entrada, início e fim da pausa, saída) com a marca "lancadoGestor" — iguais às do quiosque para a apuração,
    mas SÓ em dias passados e SÓ onde a pessoa ainda não tem nenhuma batida. Não mexe no quiosque nem em pontos reais. */
 function LancarDiasSemPonto(){
-  const { clts, unidades, registros, addRegistro, escala, escalaOv, garantirRegistros } = useStore();
+  const { clts, unidades, registros, addRegistro, escala, escalaOv, garantirRegistros, addFalta, getDossie, salvarClt } = useStore();
   const toast=useContext(ToastCtx);
   const hoje=hojeStr();
+  const _pre=useRef(window.__wpLancar||null); if(window.__wpLancar) window.__wpLancar=null;   // aberto a partir da aba Rescisões
   const ymPadrao=(()=>{ const [y,m,d]=hoje.split("-").map(Number); if(d>10) return hoje.slice(0,7); return m===1?(y-1)+"-12":y+"-"+String(m-1).padStart(2,"0"); })();
-  const [ym,setYm]=useState(ymPadrao);
-  const [pid,setPid]=useState("");
+  const [ym,setYm]=useState((_pre.current&&_pre.current.ym)||ymPadrao);
+  const [pid,setPid]=useState((_pre.current&&String(_pre.current.pid))||"");
+  const [tipoDia,setTipoDia]=useState({});   // ds → "d" (dobra) | "f" (falta) | "a" (atestado); marcado sem tipo = trabalhado
   const [h,setH]=useState({ent:"08:00",pi:"12:00",pf:"13:00",sai:"17:00"});
   const [sel,setSel]=useState(()=>new Set());
   const [salvando,setSalvando]=useState(false);
@@ -9816,26 +10408,44 @@ function LancarDiasSemPonto(){
   const escolher=(id)=>{ setPid(id); setSel(new Set()); const p=pessoas.find(x=>String(x.id)===String(id)); if(!p) return;
     const e=p.horaEntrada||"08:00", sa=p.horaSaida||toHH(toMin(e)+9*60); const meio=toMin(e)+Math.max(60,Math.floor(((toMin(sa)-toMin(e)+1440)%1440)/2)-30);
     const meioDia = toMin(e)<=11*60 && toMin(sa)>=14*60; setH({ent:e, pi:meioDia?"12:00":toHH(meio), pf:meioDia?"13:00":toHH(meio+60), sai:sa}); };
+  useEffect(()=>{ if(_pre.current && _pre.current.pid!=null) escolher(String(_pre.current.pid)); },[]); // eslint-disable-line
   const doDia=(ds)=> c ? (registros||[]).filter(r=>(r.data===ds||r.dia===ds) && ((r.pid!=null&&String(r.pid)===String(c.id))||(c.cpf&&r.cpf&&soDigitos(r.cpf)===soDigitos(c.cpf))||r.nome===c.nome)) : [];
   const naEscala=(ds)=>{ if(!c||c.unidade==null) return false; const a=diaEscala(escala,escalaOv,c.unidade,ds,wdDe(ds)).find(x=>String(x.pid)===String(c.id)&&x.tipo==="clt"); return !!(a&&a.turno!=="folga"); };
   const dias=datasEntre(ini,fim).map(ds=>{ const motivo= ds>=hoje ? "futuro" : (c&&c.admissao&&ds<c.admissao) ? "antes" : (c&&c.fimContrato&&ds>c.fimContrato) ? "depois" : doDia(ds).length ? "ponto" : "";
     return { ds, wd:wdDe(ds), motivo, esc:naEscala(ds) }; });
-  const toggle=(ds)=>setSel(p=>{ const n=new Set(p); n.has(ds)?n.delete(ds):n.add(ds); return n; });
+  // desligado: dia que já tem ponto pode ser marcado/desmarcado como DOBRA (vale no pagamento por dia)
+  const dobrasSalvas=new Set((c&&c.demissao&&c.demissao.ajustes&&c.demissao.ajustes.dobras)||[]);
+  const togDobraPonto=(ds)=>{ if(!c||!c.demissao) return; const set=new Set(dobrasSalvas); set.has(ds)?set.delete(ds):set.add(ds);
+    const aj={...(c.demissao.ajustes||{}), dobras:[...set].sort(), diasTrab:null, vtDias:null};
+    salvarClt({...c, demissao:{...c.demissao, ajustes:aj}}); toast(set.has(ds)?fmtDataBR(ds)+" marcado como dobra (2 diárias)":fmtDataBR(ds)+" voltou a 1 diária"); };
+  // clique: trabalhado → dobra → falta → atestado → desmarca
+  const toggle=(ds)=>{ const on=sel.has(ds), t=tipoDia[ds];
+    if(!on){ setSel(p=>new Set([...p,ds])); setTipoDia(m=>{ const n={...m}; delete n[ds]; return n; }); return; }
+    const prox= !t?"d" : t==="d"?"f" : t==="f"?"a" : null;
+    if(prox) setTipoDia(m=>({...m,[ds]:prox})); else { setSel(p=>{ const n=new Set(p); n.delete(ds); return n; }); setTipoDia(m=>{ const n={...m}; delete n[ds]; return n; }); } };
   const marcarEscala=()=>{ const n=new Set(); dias.forEach(d=>{ if(!d.motivo && d.esc) n.add(d.ds); }); setSel(n); if(!n.size) toast("Nenhum dia da escala disponível neste mês — marque os dias à mão"); };
   const marcarSegSab=()=>{ const n=new Set(); dias.forEach(d=>{ if(!d.motivo && d.wd!==6) n.add(d.ds); }); setSel(n); };
   const jorn=(()=>{ const t=(toMin(h.sai)-toMin(h.ent)+1440)%1440, p=(toMin(h.pf)-toMin(h.pi)+1440)%1440; return Math.max(0,t-p); })();
   const ordemOk = jorn>0 && toMin(h.pi)>=toMin(h.ent) && toMin(h.pf)>toMin(h.pi) && toMin(h.sai)>toMin(h.pf);
-  const diasSel=[...sel].filter(ds=>{ const d=dias.find(x=>x.ds===ds); return d && !d.motivo; }).sort();
-  const lancar=async()=>{ if(!c){ toast("Escolha o colaborador"); return; } if(!diasSel.length){ toast("Marque os dias trabalhados"); return; }
-    if(!ordemOk){ toast("Confira os horários: entrada < início da pausa < fim da pausa < saída (mesmo dia)"); return; }
-    if(!confirm("Lançar "+diasSel.length+" dia(s) para "+c.nome+" ("+h.ent+" às "+h.sai+", pausa "+h.pi+"–"+h.pf+")?")) return;
+  const diasSelTodos=[...sel].filter(ds=>{ const d=dias.find(x=>x.ds===ds); return d && !d.motivo; }).sort();
+  const diasSel=diasSelTodos.filter(ds=>tipoDia[ds]!=="f"&&tipoDia[ds]!=="a");   // dias com ponto a lançar
+  const faltasSel=diasSelTodos.filter(ds=>tipoDia[ds]==="f"||tipoDia[ds]==="a");
+  const nDobras=diasSel.filter(ds=>tipoDia[ds]==="d").length;
+  const lancar=async()=>{ if(!c){ toast("Escolha o colaborador"); return; } if(!diasSelTodos.length){ toast("Marque os dias"); return; }
+    if(diasSel.length && !ordemOk){ toast("Confira os horários: entrada < início da pausa < fim da pausa < saída (mesmo dia)"); return; }
+    if(!confirm("Lançar para "+c.nome+": "+diasSel.length+" dia(s) trabalhado(s)"+(nDobras?" ("+nDobras+" dobra)":"")+(faltasSel.length?", "+faltasSel.length+" falta(s)/atestado(s)":"")+"?")) return;
+    // lançou o ponto de quem saiu → a rescisão volta a contar pelos dias com ponto (tira os dias digitados à mão)
+    if(c.demissao && c.demissao.ajustes && (c.demissao.ajustes.diasTrab!=null || c.demissao.ajustes.vtDias!=null)) salvarClt({...c, demissao:{...c.demissao, ajustes:{...c.demissao.ajustes, diasTrab:null, vtDias:null}}});
+    faltasSel.forEach(ds=>{ const at=tipoDia[ds]==="a"; const key="clt-"+c.id; if(((getDossie&&getDossie(key).faltas)||[]).some(x=>x.data===ds)) return;
+      addFalta(key,{ tipo:at?"atestado":"falta", data:ds, horas:8, descontar:!at, obs:(at?"Atestado":"Falta")+" lançado pelo gestor", ts:Date.now() }); });
+    if(!diasSel.length){ toast(faltasSel.length+" falta(s)/atestado(s) lançados para "+c.nome); setSel(new Set()); setTipoDia({}); return; }
     setSalvando(true);
     const uniNome=(unidades.find(u=>String(u.id)===String(c.unidade))||{}).nome||"";
     try{ for(const ds of diasSel){ const [yy,mm,dd]=ds.split("-").map(Number);
         [["Entrada",h.ent],["Início intervalo",h.pi],["Fim intervalo",h.pf],["Saída",h.sai]].forEach(([acao,t],i)=>{ const mn=toMin(t);
           addRegistro({ nome:c.nome, pid:String(c.id), cpf:soDigitos(c.cpf||""), tipo:"clt", acao, unidade:uniNome, hora:t+":00", min:mn, data:ds, dia:ds,
-            ts:new Date(yy,mm-1,dd,Math.floor(mn/60),mn%60).getTime()+i, geo:false, selfie:false, foto:null, ajuste:true, lancadoGestor:true, obsGestor:"Dia lançado pelo gestor (sem ponto)" }); }); }
-      toast(diasSel.length+" dia(s) lançados para "+c.nome+" — a folha e o VT já consideram esses dias"); setSel(new Set());
+            ts:new Date(yy,mm-1,dd,Math.floor(mn/60),mn%60).getTime()+i, geo:false, selfie:false, foto:null, ajuste:true, lancadoGestor:true, obsGestor:"Dia lançado pelo gestor (sem ponto)", ...(tipoDia[ds]==="d"?{dobra:true}:{}) }); }); }
+      toast(diasSel.length+" dia(s) lançados para "+c.nome+(nDobras?" ("+nDobras+" dobra)":"")+(faltasSel.length?" e "+faltasSel.length+" falta(s)/atestado(s)":"")+" — a folha e o VT já consideram esses dias"); setSel(new Set()); setTipoDia({});
     } finally { setSalvando(false); } };
   const WD=["Seg","Ter","Qua","Qui","Sex","Sáb","Dom"];
   const primeiroWd=wdDe(ini);
@@ -9844,7 +10454,7 @@ function LancarDiasSemPonto(){
     <div className="font-bold text-slate-800">Lançar dias trabalhados sem ponto</div>
     <p className="text-xs text-slate-500 mb-3">Para quem trabalhou e não bateu o ponto. O sistema grava entrada, pausa e saída de cada dia marcado (marcado como “lançado pelo gestor”), e a folha, as faltas e o VT passam a contar esses dias. Só aceita <b>dias passados</b> e dias <b>sem nenhuma batida</b> — nunca altera um ponto real.</p>
     <div className="flex flex-wrap items-end gap-2">
-      <Field label="Colaborador"><Select value={pid} onChange={e=>escolher(e.target.value)} aria-label="Colaborador sem ponto"><option value="">Escolha…</option>{pessoas.map(p=><option key={p.id} value={p.id}>{p.nome} · {p.vinculo==="fixo"?"Freela Fixo":"CLT"}</option>)}</Select></Field>
+      <Field label="Colaborador"><Select value={pid} onChange={e=>escolher(e.target.value)} aria-label="Colaborador sem ponto"><option value="">Escolha…</option>{pessoas.map(p=><option key={p.id} value={p.id}>{p.nome} · {p.vinculo==="fixo"?"Freela Fixo":"CLT"}{p.demissao?" · desligado "+fmtDataBR(p.demissao.data):""}</option>)}</Select></Field>
       <Field label="Mês"><Input type="month" value={ym} onChange={e=>{ if(e.target.value){ setYm(e.target.value); setSel(new Set()); } }} aria-label="Mês dos dias sem ponto"/></Field>
       <Field label="Entrada"><Input type="time" value={h.ent} onChange={e=>setH({...h,ent:e.target.value})} aria-label="Entrada sem ponto"/></Field>
       <Field label="Início pausa"><Input type="time" value={h.pi} onChange={e=>setH({...h,pi:e.target.value})} aria-label="Início pausa sem ponto"/></Field>
@@ -9861,25 +10471,28 @@ function LancarDiasSemPonto(){
         <Btn size="sm" variant="soft" onClick={marcarSegSab}>Marcar seg. a sáb.</Btn>
         <Btn size="sm" variant="ghost" onClick={()=>setSel(new Set())}>Limpar</Btn>
       </div>
+      {c.demissao && <div className="text-[11px] text-indigo-700 mt-2">Desligado: clique num dia <b>com ponto</b> para marcar/desmarcar como <b>dobra</b> (2 diárias).</div>}
+      <div className="text-[11px] text-slate-500 mt-2">Clique no dia para marcar: <b className="text-brand-700">trabalhou</b> → <b className="text-indigo-700">dobra</b> (2 diárias) → <b className="text-rose-600">falta</b> → <b className="text-sky-600">atestado</b> → desmarca.</div>
       <div className="grid grid-cols-7 gap-1.5 mt-2" aria-label="Calendário de dias sem ponto">
         {WD.map(w=><div key={w} className="text-[10px] font-bold text-slate-400 text-center uppercase">{w}</div>)}
         {Array.from({length:primeiroWd}).map((_,i)=><div key={"v"+i}/>)}
-        {dias.map(d=>{ const on=sel.has(d.ds)&&!d.motivo; const bloq=!!d.motivo;
-          return <button key={d.ds} disabled={bloq} onClick={()=>toggle(d.ds)} aria-label={"Dia "+d.ds} aria-pressed={on}
+        {dias.map(d=>{ const on=sel.has(d.ds)&&!d.motivo; const podeDobra=d.motivo==="ponto"&&!!(c&&c.demissao); const bloq=!!d.motivo&&!podeDobra; const t=on?tipoDia[d.ds]:null; const dobP=podeDobra&&dobrasSalvas.has(d.ds);
+          return <button key={d.ds} disabled={bloq} onClick={()=>podeDobra?togDobraPonto(d.ds):toggle(d.ds)} aria-label={"Dia "+d.ds} aria-pressed={on}
             title={d.motivo==="ponto"?"Já tem ponto neste dia":d.motivo==="antes"?"Antes da admissão":d.motivo==="futuro"?"Dia futuro":d.motivo==="depois"?"Depois do fim do contrato":(d.esc?"Dia de trabalho na escala":"Folga / fora da escala")}
             className={cx("rounded-lg border px-1 py-1.5 text-center text-sm transition",
-              on?"grad-brand text-white border-transparent":
-              d.motivo==="ponto"?"bg-emerald-50 border-emerald-200 text-emerald-700 cursor-not-allowed":
+              on?(t==="d"?"bg-indigo-600 text-white border-transparent":t==="f"?"bg-rose-500 text-white border-transparent":t==="a"?"bg-sky-500 text-white border-transparent":"grad-brand text-white border-transparent"):
+              dobP?"bg-indigo-100 border-indigo-300 text-indigo-800":
+              d.motivo==="ponto"?cx("bg-emerald-50 border-emerald-200 text-emerald-700", podeDobra?"hover:bg-indigo-50":"cursor-not-allowed"):
               bloq?"bg-slate-50 border-slate-100 text-slate-300 cursor-not-allowed":
               d.esc?"bg-white border-slate-200 text-slate-800 hover:bg-brand-50":"bg-white border-dashed border-slate-200 text-slate-400 hover:bg-slate-50")}>
             <div className="font-bold leading-none">{Number(d.ds.slice(8))}</div>
-            <div className="text-[9px] mt-0.5 leading-none">{d.motivo==="ponto"?"com ponto":d.motivo==="antes"?"antes adm.":d.motivo==="futuro"?"":d.esc?"escala":"folga"}</div>
+            <div className="text-[9px] mt-0.5 leading-none">{on?(t==="d"?"dobra":t==="f"?"falta":t==="a"?"atestado":"trabalhou"):dobP?"ponto · dobra":d.motivo==="ponto"?"com ponto":d.motivo==="antes"?"antes adm.":d.motivo==="futuro"?"":d.esc?"escala":"folga"}</div>
           </button>; })}
       </div>
       <div className="flex flex-wrap items-center gap-3 mt-3">
-        <span className="text-sm text-slate-700"><b>{diasSel.length}</b> dia(s) marcado(s){diasSel.length?" · "+fmtHoras(jorn*diasSel.length)+" no total":""}</span>
+        <span className="text-sm text-slate-700"><b>{diasSel.length}</b> dia(s) trabalhado(s){nDobras?<> · <b className="text-indigo-700">{nDobras} dobra</b></>:""}{faltasSel.length?<> · <b className="text-rose-600">{faltasSel.length} falta/atestado</b></>:""}</span>
         <div className="flex-1"/>
-        <Btn icon={I.check} onClick={lancar} disabled={salvando||!diasSel.length}>{salvando?"Lançando…":"Lançar "+diasSel.length+" dia(s)"}</Btn>
+        <Btn icon={I.check} onClick={lancar} disabled={salvando||!diasSelTodos.length}>{salvando?"Lançando…":"Lançar"}</Btn>
       </div>
       <p className="text-[11px] text-slate-400 mt-2">Dias em verde já têm ponto e não podem ser alterados aqui. Se a pessoa tiver “Pagamento proporcional (sem ponto)” lançado em Contas do mês, use “Usar cálculo da folha” para valer o cálculo com estes dias.</p>
     </>}
@@ -9889,7 +10502,7 @@ function LancarDiasSemPonto(){
 function AjustesPonto(){
   const { ajustes, resolverAjuste, addRegistro } = useStore();
   const toast=useContext(ToastCtx);
-  const [aba,setAba]=useState("pendente"); // pendente | resolvidos
+  const [aba,setAba]=useState(()=>window.__wpLancar?"lancar":"pendente"); // pendente | resolvidos | lancar
   const [editHora,setEditHora]=useState({}); // {docId: "HH:MM"}
   const pend=(ajustes||[]).filter(a=>a.status==="pendente"||!a.status);
   const lista=(ajustes||[]).filter(a=> aba==="pendente" ? (a.status==="pendente"||!a.status) : a.status!=="pendente");
@@ -9998,6 +10611,7 @@ const NAV = [
     {k:"financeiro",l:"Financeiro",d:I.wallet},
     {k:"notasPJ",l:"Notas fiscais PJ",d:I.receipt},
     {k:"pagamentos",l:"Pagamentos",d:I.pix},
+    {k:"cmo",l:"CMO (custo de mão de obra)",d:I.chart},
     {k:"rescisao",l:"Simulador de rescisão",d:I.wallet},
     {k:"unidades",l:"Unidades",d:I.pin},
     {k:"links",l:"Links & QR",d:I.qr},
@@ -10008,7 +10622,7 @@ const NAV = [
     {k:"ajuda",l:"Ajuda",d:I.help},
   ]},
 ];
-const TITULOS={dashboard:"Painel",escala:"Escala por unidade",ponto:"Ponto ao vivo",ajustes:"Ajustes de ponto",clt:"Colaboradores CLT",freelas:"Freelancers",pjs:"Prestadores PJ",cargos:"Cargos & funções",convites:"Convites de cadastro",arquivos:"Arquivos & pastas",holerites:"Holerites",termos:"Termos e assinaturas",entregas:"Armário, uniformes & EPIs",modeloContrato:"Modelo de contrato PJ",dossie:"Dossiê do colaborador",equipe:"Equipe & permissões",relatorios:"Relatórios",financeiro:"Financeiro",pagamentos:"Pagamentos",unidades:"Unidades",links:"Links & QR",acessos:"Gerentes & acessos",config:"Configurações",ajuda:"Ajuda",contabilidade:"Contabilidade",pcmso:"PCMSO (Paromed)",notasPJ:"Notas fiscais PJ",rs:"Recrutamento & Seleção"};
+const TITULOS={dashboard:"Painel",escala:"Escala por unidade",ponto:"Ponto ao vivo",ajustes:"Ajustes de ponto",clt:"Colaboradores CLT",freelas:"Freelancers",pjs:"Prestadores PJ",cargos:"Cargos & funções",convites:"Convites de cadastro",arquivos:"Arquivos & pastas",holerites:"Holerites",termos:"Termos e assinaturas",entregas:"Armário, uniformes & EPIs",modeloContrato:"Modelo de contrato PJ",dossie:"Dossiê do colaborador",equipe:"Equipe & permissões",relatorios:"Relatórios",financeiro:"Financeiro",pagamentos:"Pagamentos",cmo:"CMO — Custo de mão de obra",unidades:"Unidades",links:"Links & QR",acessos:"Gerentes & acessos",config:"Configurações",ajuda:"Ajuda",contabilidade:"Contabilidade",pcmso:"PCMSO (Paromed)",notasPJ:"Notas fiscais PJ",rs:"Recrutamento & Seleção"};
 
 // Seletor de cliente (multiempresa) — troca entre grupos de restaurantes e cria novo cliente.
 function ClienteSwitcher(){
@@ -10276,7 +10890,7 @@ function Shell({ onLogout }) {
   if(acesso && acesso.semAcesso) return <TelaBloqueio icone={I.shield} titulo="Sua conta ainda não tem acesso" texto="Peça ao administrador para vincular seu e-mail a um cliente. Assim que ele liberar, é só entrar novamente." onLogout={onLogout}/>;
   if(acesso && acesso.tenantBind!=null && acesso.tenantBind!==tenantAtual) return <TelaBloqueio spin titulo="Abrindo seu cliente…"/>;
   const views={ dashboard:<Dashboard go={setView}/>, escala:<EscalaVisual/>, ponto:<PontoLive/>, ajustes:<AjustesPonto/>, clt:<ColaboradoresCLT/>, freelas:<Freelancers/>,
-    dossie:<Dossie/>, pjs:<PrestadoresPJ/>, cargos:<CargosPage/>, convites:<ConvitesPage/>, arquivos:<ArquivosPage/>, holerites:<HoleritesPage/>, termos:<TermosPage/>, entregas:<EntregasPage/>, modeloContrato:<ModeloContratoPage/>, equipe:<Equipe/>, contabilidade:<ContabilidadePage/>, pcmso:<PcmsoPage/>, relatorios:<Relatorios/>, financeiro:<Financeiro/>, notasPJ:<NotasPJPage/>, rs:<RSPage/>, pagamentos:<Pagamentos/>, rescisao:<SimuladorRescisao go={setView}/>, unidades:<Unidades/>, links:<LinksQR/>, acessos:<GerentesAcesso/>, config:<Configuracoes/>, ajuda:<Ajuda/> };
+    dossie:<Dossie/>, pjs:<PrestadoresPJ/>, cargos:<CargosPage/>, convites:<ConvitesPage/>, arquivos:<ArquivosPage/>, holerites:<HoleritesPage/>, termos:<TermosPage/>, entregas:<EntregasPage/>, modeloContrato:<ModeloContratoPage/>, equipe:<Equipe/>, contabilidade:<ContabilidadePage/>, pcmso:<PcmsoPage/>, relatorios:<Relatorios/>, financeiro:<Financeiro/>, notasPJ:<NotasPJPage/>, rs:<RSPage/>, pagamentos:<Pagamentos/>, rescisao:<SimuladorRescisao go={setView}/>, cmo:<CMOPage/>, unidades:<Unidades/>, links:<LinksQR/>, acessos:<GerentesAcesso/>, config:<Configuracoes/>, ajuda:<Ajuda/> };
   return <ToastCtx.Provider value={pushToast}>
     <div className="flex min-h-screen">
       <Sidebar view={view} setView={setView} open={sbOpen} setOpen={setSbOpen} onLogout={onLogout}/>
