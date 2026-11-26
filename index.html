@@ -1694,6 +1694,7 @@ function StoreProvider({children}) {
   useEffect(()=>{ if(!faltaDesdePronto) return; if(!faltaDescontoDesde) setFaltaDescontoDesde(hojeStr()); },[faltaDesdePronto]); // eslint-disable-line
   // Dia do mês em que o Vale Transporte é pago (global para todos os CLTs). Padrão: dia 5.
   const [vtDiaPagamento,setVtDiaPagamento]=usePersist("vtDiaPagamento",5);
+  const [cmoConfig,setCmoConfig]=usePersist("cmoConfig",{});   // CMO: regime/encargos, quem é sem registro, faturamento por mês
   // Pagamentos de CLT e cargos de confiança (parcelados/adiantamentos), chaveados pelo id do colaborador na lista de CLTs.
   const [pagamentosCLT,setPagCLT]=usePersist("pagamentosCLT",{});
   const addPagamentoCLT=(id,obj)=>setPagCLT(prev=>{ const arr=prev[String(id)]||[]; return {...prev,[String(id)]:[{...obj,id:Math.random().toString(36).slice(2)},...arr]}; });
@@ -1831,7 +1832,7 @@ function StoreProvider({children}) {
   const registrosVis = casaRestrita!=null ? registros.filter(r=>_nomesVis.has(r.nome)) : registros;
 
   const value={ unidades:unidadesVis,salvarUnidade,excluirUnidade, clts:cltsVis,freelas:freelasVis,freelasComPagamentos:freelasPagVis,salvarClt,salvarFreela,excluirColab,cadastrarPublico, anexarDoc,
-    escala,setEscala, escalaOv,setEscalaOv, registros:registrosVis,addRegistro, garantirRegistros, pontoHist, freelancerEscaladoHoje, valorFreela, setFreelaAjuste, cltExtraAjuste,setCltExtra, gorjetasCLT,setGorjetaCLT, pagamentosFreela,addPagamentoFreela,removePagamentoFreela, pagamentosCLT,addPagamentoCLT,removePagamentoCLT, faltaDescontoDesde,setFaltaDescontoDesde, feriadosExtras,setFeriadosExtras, vtDiaPagamento,setVtDiaPagamento,
+    escala,setEscala, escalaOv,setEscalaOv, registros:registrosVis,addRegistro, garantirRegistros, pontoHist, freelancerEscaladoHoje, valorFreela, setFreelaAjuste, cltExtraAjuste,setCltExtra, gorjetasCLT,setGorjetaCLT, pagamentosFreela,addPagamentoFreela,removePagamentoFreela, pagamentosCLT,addPagamentoCLT,removePagamentoCLT, faltaDescontoDesde,setFaltaDescontoDesde, feriadosExtras,setFeriadosExtras, vtDiaPagamento,setVtDiaPagamento, cmoConfig,setCmoConfig,
     cargosFreela,salvarCargoFreela,excluirCargoFreela, atestados,enviarAtestado, ajustes,enviarAjuste,resolverAjuste,
     dossie,getDossie,addFalta,addFeedback,addAnexo, perfil,setPerfil, perms,setPerms, can, envContab,setEnvContab, apontContab,setApontContab, contabCfg,setContabCfg, finCfg,setFinCfg, pcmso,setPcmso, cadastrosRS, cadOpsRS:cadOps, criarFreela, escalarNaData, tirarDaData,
     clientes,clienteAtivo,tenantAtual,criarCliente,trocarCliente,
@@ -2010,6 +2011,157 @@ function DetalheRescisao({r, saldo, vtDesconto, abateVT, titulo}){
     {abateVT>0 && L("VT pago a mais (adiantado para dias depois da saída)","","-"+fmtBRL(abateVT),"text-rose-600","abvt")}
     {saldo && <div className="flex justify-between font-bold pt-1.5 text-slate-900"><span>Total a pagar ao colaborador</span><span className="tabular-nums">{fmtBRL(total)}</span></div>}
     <div className="text-[11px] text-slate-400 mt-1">Pagar até {fmtDataBR(r.prazo)} (10 dias, art. 477).{r.multaFGTS?" Multa de 40% do FGTS: recolher em guia (GRRF), fora deste valor.":""} Avos: mês com 15 dias ou mais conta 1/12. Valores brutos — INSS/IRRF com a contabilidade.</div>
+  </div>; }
+// ===== CMO — Custo de Mão de Obra do mês: todos os colaboradores (CLT com encargos diluídos, Freela Fixo, PJ, freelancers) =====
+const CMO_PADRAO={ regime:"simples", fgts:8, inss:20, rat:2, terceiros:5.8, multaFGTS:false, freelas:true };
+const CMO_REGIMES={ simples:"Simples Nacional (INSS patronal dentro do DAS)", presumido:"Lucro Presumido / Real (INSS patronal na folha)" };
+function cmoCfgDe(cfg){ const c={...CMO_PADRAO, ...(cfg||{})}; const n=(v,d)=>{ const x=Number(v); return isNaN(x)?d:x; };
+  return { ...c, fgts:n(c.fgts,8), inss:n(c.inss,20), rat:n(c.rat,2), terceiros:n(c.terceiros,5.8), patronal: c.regime==="presumido" ? n(c.inss,20)+n(c.rat,2)+n(c.terceiros,5.8) : 0 }; }
+// custo de um CLT registrado no mês a partir da remuneração: provisões de 13º e férias + 1/3 e encargos sobre tudo
+function cmoEncargos(rem, cfg){ const r2=(x)=>Math.round((Number(x)||0)*100)/100; rem=Math.max(0,Number(rem)||0);
+  const d13=rem/12, fer=rem/12, ter=fer/3, base=rem+d13+fer+ter; const fgts=base*cfg.fgts/100, inss=base*cfg.patronal/100, multa=cfg.multaFGTS?fgts*0.4:0;
+  return { rem:r2(rem), d13:r2(d13), ferias:r2(fer+ter), fgts:r2(fgts), inss:r2(inss), multa:r2(multa), encargos:r2(d13+fer+ter+fgts+inss+multa) }; }
+function CMOPage(){
+  const { clts, pjs, freelasComPagamentos, unidades, registros, pontoHist, getDossie, cltExtraAjuste, gorjetasCLT, escala, escalaOv, atestados, faltaDescontoDesde, feriadosExtras, acesso, cmoConfig, setCmoConfig, empresaContratante } = useStore();
+  const toast=useContext(ToastCtx); const podeSigilo=!acesso||acesso.podeSigilo; const r2=(x)=>Math.round((Number(x)||0)*100)/100;
+  const [ym,setYm]=useState(hojeStr().slice(0,7)); const [uni,setUni]=useState("todas"); const [verCfg,setVerCfg]=useState(false); const [filtro,setFiltro]=useState("todos");
+  const [y,m]=ym.split("-").map(Number); const [ini,fim]=mesDe(y,m); const nd=(d)=>!!d&&d>=ini&&d<=fim;
+  useRegistrosPeriodo(ini,fim);
+  const cfgRaw=cmoConfig||{}; const cfg=cmoCfgDe(cfgRaw.enc);
+  const setCfg=(k,v)=>setCmoConfig(p=>({...(p||{}), enc:{...((p||{}).enc||{}), [k]:v}}));
+  const semReg=(cfgRaw.semReg)||{};
+  const ehSemReg=(c)=> semReg[c.id]!=null ? !!semReg[c.id] : !!(c.demissao&&c.demissao.modo==="simples");
+  const togReg=(c)=>{ const v=!ehSemReg(c); setCmoConfig(p=>({...(p||{}), semReg:{...((p||{}).semReg||{}), [c.id]:v}})); toast(c.nome.split(" ")[0]+(v?": sem registro (sem encargos)":": registrado (com encargos)")); };
+  const fatKey=ym+"|"+uni; const fat=Number(((cfgRaw.fat)||{})[fatKey])||0;
+  const setFat=(v)=>setCmoConfig(p=>({...(p||{}), fat:{...((p||{}).fat||{}), [fatKey]:v===""?null:Number(v)}}));
+  const naCasa=(u)=> uni==="todas" || Number(u)===Number(uni);
+  const casaDe=(u)=> u!=null&&u!=="todas"&&unidades.some(x=>x.id===Number(u)) ? unidadeNome(Number(u),unidades) : "—";
+  const linhas=useMemo(()=>{ const out=[]; const regs=[...(pontoHist||[]),...(registros||[])];
+    const ctx={ apurCLT:apurarHoras(regs).filter(x=>x.tipo==="clt"&&x.completo&&nd(x.dia)), cltExtraAjuste:cltExtraAjuste||{}, gorjetasCLT:gorjetasCLT||{}, ymRef:ym, getDossie, naData:nd,
+      faltasCtx:{escala,escalaOv,registros:regs,atestados,ini,fim,hoje:hojeStr(),nowMin:0,desde:faltaDescontoDesde}, feriados:feriadosExtras };
+    (clts||[]).filter(c=>!c.admissaoCancelada && c.status!=="inativo" && naCasa(c.unidade))
+      .filter(c=>!((c.fimContrato && c.fimContrato<ini) || (c.admissao && c.admissao>fim) || (c.demissao&&c.demissao.data&&c.demissao.data<ini)))
+      .forEach(c=>{
+        if(c.vinculo==="confianca"){ if(c.sigiloso && !podeSigilo) return; const pc=previstoConf(c,ini,fim); const rem=r2(pc.salario); if(rem<=0) return;
+          const sr=ehSemReg(c); const e=sr?{rem,d13:0,ferias:0,fgts:0,inss:0,multa:0,encargos:0}:cmoEncargos(rem,cfg);
+          out.push({k:"conf-"+c.id, c, tipo:"conf", rot:"Gerência", nome:c.nome, cargo:c.cargo, casa:casaDe(c.unidade), semReg:sr, podeReg:true, ...e, vt:0, total:r2(e.rem+e.encargos), obs:pc.dias<30?pc.dias+"/30 dias":""}); return; }
+        const l=calcFolhaLinha(c,ctx); const fixo=c.vinculo==="fixo";
+        const rem=r2(l.salario+(l.extrasVal||0)+(l.notVal||0)+(l.dsrReflexo||0)+(l.reposicao||0)-(l.descFaltas||0)-(l.descDSR||0)-(l.descAtrasos||0));
+        const sr=fixo||ehSemReg(c); const vtBruto=r2(l.vtLiquido!=null?l.vtLiquido:l.vt||0); const vt=r2(Math.max(0,vtBruto-(sr?0:(l.vtDesconto||0))));
+        if(rem<=0 && vt<=0) return;
+        const e=sr?{rem,d13:0,ferias:0,fgts:0,inss:0,multa:0,encargos:0}:cmoEncargos(rem,cfg);
+        const obs=[l.porDia?l.porDia.dias+" dia(s) trabalhado(s)":l.diasContrato<30?l.diasContrato+"/30 dias":"", c.demissao&&c.demissao.data&&nd(c.demissao.data)?"saiu "+fmtDataBR(c.demissao.data):"", (l.extrasVal||0)>0?"extras "+fmtBRL(l.extrasVal):"", (l.descFaltas||0)>0?"faltas −"+fmtBRL(l.descFaltas):""].filter(Boolean).join(" · ");
+        out.push({k:(fixo?"fixo-":"clt-")+c.id, c, tipo:fixo?"fixo":"clt", rot:fixo?"Freela Fixo":"CLT", nome:c.nome, cargo:c.cargo, casa:casaDe(c.unidade), semReg:sr, podeReg:!fixo, ...e, vt, vtDesc:sr?0:r2(l.vtDesconto||0), total:r2(e.rem+e.encargos+vt), obs}); });
+    (pjs||[]).filter(pj=>pjAtivoNoPeriodo(pj,ini,fim) && naCasa(pj.unidade)).forEach(pj=>{ const pv=pjValorNoPeriodo(pj,ini,fim); const v=r2(pv.total); if(v<=0) return; const d=pv.det.find(x=>!x.cheio);
+      out.push({k:"pj-"+pj.id, tipo:"pj", rot:"PJ", nome:pj.nome, cargo:pj.servico||"Prestação de serviço", casa:casaDe(pj.unidade), semReg:true, podeReg:false, rem:v, d13:0, ferias:0, fgts:0, inss:0, multa:0, encargos:0, vt:0, total:v, obs:d?d.dias+" dia(s) do mês":""}); });
+    if(cfg.freelas) (freelasComPagamentos||[]).forEach(f=>{ const js=(f.jornadasHist||[]).filter(j=>nd(j.data) && naCasa(j.unidade)); if(!js.length) return; const v=r2(js.reduce((s,j)=>s+(Number(j.valor)||0),0)); if(v<=0) return;
+      out.push({k:"free-"+f.id, tipo:"free", rot:"Freelancer", nome:f.nome, cargo:f.cargo||"Freelancer", casa:[...new Set(js.map(j=>casaDe(j.unidade)))].join(", "), semReg:true, podeReg:false, rem:v, d13:0, ferias:0, fgts:0, inss:0, multa:0, encargos:0, vt:0, total:v, obs:js.length+" diária(s)"}); });
+    const ord={clt:0,conf:1,fixo:2,pj:3,free:4}; return out.sort((a,b)=>(ord[a.tipo]-ord[b.tipo])||b.total-a.total);
+  },[clts,pjs,freelasComPagamentos,registros,pontoHist,ym,uni,cmoConfig,escala,escalaOv,atestados,cltExtraAjuste,gorjetasCLT,faltaDescontoDesde,feriadosExtras,podeSigilo]); // eslint-disable-line
+  const soma=(arr,k)=>r2(arr.reduce((s,x)=>s+(Number(x[k])||0),0));
+  const GRUPOS=[["clt","CLT registrados e sem registro"],["conf","Gerência & Diretoria"],["fixo","Freela Fixo"],["pj","Prestadores PJ"],["free","Freelancers (diárias)"]];
+  const tot=soma(linhas,"total"), totEnc=soma(linhas,"encargos"), totRem=soma(linhas,"rem"), totVT=soma(linhas,"vt");
+  const porTipo=Object.fromEntries(GRUPOS.map(([k])=>[k,soma(linhas.filter(x=>x.tipo===k),"total")]));
+  const casas=[...new Set(linhas.flatMap(x=>String(x.casa).split(", ")))];
+  const porCasa=uni!=="todas"?[]:unidades.map(u=>{ const nome=u.nome; const ls=linhas.filter(x=>x.casa===nome); return {nome, n:ls.length, total:soma(ls,"total"), enc:soma(ls,"encargos")}; }).filter(x=>x.n>0);
+  const semCasa=uni!=="todas"?null:(()=>{ const ls=linhas.filter(x=>!unidades.some(u=>u.nome===x.casa)); return ls.length?{nome:"Sem casa / várias casas", n:ls.length, total:soma(ls,"total"), enc:soma(ls,"encargos")}:null; })();
+  const vis=filtro==="todos"?linhas:linhas.filter(x=>x.tipo===filtro);
+  const pct=(v)=> fat>0 ? (Math.round(v/fat*1000)/10).toLocaleString("pt-BR")+"%" : "—";
+  const uNome=uni==="todas"?"Todas as casas":unidadeNome(Number(uni),unidades);
+  const regTxt=cfg.regime==="presumido"?`INSS patronal ${(cfg.patronal).toLocaleString("pt-BR")}% (${cfg.inss}% + RAT ${cfg.rat}% + terceiros ${cfg.terceiros}%)`:"Simples Nacional: INSS patronal no DAS (0% na folha)";
+  const explic=`CLT registrado: remuneração do mês (salário proporcional + extras, noturno e DSR − faltas) + 13º (1/12) + férias (1/12) + 1/3 de férias + FGTS ${cfg.fgts}%${cfg.patronal?" + INSS patronal "+cfg.patronal.toLocaleString("pt-BR")+"%":""} sobre tudo${cfg.multaFGTS?" + provisão da multa de 40% do FGTS":""} + VT (já sem os 6% descontados do colaborador). Freela Fixo e sem registro: salário/dias + VT. PJ: valor do contrato no mês. Freelancers: diárias lançadas no mês.`;
+  // ---- exportar ----
+  const colsX=[["Colaborador","nome"],["Vínculo","rot"],["Cargo","cargo"],["Casa","casa"],["Registro","reg"],["Remuneração","rem"],["13º (1/12)","d13"],["Férias + 1/3","ferias"],["FGTS","fgts"],["INSS patronal","inss"],["Prov. multa FGTS","multa"],["VT (empresa)","vt"],["Custo total","total"],["Observação","obs"]];
+  const exportarExcel=async()=>{ if(!linhas.length){ toast("Nada no mês"); return; } if(!window.ExcelJS){ toast("Biblioteca Excel não carregada — tente de novo"); return; }
+    const wb=new ExcelJS.Workbook(); const ws=wb.addWorksheet("CMO "+ym); ws.addRow(["CMO — Custo de Mão de Obra · "+fmtCompetencia(ym)+" · "+uNome]).font={bold:true,size:13}; ws.addRow([regTxt]); ws.addRow([]);
+    const h=ws.addRow(colsX.map(c=>c[0])); h.font={bold:true}; h.eachCell(c=>{ c.fill={type:"pattern",pattern:"solid",fgColor:{argb:"FFE8F1E6"}}; });
+    linhas.forEach(x=>ws.addRow(colsX.map(([,k])=>k==="reg"?(x.tipo==="clt"||x.tipo==="conf"?(x.semReg?"sem registro":"registrado"):"—"):x[k]??"")));
+    const t=ws.addRow(["TOTAL","","","","",totRem,soma(linhas,"d13"),soma(linhas,"ferias"),soma(linhas,"fgts"),soma(linhas,"inss"),soma(linhas,"multa"),totVT,tot,fat?"Faturamento "+fmtBRL(fat)+" · CMO "+pct(tot):""]); t.font={bold:true};
+    for(let i=6;i<=13;i++) ws.getColumn(i).numFmt='"R$" #,##0.00'; ws.columns.forEach((c,i)=>{ c.width=i===0?30:i===13?40:i<5?16:14; });
+    ws.addRow([]); ws.addRow(["Resumo por vínculo"]).font={bold:true}; GRUPOS.forEach(([k,l])=>{ if(porTipo[k]) ws.addRow([l,"","","","","","","","","","","",porTipo[k]]); });
+    if(porCasa.length){ ws.addRow([]); ws.addRow(["Resumo por casa"]).font={bold:true}; [...porCasa,...(semCasa?[semCasa]:[])].forEach(c=>ws.addRow([c.nome,c.n+" pessoa(s)","","","","","","","","","","",c.total])); }
+    ws.addRow([]); ws.addRow([explic]);
+    const buf=await wb.xlsx.writeBuffer(); baixarBlob(new Blob([buf],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}),"CMO "+ym+" - "+uNome+".xlsx"); toast("Excel do CMO gerado"); };
+  const exportarPdf=async()=>{ if(!linhas.length){ toast("Nada no mês"); return; }
+    try{ const L=await carregarPdfLib(); const doc=await L.PDFDocument.create(); const f=await doc.embedFont(L.StandardFonts.Helvetica), b=await doc.embedFont(L.StandardFonts.HelveticaBold);
+      const limpo=(t)=>String(t??"").replace(/[—–−]/g,"-").replace(/[^\x20-\x7E -ÿ]/g,"");
+      const C={esc:L.rgb(0.09,0.27,0.13),claro:L.rgb(0.94,0.97,0.93),cinza:L.rgb(0.42,0.42,0.42),txt:L.rgb(0.12,0.12,0.12),branco:L.rgb(1,1,1),linha:L.rgb(0.88,0.9,0.88)};
+      const W=842,H=595,M=28; let pg,yy; const txt=(t,x,yv,o={})=>pg.drawText(limpo(t),{x,y:yv,size:o.size||7.5,font:o.bold?b:f,color:o.cor||C.txt});
+      const dir=(t,xr,yv,o={})=>{ const fn=o.bold?b:f; txt(t,xr-fn.widthOfTextAtSize(limpo(t),o.size||7.5),yv,o); };
+      const quebra=(t,w,sz)=>{ const out=[]; let cur=""; limpo(t).split(" ").forEach(p=>{ const tt=cur?cur+" "+p:p; if(f.widthOfTextAtSize(tt,sz)>w&&cur){ out.push(cur); cur=p; } else cur=tt; }); if(cur) out.push(cur); return out; };
+      const XR=[0,0,0,330,385,440,495,550,600,650,700,W-M-4]; // direita das colunas de valor
+      const cab=["Colaborador","Vínculo / casa","","Remuneração","13º","Férias+1/3","FGTS","INSS pat.","Prov. multa","VT","",""];
+      const nova=()=>{ pg=doc.addPage([W,H]); pg.drawRectangle({x:0,y:H-52,width:W,height:52,color:C.esc}); txt("CMO - CUSTO DE MÃO DE OBRA",M,H-26,{bold:true,size:14,cor:C.branco}); txt((empresaEfetiva(empresaContratante).razao||"")+" · "+uNome,M,H-41,{size:8,cor:C.branco});
+        dir("Competência "+fmtCompetencia(ym),W-M,H-26,{bold:true,size:11,cor:C.branco}); dir(regTxt,W-M,H-41,{size:7.5,cor:C.branco}); yy=H-70; };
+      const cabec=()=>{ pg.drawRectangle({x:M,y:yy-4,width:W-2*M,height:14,color:C.claro}); txt("Colaborador",M+4,yy,{bold:true,size:7,cor:C.cinza}); txt("Vínculo · casa",M+170,yy,{bold:true,size:7,cor:C.cinza});
+        ["Remuneração","13º","Férias+1/3","FGTS","INSS pat.","Prov. multa","VT"].forEach((t,i)=>dir(t,XR[3+i],yy,{bold:true,size:7,cor:C.cinza})); dir("Custo total",W-M-4,yy,{bold:true,size:7,cor:C.cinza}); yy-=15; };
+      nova();
+      // resumo
+      pg.drawRectangle({x:M,y:yy-40,width:W-2*M,height:50,color:C.claro}); txt("CUSTO TOTAL DO MÊS",M+10,yy-2,{bold:true,size:8,cor:C.cinza}); txt(fmtBRL(tot),M+10,yy-22,{bold:true,size:18,cor:C.esc});
+      let xs=M+190; GRUPOS.forEach(([k,l])=>{ if(!porTipo[k]) return; txt(l.replace(" registrados e sem registro",""),xs,yy-2,{size:7,cor:C.cinza}); txt(fmtBRL(porTipo[k]),xs,yy-16,{bold:true,size:10}); xs+=120; });
+      txt(linhas.length+" pessoa(s) · encargos e provisões "+fmtBRL(totEnc)+(fat?" · faturamento "+fmtBRL(fat)+" · CMO "+pct(tot):""),M+190,yy-32,{size:7.5,cor:C.cinza}); yy-=58;
+      if(porCasa.length>1||semCasa){ txt("POR CASA",M,yy,{bold:true,size:7.5,cor:C.cinza}); yy-=11; [...porCasa,...(semCasa?[semCasa]:[])].forEach(c=>{ txt(c.nome+" ("+c.n+")",M+4,yy,{size:8}); dir(fmtBRL(c.total),M+260,yy,{bold:true,size:8}); yy-=11; }); yy-=6; }
+      GRUPOS.forEach(([k,l])=>{ const ls=linhas.filter(x=>x.tipo===k); if(!ls.length) return; if(yy<90) nova(); txt(l.toUpperCase(),M,yy,{bold:true,size:8.5,cor:C.esc}); yy-=12; cabec();
+        ls.forEach(x=>{ if(yy<40){ nova(); cabec(); } txt(x.nome.slice(0,34),M+4,yy,{bold:true,size:7.5}); txt((x.rot+((x.tipo==="clt"||x.tipo==="conf")&&x.semReg?" s/ registro":"")+" · "+x.casa).slice(0,40),M+170,yy,{size:7,cor:C.cinza});
+          [x.rem,x.d13,x.ferias,x.fgts,x.inss,x.multa,x.vt].forEach((v,i)=>dir(v?fmtBRL(v):"-",XR[3+i],yy,{size:7.5})); dir(fmtBRL(x.total),W-M-4,yy,{bold:true,size:7.5});
+          if(x.obs){ yy-=8.5; txt(x.obs.slice(0,120),M+12,yy,{size:6.3,cor:C.cinza}); } pg.drawLine({start:{x:M,y:yy-3},end:{x:W-M,y:yy-3},thickness:0.3,color:C.linha}); yy-=11; });
+        if(yy<40) nova(); dir("Subtotal "+l+": "+fmtBRL(porTipo[k]),W-M-4,yy,{bold:true,size:8}); yy-=16; });
+      if(yy<70) nova(); pg.drawRectangle({x:M,y:yy-8,width:W-2*M,height:20,color:C.esc}); txt("TOTAL",M+6,yy-1,{bold:true,size:9,cor:C.branco});
+      [totRem,soma(linhas,"d13"),soma(linhas,"ferias"),soma(linhas,"fgts"),soma(linhas,"inss"),soma(linhas,"multa"),totVT].forEach((v,i)=>dir(fmtBRL(v),XR[3+i],yy-1,{bold:true,size:7.5,cor:C.branco})); dir(fmtBRL(tot),W-M-4,yy-1,{bold:true,size:9,cor:C.branco}); yy-=24;
+      quebra(explic,W-2*M,6.8).forEach(l=>{ if(yy<30) nova(); txt(l,M,yy,{size:6.8,cor:C.cinza}); yy-=9; });
+      doc.getPages().forEach((p,i,a)=>p.drawText(limpo("Wilami Ponto & RH · gerado em "+new Date().toLocaleString("pt-BR")+" · página "+(i+1)+" de "+a.length),{x:M,y:14,size:6.5,font:f,color:C.cinza}));
+      const blob=new Blob([await doc.save()],{type:"application/pdf"}); const nome="CMO "+ym+" - "+uNome.replace(/[\\/:*?"<>|]/g,"")+".pdf"; let comp=false;
+      try{ const file=new File([blob],nome.normalize("NFD").replace(/[̀-ͯ]/g,""),{type:"application/pdf"}); if(navigator.canShare&&navigator.canShare({files:[file]})&&/Mobi|Android|iPhone|iPad/i.test(navigator.userAgent||"")){ await navigator.share({files:[file],title:"CMO "+fmtCompetencia(ym)}); comp=true; } }catch(e){ if(e&&e.name==="AbortError") comp=true; }
+      if(!comp) baixarBlob(blob,nome); toast("PDF do CMO gerado");
+    }catch(e){ console.error(e); toast("Não foi possível gerar o PDF: "+e.message); } };
+  const th="px-3 py-2 font-semibold text-right whitespace-nowrap", td="px-3 py-2 tabular-nums text-right whitespace-nowrap";
+  return <div className="fade-in">
+    <PageHeader title="CMO — Custo de Mão de Obra" sub="Quanto a operação custa no mês: CLT com encargos diluídos (13º, férias, FGTS, INSS), Freela Fixo, PJ e freelancers">
+      <Btn variant="ghost" icon={I.download} onClick={exportarExcel}>Excel</Btn><Btn icon={I.download} onClick={exportarPdf}>PDF para a Diretoria</Btn></PageHeader>
+    <Card className="p-4 mb-4"><div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 items-end">
+      <Field label="Competência"><Input type="month" value={ym} onChange={e=>e.target.value&&setYm(e.target.value)} aria-label="Competência do CMO"/></Field>
+      <Field label="Casa"><Select value={uni} onChange={e=>setUni(e.target.value)} aria-label="Casa do CMO"><option value="todas">Todas as casas</option>{unidades.map(u=><option key={u.id} value={u.id}>{u.nome}</option>)}</Select></Field>
+      <Field label="Faturamento do mês (opcional, para o % de CMO)"><Input type="number" step="0.01" placeholder="R$" value={fat||""} onChange={e=>setFat(e.target.value)} aria-label="Faturamento do mês"/></Field>
+      <div><Btn variant="soft" icon={I.gear} onClick={()=>setVerCfg(v=>!v)} className="w-full">{verCfg?"Fechar encargos":"Encargos e regime"}</Btn></div></div>
+      {verCfg && <div className="mt-4 pt-4 border-t border-slate-100 grid sm:grid-cols-2 lg:grid-cols-4 gap-3 items-end" aria-label="Configuração de encargos">
+        <div className="sm:col-span-2"><Field label="Regime tributário da empresa"><Select value={cfg.regime} onChange={e=>setCfg("regime",e.target.value)} aria-label="Regime tributário">{Object.entries(CMO_REGIMES).map(([k,l])=><option key={k} value={k}>{l}</option>)}</Select></Field></div>
+        <Field label="FGTS (%)"><Input type="number" step="0.1" value={cfg.fgts} onChange={e=>setCfg("fgts",e.target.value)} aria-label="FGTS %"/></Field>
+        <label className="flex items-center gap-2 text-sm text-slate-700 pb-2"><Toggle on={!!cfg.multaFGTS} onChange={v=>setCfg("multaFGTS",v)}/> Provisionar multa de 40% do FGTS</label>
+        {cfg.regime==="presumido" && <>
+          <Field label="INSS patronal (%)"><Input type="number" step="0.1" value={cfg.inss} onChange={e=>setCfg("inss",e.target.value)} aria-label="INSS patronal %"/></Field>
+          <Field label="RAT/FAP (%)"><Input type="number" step="0.1" value={cfg.rat} onChange={e=>setCfg("rat",e.target.value)} aria-label="RAT %"/></Field>
+          <Field label="Terceiros / Sistema S (%)"><Input type="number" step="0.1" value={cfg.terceiros} onChange={e=>setCfg("terceiros",e.target.value)} aria-label="Terceiros %"/></Field></>}
+        <label className="flex items-center gap-2 text-sm text-slate-700 pb-2"><Toggle on={!!cfg.freelas} onChange={v=>setCfg("freelas",v)}/> Incluir freelancers (diárias)</label>
+        <p className="sm:col-span-2 lg:col-span-4 text-[11px] text-slate-500">Confirme os percentuais com a contabilidade. No Simples Nacional (Anexos I a III) o INSS patronal já está no DAS; no Lucro Presumido/Real ele entra na folha (20% + RAT + terceiros).</p></div>}
+    </Card>
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+      <StatCard icon={I.wallet} label={"Custo total · "+fmtCompetencia(ym)} value={fmtBRL(tot)}/>
+      <StatCard icon={I.chart} label={fat?"CMO sobre o faturamento":"Encargos e provisões"} value={fat?pct(tot):fmtBRL(totEnc)} tone="green"/>
+      <StatCard icon={I.team} label="Pessoas no mês" value={String(linhas.length)} tone="slate"/>
+      <StatCard icon={I.user} label="Custo médio por pessoa" value={fmtBRL(linhas.length?r2(tot/linhas.length):0)} tone="slate"/></div>
+    <div className="grid lg:grid-cols-3 gap-4 mb-4">
+      <Card className="p-4 lg:col-span-2" aria-label="CMO por vínculo"><div className="text-sm font-bold text-slate-700 mb-2">Por vínculo</div>
+        {GRUPOS.filter(([k])=>porTipo[k]).map(([k,l])=>{ const v=porTipo[k]; return <div key={k} className="mb-2"><div className="flex justify-between text-sm"><span className="text-slate-600">{l} <span className="text-xs text-slate-400">({linhas.filter(x=>x.tipo===k).length})</span></span><span className="font-semibold tabular-nums">{fmtBRL(v)} <span className="text-xs text-slate-400">{tot?Math.round(v/tot*100):0}%{fat?" · "+pct(v)+" do fat.":""}</span></span></div>
+          <div className="h-2 rounded-full bg-slate-100 mt-1"><div className="h-2 rounded-full grad-brand" style={{width:(tot?v/tot*100:0)+"%"}}/></div></div>; })}
+        {!linhas.length && <div className="text-sm text-slate-400">Ninguém com custo neste mês.</div>}</Card>
+      <Card className="p-4" aria-label="CMO por casa"><div className="text-sm font-bold text-slate-700 mb-2">{uni==="todas"?"Por casa":uNome}</div>
+        {uni==="todas" ? [...porCasa,...(semCasa?[semCasa]:[])].map(c=><div key={c.nome} className="flex justify-between text-sm py-1 border-b border-slate-50 last:border-0"><span className="text-slate-600">{c.nome} <span className="text-xs text-slate-400">({c.n})</span></span><span className="font-semibold tabular-nums">{fmtBRL(c.total)}</span></div>)
+          : <div className="text-sm text-slate-600 space-y-1"><div className="flex justify-between"><span>Remunerações</span><span className="tabular-nums">{fmtBRL(totRem)}</span></div><div className="flex justify-between"><span>Encargos e provisões</span><span className="tabular-nums">{fmtBRL(totEnc)}</span></div><div className="flex justify-between"><span>VT</span><span className="tabular-nums">{fmtBRL(totVT)}</span></div></div>}
+      </Card></div>
+    <Card className="overflow-hidden">
+      <div className="p-3 flex flex-wrap gap-2 border-b border-slate-100">{[["todos","Todos"],...GRUPOS.filter(([k])=>porTipo[k]).map(([k,l])=>[k,l.replace(" registrados e sem registro","")])].map(([k,l])=><button key={k} onClick={()=>setFiltro(k)} className={cx("px-3 py-1.5 rounded-lg text-xs font-semibold border", filtro===k?"grad-brand text-white border-transparent":"bg-white border-slate-200 text-slate-600")}>{l}</button>)}</div>
+      <RolagemX><table className="w-full text-sm" aria-label="Tabela CMO"><thead className="bg-slate-50 text-xs text-slate-500"><tr>
+        <th className="px-3 py-2 font-semibold text-left">Colaborador</th><th className="px-3 py-2 font-semibold text-left">Vínculo</th><th className={th}>Remuneração</th><th className={th}>13º (1/12)</th><th className={th}>Férias + 1/3</th><th className={th}>FGTS</th><th className={th}>INSS patronal</th>{cfg.multaFGTS&&<th className={th}>Prov. multa</th>}<th className={th}>VT</th><th className={th}>Custo total</th></tr></thead>
+        <tbody className="divide-y divide-slate-100">{vis.map(x=><tr key={x.k} aria-label={"CMO "+x.nome}>
+          <td className="px-3 py-2"><div className="font-semibold text-slate-800">{x.nome}</div><div className="text-[11px] text-slate-400">{[x.cargo,x.casa,x.obs].filter(Boolean).join(" · ")}</div></td>
+          <td className="px-3 py-2 whitespace-nowrap"><Badge tone={x.tipo==="clt"||x.tipo==="conf"?(x.semReg?"amber":"brand"):x.tipo==="fixo"?"free":x.tipo==="pj"?"blue":"slate"}>{x.rot}{(x.tipo==="clt"||x.tipo==="conf")&&x.semReg?" · sem registro":""}</Badge>
+            {x.podeReg && <button onClick={()=>togReg(x.c)} className="block text-[11px] text-brand-700 hover:underline mt-1" aria-label={"Registro "+x.nome}>{x.semReg?"marcar como registrado":"marcar sem registro"}</button>}</td>
+          <td className={td}>{fmtBRL(x.rem)}</td><td className={td}>{x.d13?fmtBRL(x.d13):"—"}</td><td className={td}>{x.ferias?fmtBRL(x.ferias):"—"}</td><td className={td}>{x.fgts?fmtBRL(x.fgts):"—"}</td><td className={td}>{x.inss?fmtBRL(x.inss):"—"}</td>{cfg.multaFGTS&&<td className={td}>{x.multa?fmtBRL(x.multa):"—"}</td>}<td className={td}>{x.vt?fmtBRL(x.vt):"—"}</td>
+          <td className={cx(td,"font-bold text-slate-900")} aria-label={"Custo "+x.nome}>{fmtBRL(x.total)}</td></tr>)}
+          {!vis.length && <tr><td colSpan={10} className="px-3 py-8 text-center text-slate-400">Ninguém com custo neste mês.</td></tr>}</tbody>
+        {vis.length>0 && <tfoot className="bg-slate-50 font-bold text-slate-800"><tr><td className="px-3 py-2" colSpan={2}>Total {filtro==="todos"?"":"("+vis.length+")"}</td><td className={td}>{fmtBRL(soma(vis,"rem"))}</td><td className={td}>{fmtBRL(soma(vis,"d13"))}</td><td className={td}>{fmtBRL(soma(vis,"ferias"))}</td><td className={td}>{fmtBRL(soma(vis,"fgts"))}</td><td className={td}>{fmtBRL(soma(vis,"inss"))}</td>{cfg.multaFGTS&&<td className={td}>{fmtBRL(soma(vis,"multa"))}</td>}<td className={td}>{fmtBRL(soma(vis,"vt"))}</td><td className={td} aria-label="Total CMO">{fmtBRL(soma(vis,"total"))}</td></tr></tfoot>}
+      </table></RolagemX></Card>
+    <p className="text-[11px] text-slate-500 mt-3">{explic} Gorjetas não entram (são repassadas dos clientes). Rescisões pagas no mês saem das provisões de 13º e férias já diluídas; marque “sem registro” para quem não tem carteira assinada.</p>
   </div>; }
 function SimuladorRescisao({go}){
   const { clts } = useStore();
@@ -10256,6 +10408,7 @@ const NAV = [
     {k:"financeiro",l:"Financeiro",d:I.wallet},
     {k:"notasPJ",l:"Notas fiscais PJ",d:I.receipt},
     {k:"pagamentos",l:"Pagamentos",d:I.pix},
+    {k:"cmo",l:"CMO (custo de mão de obra)",d:I.chart},
     {k:"rescisao",l:"Simulador de rescisão",d:I.wallet},
     {k:"unidades",l:"Unidades",d:I.pin},
     {k:"links",l:"Links & QR",d:I.qr},
@@ -10266,7 +10419,7 @@ const NAV = [
     {k:"ajuda",l:"Ajuda",d:I.help},
   ]},
 ];
-const TITULOS={dashboard:"Painel",escala:"Escala por unidade",ponto:"Ponto ao vivo",ajustes:"Ajustes de ponto",clt:"Colaboradores CLT",freelas:"Freelancers",pjs:"Prestadores PJ",cargos:"Cargos & funções",convites:"Convites de cadastro",arquivos:"Arquivos & pastas",holerites:"Holerites",termos:"Termos e assinaturas",entregas:"Armário, uniformes & EPIs",modeloContrato:"Modelo de contrato PJ",dossie:"Dossiê do colaborador",equipe:"Equipe & permissões",relatorios:"Relatórios",financeiro:"Financeiro",pagamentos:"Pagamentos",unidades:"Unidades",links:"Links & QR",acessos:"Gerentes & acessos",config:"Configurações",ajuda:"Ajuda",contabilidade:"Contabilidade",pcmso:"PCMSO (Paromed)",notasPJ:"Notas fiscais PJ",rs:"Recrutamento & Seleção"};
+const TITULOS={dashboard:"Painel",escala:"Escala por unidade",ponto:"Ponto ao vivo",ajustes:"Ajustes de ponto",clt:"Colaboradores CLT",freelas:"Freelancers",pjs:"Prestadores PJ",cargos:"Cargos & funções",convites:"Convites de cadastro",arquivos:"Arquivos & pastas",holerites:"Holerites",termos:"Termos e assinaturas",entregas:"Armário, uniformes & EPIs",modeloContrato:"Modelo de contrato PJ",dossie:"Dossiê do colaborador",equipe:"Equipe & permissões",relatorios:"Relatórios",financeiro:"Financeiro",pagamentos:"Pagamentos",cmo:"CMO — Custo de mão de obra",unidades:"Unidades",links:"Links & QR",acessos:"Gerentes & acessos",config:"Configurações",ajuda:"Ajuda",contabilidade:"Contabilidade",pcmso:"PCMSO (Paromed)",notasPJ:"Notas fiscais PJ",rs:"Recrutamento & Seleção"};
 
 // Seletor de cliente (multiempresa) — troca entre grupos de restaurantes e cria novo cliente.
 function ClienteSwitcher(){
@@ -10534,7 +10687,7 @@ function Shell({ onLogout }) {
   if(acesso && acesso.semAcesso) return <TelaBloqueio icone={I.shield} titulo="Sua conta ainda não tem acesso" texto="Peça ao administrador para vincular seu e-mail a um cliente. Assim que ele liberar, é só entrar novamente." onLogout={onLogout}/>;
   if(acesso && acesso.tenantBind!=null && acesso.tenantBind!==tenantAtual) return <TelaBloqueio spin titulo="Abrindo seu cliente…"/>;
   const views={ dashboard:<Dashboard go={setView}/>, escala:<EscalaVisual/>, ponto:<PontoLive/>, ajustes:<AjustesPonto/>, clt:<ColaboradoresCLT/>, freelas:<Freelancers/>,
-    dossie:<Dossie/>, pjs:<PrestadoresPJ/>, cargos:<CargosPage/>, convites:<ConvitesPage/>, arquivos:<ArquivosPage/>, holerites:<HoleritesPage/>, termos:<TermosPage/>, entregas:<EntregasPage/>, modeloContrato:<ModeloContratoPage/>, equipe:<Equipe/>, contabilidade:<ContabilidadePage/>, pcmso:<PcmsoPage/>, relatorios:<Relatorios/>, financeiro:<Financeiro/>, notasPJ:<NotasPJPage/>, rs:<RSPage/>, pagamentos:<Pagamentos/>, rescisao:<SimuladorRescisao go={setView}/>, unidades:<Unidades/>, links:<LinksQR/>, acessos:<GerentesAcesso/>, config:<Configuracoes/>, ajuda:<Ajuda/> };
+    dossie:<Dossie/>, pjs:<PrestadoresPJ/>, cargos:<CargosPage/>, convites:<ConvitesPage/>, arquivos:<ArquivosPage/>, holerites:<HoleritesPage/>, termos:<TermosPage/>, entregas:<EntregasPage/>, modeloContrato:<ModeloContratoPage/>, equipe:<Equipe/>, contabilidade:<ContabilidadePage/>, pcmso:<PcmsoPage/>, relatorios:<Relatorios/>, financeiro:<Financeiro/>, notasPJ:<NotasPJPage/>, rs:<RSPage/>, pagamentos:<Pagamentos/>, rescisao:<SimuladorRescisao go={setView}/>, cmo:<CMOPage/>, unidades:<Unidades/>, links:<LinksQR/>, acessos:<GerentesAcesso/>, config:<Configuracoes/>, ajuda:<Ajuda/> };
   return <ToastCtx.Provider value={pushToast}>
     <div className="flex min-h-screen">
       <Sidebar view={view} setView={setView} open={sbOpen} setOpen={setSbOpen} onLogout={onLogout}/>
