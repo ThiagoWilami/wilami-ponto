@@ -3027,6 +3027,22 @@ function PontoKiosk({ mode, onClose }) {
     }
     return false;
   };
+  // Por que a pessoa não aparece na escala de hoje (para o aviso e para o RH conferir)
+  const motivoForaEscala=(p)=>{ try{
+    const hoje=hojeStr(), wd=wdDe(hoje); const alvoId=String(p.id), alvoCpf=soDigitos(p.cpf), alvoNome=(p.nome||"").trim().toLowerCase();
+    const ehEla=(a)=>{ if(String(a.pid)===alvoId) return true; const pes=listaModo.find(x=>String(x.id)===String(a.pid)); return !!(pes && ((alvoCpf.length===11&&soDigitos(pes.cpf)===alvoCpf) || (alvoNome&&(pes.nome||"").trim().toLowerCase()===alvoNome))); };
+    const uids=new Set([...Object.keys(escala||{}), ...Object.keys(escalaOv||{})]); const achados=[];
+    uids.forEach(uid=>{ const ov=escalaOv&&escalaOv[uid]&&escalaOv[uid][hoje]; const cru=ov||((escala&&escala[uid]&&escala[uid][wd])||[]); cru.filter(ehEla).forEach(a=>achados.push({a,uid,ov:!!ov})); });
+    if(!achados.length) return "não encontrei seu nome na escala de hoje de nenhuma casa";
+    const {a,uid,ov}=achados[0]; const casa=(unidades.find(u=>String(u.id)===String(uid))||{}).nome||"casa "+uid;
+    if(a.tipo && a.tipo!==mode) return "na escala de "+casa+" você está como "+(a.tipo==="free"?"Freelancer":a.tipo==="pj"?"PJ":a.tipo)+" — use o link certo";
+    const v=VIGENCIA.map[chaveVig(a.tipo,a.pid)];
+    if(v&&v.pendente) return "seu cadastro está aguardando o RH definir a data de admissão";
+    if(v&&v.ini&&hoje<v.ini) return "seu contrato começa em "+fmtDataBR(v.ini);
+    if(v&&v.fim&&hoje>v.fim) return "seu contrato terminou em "+fmtDataBR(v.fim);
+    const efet=aplicarRodizio(a,hoje,wd); if(efet.turno==="folga") return "hoje é folga na escala de "+casa+(ov?" (ajuste do dia)":GRUPO_FOLGA.map[chaveVig(a.tipo,a.pid)]?" (grupo de folga)":"");
+    return "escala de "+casa+" não confirmou o turno de hoje";
+  }catch(e){ return "não foi possível conferir a escala"; } };
   const buscarCpf=async()=>{
     const d=soDigitos(cpf);
     if(d.length<11){ setCpfErr("Digite os 11 números do CPF."); return; }
@@ -3040,7 +3056,10 @@ function PontoKiosk({ mode, onClose }) {
         setCpfErr(pOutro.nome.split(" ")[0]+", seu cadastro é "+rot+". Abra o link de "+(mode==="clt"?"Freelancer":"CLT")+" para bater o ponto — não precisa cadastrar de novo."); return; }
       setCpfErr("CPF não encontrado. Use “Fazer cadastro (1º acesso)”. (ref. "+listaModo.length+"/"+(refIdx==null?"-":refIdx)+")"); return;
     }
-    if(!escaladoHojePid(p) && !turnoAbertoOntem(regsDaPessoa(p))){ setCpfErr(p.nome.split(" ")[0]+", você não está na escala de hoje — não é possível registrar ponto."); return; }
+    if(!escaladoHojePid(p) && !turnoAbertoOntem(regsDaPessoa(p))){
+      // antes de recusar: se saiu versão nova do sistema, recarrega já (a tela pode estar aberta há dias com a versão antiga)
+      if(await versaoNovaPublicada()){ setCpfErr("Atualizando o sistema… tente de novo em instantes."); location.reload(); return; }
+      setCpfErr(p.nome.split(" ")[0]+", você não está na escala de hoje — não é possível registrar ponto. Motivo: "+motivoForaEscala(p)+" (ref. "+wdNome(wdDe(hojeStr()))+" "+fmtDataBR(hojeStr()).slice(0,5)+" · v"+buildAtual().slice(0,6)+")"); return; }
     setPid(p.id); setUnidadeId(p.unidade||unidades[0]?.id); setCpfErr("");
     setPainel(true); // vai para o PAINEL DE STATUS do colaborador (mostra estado + ações certas do tipo)
   };
@@ -10891,6 +10910,14 @@ function Onboarding({ onClose }){
   </div>;
 }
 // Versão nova publicada → o quiosque do ponto recarrega sozinho (quando ninguém está usando); o painel mostra um aviso.
+const wdNome=(d)=>["seg","ter","qua","qui","sex","sáb","dom"][d]||"";
+// última vez que alguém digitou/tocou na tela (o quiosque só recarrega para a versão nova depois de 1 min parado)
+if(typeof window!=="undefined"){ ["keydown","input","pointerdown"].forEach(ev=>window.addEventListener(ev,()=>{ window.__wpUltimoUso=Date.now(); },true)); }
+const buildAtual=()=>{ const m=document.querySelector('meta[name="wp-build"]'); return (m&&m.content)||"dev"; };
+// consulta o servidor: a versão publicada é diferente da que está rodando nesta tela?
+async function versaoNovaPublicada(){ const atual=buildAtual(); if(atual==="dev") return false;
+  try{ const ja=sessionStorage.getItem("wp_reload_para"); const t=await fetch(location.pathname+"?v="+Date.now(),{cache:"no-store"}).then(r=>r.ok?r.text():""); const x=/<meta name="wp-build" content="([^"]+)"/.exec(t||"");
+    if(!x || x[1]===atual) return false; if(ja===x[1]) return false; try{ sessionStorage.setItem("wp_reload_para",x[1]); }catch(e){} return true; }catch(e){ return false; } }
 function AvisoNovaVersao({kiosk}){
   const [nova,setNova]=useState(false);
   useEffect(()=>{ const m=document.querySelector('meta[name="wp-build"]'); const atual=m&&m.content; if(!atual) return;
@@ -10898,7 +10925,7 @@ function AvisoNovaVersao({kiosk}){
     const id=setInterval(checar,5*60*1000); const vis=()=>{ if(document.visibilityState==="visible") checar(); };
     document.addEventListener("visibilitychange",vis); window.addEventListener("focus",vis);
     return ()=>{ clearInterval(id); document.removeEventListener("visibilitychange",vis); window.removeEventListener("focus",vis); }; },[]);
-  useEffect(()=>{ if(!nova||!kiosk) return; const tentar=()=>{ const ae=document.activeElement; const ocupado=(ae&&/^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)&&ae.value) || document.querySelector("video");
+  useEffect(()=>{ if(!nova||!kiosk) return; const tentar=()=>{ const ae=document.activeElement; const parado=Date.now()-(window.__wpUltimoUso||0)>60000; const ocupado=(!parado && ae&&/^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)&&ae.value) || document.querySelector("video");
       if(ocupado) return; let ja=null; try{ ja=sessionStorage.getItem("wp_reload_para"); sessionStorage.setItem("wp_reload_para",nova); }catch(e){}
       if(ja!==nova) location.reload(); };   // no máximo 1 recarga por versão (evita loop se o navegador servir a página antiga do cache)
     tentar(); const t=setInterval(tentar,15000); return ()=>clearInterval(t); },[nova,kiosk]);
