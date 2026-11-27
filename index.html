@@ -599,7 +599,7 @@ const DOC_TIPOS = [
   ["docs_filhos","Documentos dos filhos"],
 ];
 // "hoje" DINÂMICO = dia da semana REAL (0=Seg … 6=Dom). Usado no ponto, no painel ao vivo e na escala.
-const HOJE_IDX = (new Date().getDay()+6)%7;
+const HOJE_IDX = (new Date().getDay()+6)%7;   // só para dados de exemplo/valor inicial — para "hoje" use wdDe(hojeStr()) (a página pode ficar aberta de um dia para o outro)
 // Helpers de data para o passador de datas da escala
 const segDaSemana=(base)=>{ const d=new Date(base); d.setHours(0,0,0,0); const wd=(d.getDay()+6)%7; d.setDate(d.getDate()-wd); return d; };
 const addDias=(base,n)=>{ const d=new Date(base); d.setDate(d.getDate()+n); return d; };
@@ -1658,7 +1658,7 @@ function StoreProvider({children}) {
   };
   // freelancer escalado hoje em QUALQUER casa
   const freelancerEscaladoHoje=(pid)=>{ const hoje=hojeStr(); const uids=new Set([...Object.keys(escala||{}),...Object.keys(escalaOv||{})]);
-    for(const uid of uids){ if(diaEscala(escala,escalaOv,uid,hoje,HOJE_IDX).some(a=>a.pid===pid && a.tipo==="free" && a.turno!=="folga")) return true; } return false; };
+    for(const uid of uids){ if(diaEscala(escala,escalaOv,uid,hoje,wdDe(hoje)).some(a=>a.pid===pid && a.tipo==="free" && a.turno!=="folga")) return true; } return false; };
 
   // Anexa/atualiza um documento de um colaborador (aceita string legado ou {nome,dados})
   const anexarDoc=(tipo,id,key,doc)=>{
@@ -2744,7 +2744,7 @@ function PontoLive() {
   const linkDe=(m)=> comTenantUrl(base.replace(/#.*$/,""), "ponto-"+m);
 
   // turno de HOJE de uma pessoa (resolve exceção da data OU padrão semanal)
-  const _hojeIdx=HOJE_IDX; const _hojeStr=hojeStr();
+  const _hojeStr=hojeStr(); const _hojeIdx=wdDe(_hojeStr);   // sempre o dia de AGORA (a tela pode ficar aberta de um dia para o outro)
   const _uidsHoje=new Set([...Object.keys(escala||{}),...Object.keys(escalaOv||{})]);
   const turnoHojeDe=(pid,tipo)=>{ let t=null; _uidsHoje.forEach(uid=>{ diaEscala(escala,escalaOv,uid,_hojeStr,_hojeIdx).forEach(a=>{ if(a.pid===pid&&a.tipo===tipo) t=a.turno; }); }); return t; };
 
@@ -3013,7 +3013,7 @@ function PontoKiosk({ mode, onClose }) {
     const alvoNome=(p.nome||"").trim().toLowerCase();
     const uids=new Set([...Object.keys(escala||{}), ...Object.keys(escalaOv||{})]);
     for(const uid of uids){
-      const arr=diaEscala(escala, escalaOv, uid, hoje, HOJE_IDX);  // exceção da data OU padrão semanal
+      const arr=diaEscala(escala, escalaOv, uid, hoje, wdDe(hoje));  // exceção da data OU padrão semanal
       const ok=(arr||[]).some(a=>{
         if(a.turno==="folga") return false;
         if(a.tipo && a.tipo!==mode) return false;
@@ -3598,7 +3598,7 @@ function ColaboradoresCLT() {
         L.push(p&&!p._auto?rot+": não precisa (está na lista principal)":no?rot+": OK ("+n+" pessoas)":rot+": NÃO está ("+n+" pessoas)"); }
       catch(e){ L.push(rot+": erro ao ler — "+e.message); } }
     if(p){ const hoje=hojeStr(); const uids=Object.keys({...(escala||{}),...(escalaOv||{})});
-      const esc=uids.some(uid=>(diaEscala(escala,escalaOv,uid,hoje,HOJE_IDX)||[]).some(a=>String(a.pid)===String(p.id)&&a.turno!=="folga"));
+      const esc=uids.some(uid=>(diaEscala(escala,escalaOv,uid,hoje,wdDe(hoje))||[]).some(a=>String(a.pid)===String(p.id)&&a.turno!=="folga"));
       L.push(esc?"Escala de hoje: escalado(a) ✓":"Escala de hoje: NÃO escalado(a) hoje (folga, fora da escala ou antes da data de início)"); }
     alert(L.join("\n")); };
   const apurCltTodos=useMemo(()=>apurarHoras([...pontoHist, ...(registros||[])]).filter(x=>x.tipo==="clt"&&x.completo),[pontoHist,registros]);
@@ -3813,7 +3813,7 @@ function Freelancers() {
   const [confirmar,setConfirmar]=useState(null);
   const [cargosOpen,setCargosOpen]=useState(false);
   const [nc,setNc]=useState({nome:"",valor:120});
-  const escaladoHoje=(pid)=>{ const hoje=hojeStr(); const uids=new Set([...Object.keys(escala||{}),...Object.keys(escalaOv||{})]); for(const uid of uids){ if(diaEscala(escala,escalaOv,uid,hoje,HOJE_IDX).some(a=>a.pid===pid&&a.tipo==="free"&&a.turno!=="folga")) return true; } return false; };
+  const escaladoHoje=(pid)=>{ const hoje=hojeStr(); const uids=new Set([...Object.keys(escala||{}),...Object.keys(escalaOv||{})]); for(const uid of uids){ if(diaEscala(escala,escalaOv,uid,hoje,wdDe(hoje)).some(a=>a.pid===pid&&a.tipo==="free"&&a.turno!=="folga")) return true; } return false; };
 
   return <div className="fade-in">
     <PageHeader title="Freelancers" sub="Cadastro simplificado · cargos com valor por jornada · link de check-in separado">
